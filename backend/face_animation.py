@@ -7,7 +7,9 @@ whichever viseme is active gives a face that jitters between poses: real lips
 are never still and never teleport. This module turns the step function into
 motion in four passes:
 
-1. **Rasterise** the visemes onto a fine 5 ms grid, one column per blendshape.
+1. **Hold and rasterise.** Each phoneme is held until the next begins (CTC
+   alignment spans are far shorter than the sound), then the visemes are
+   drawn onto a fine 5 ms grid, one column per blendshape.
 2. **Smooth** each column with a Gaussian, which is a cheap, symmetric model
    of coarticulation -- the mouth starts moving toward a sound before it
    arrives and leaves it late.
@@ -46,6 +48,13 @@ logger = logging.getLogger(__name__)
 GRID_MS = 5.0
 DEFAULT_SMOOTHING_MS = 38.0
 CLOSURE_SMOOTHING_MS = 14.0
+
+# The aligner's CTC spans mark where a phoneme is *emitted*, typically 20-60 ms,
+# with gaps before the next one. Read literally, the mouth would return to
+# rest between every pair of sounds and barely open at all. A phoneme is held
+# until the next one starts, up to this long; a longer gap is a real pause and
+# the aligner reports those as explicit silence anyway.
+MAX_HOLD_MS = 240.0
 
 # ``eyeblinkRate`` in the contract has no unit. The audio side emits 1.0 for a
 # neutral voice and up to 2.4 for anger, which as blinks per second would be a
@@ -87,6 +96,26 @@ def normalise_timestamps(
         if end > start:
             out.append((str(viseme), start, end))
     return out
+
+
+def hold_until_next(
+    segments: Sequence[Tuple[str, float, float]],
+    duration_ms: float,
+    max_hold_ms: float = MAX_HOLD_MS,
+) -> List[Tuple[str, float, float]]:
+    """
+    Extend each segment to the start of the next one (at most ``max_hold_ms``).
+
+    Segments that already touch are unchanged, so a densely labelled payload
+    passes through as-is.
+    """
+    held: List[Tuple[str, float, float]] = []
+    for position, (viseme, start, end) in enumerate(segments):
+        limit = segments[position + 1][1] if position + 1 < len(segments) else duration_ms
+        if limit > end:
+            end = min(limit, end + max_hold_ms)
+        held.append((viseme, start, end))
+    return held
 
 
 @dataclass
@@ -222,7 +251,9 @@ def build_animation(
     if duration_seconds <= 0:
         raise ValueError("duration_seconds must be positive")
 
-    segments = normalise_timestamps(phoneme_timestamps)
+    segments = hold_until_next(
+        normalise_timestamps(phoneme_timestamps), duration_seconds * 1000.0
+    )
     emotion = emotion_weights(emotion_vector)
 
     names = sorted(

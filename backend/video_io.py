@@ -156,7 +156,10 @@ class VideoWriter:
                 process.stdin.close()
         except BrokenPipeError:
             pass
-        stderr = process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
+        stderr = ""
+        if process.stderr is not None:
+            stderr = process.stderr.read().decode("utf-8", errors="replace")
+            process.stderr.close()
         code = process.wait()
         if code != 0:
             return stderr.strip() or f"ffmpeg exited with code {code}"

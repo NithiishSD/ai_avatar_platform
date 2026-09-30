@@ -412,3 +412,16 @@ class Wav2LipEngine:
         if self._model is not None:
             self._model = None
             gpu_utils.empty_cache()
+
+
+# ---------------------------------------------------------------------------
+# Process-wide engine: one copy of the network, however many jobs render.
+# ---------------------------------------------------------------------------
+_shared_engine: Optional[Wav2LipEngine] = None
+
+
+def shared_wav2lip_engine() -> Wav2LipEngine:
+    global _shared_engine
+    if _shared_engine is None:
+        _shared_engine = Wav2LipEngine()
+    return _shared_engine

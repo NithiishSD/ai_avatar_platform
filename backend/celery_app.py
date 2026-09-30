@@ -1,3 +1,4 @@
+import logging
 import os
 import threading
 from pathlib import Path
@@ -15,6 +16,8 @@ from celery import Celery
 
 from contracts import AudioSynthesisRequest, AvatarRenderJob
 from voice_engine import VoiceEngineRouter
+
+logger = logging.getLogger(__name__)
 
 # One router per worker process. Building a new one per task threw away every
 # lazily-loaded model and paid the cold-start cost on every request.
@@ -58,11 +61,46 @@ celery.conf.update(
 )
 
 
+def run_render(job: AvatarRenderJob, engine: Optional[str] = None, progress=None) -> dict:
+    """Render a job and return the result payload (shared by both queues)."""
+    import render_engine
+
+    return render_engine.render_job(job, engine=engine, progress=progress).to_dict()
+
+
+def _render_status_store():
+    from job_queue import CeleryJobQueue
+
+    return CeleryJobQueue()
+
+
+def _record(job_id: str, **changes) -> None:
+    """
+    Write a render job's state where the API reads it.
+
+    A broken status store must not turn a finished render into a crash, but
+    it must be loud: the API would otherwise report QUEUED forever.
+    """
+    try:
+        _render_status_store().update(job_id, **changes)
+    except Exception as err:  # noqa: BLE001
+        logger.error("Could not record status of render job %s (%s): %s", job_id, changes.get("status"), err)
+
+
 @celery.task(name="avatar.process_render_job")
-def process_render_job(payload: dict) -> dict:
-    """Validate a queued payload before the renderer is attached."""
+def process_render_job(payload: dict, engine: Optional[str] = None) -> dict:
+    """Render a queued ``AvatarRenderJob`` to an MP4 and record the outcome."""
     job = AvatarRenderJob.model_validate(payload)
-    return {"jobId": job.job_id, "status": "QUEUED"}
+    _record(job.job_id, status="PROCESSING")
+    try:
+        result = run_render(job, engine)
+    except Exception as err:  # noqa: BLE001 - the failure is the job's result
+        logger.exception("Render job %s failed", job.job_id)
+        error = f"{type(err).__name__}: {err}"
+        _record(job.job_id, status="FAILED", error=error)
+        return {"jobId": job.job_id, "status": "FAILED", "error": error}
+    _record(job.job_id, status="COMPLETED", progress=1.0, result=result)
+    return {"jobId": job.job_id, "status": "COMPLETED", "result": result}
 
 
 @celery.task(name="avatar.synthesize_audio")

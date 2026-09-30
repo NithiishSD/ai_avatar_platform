@@ -103,6 +103,13 @@ class RenderJobResponse(BaseModel):
 
     job_id: str = Field(alias="jobId")
     status: JobStatus
+    # Populated once a worker picks the job up. Absent (not null) until then,
+    # so the Phase 0 response shape is unchanged for a job that is only queued.
+    engine: Optional[str] = None
+    progress: Optional[float] = None
+    video_url: Optional[str] = Field(default=None, alias="videoUrl")
+    error: Optional[str] = None
+    result: Optional[Dict[str, Any]] = None
 
 
 class AudioSynthesisRequest(BaseModel):
@@ -289,3 +296,66 @@ class VoiceSimilarityResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     report: Dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
+# Vision - avatar faces, face analysis, lip-sync metric
+# ---------------------------------------------------------------------------
+
+
+class AvatarFaceEntry(BaseModel):
+    """One image in the avatar store and whether it may be animated."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    avatar_id: str = Field(alias="avatarId")
+    filename: str
+    image_url: str = Field(alias="imageUrl")
+    width: int
+    height: int
+    usable: bool
+    usability_reason: str = Field(alias="usabilityReason")
+    provenance: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AvatarFacesResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    avatars: List[AvatarFaceEntry]
+    consent_bases: List[str] = Field(alias="consentBases")
+    render_engines: Dict[str, bool] = Field(alias="renderEngines")
+
+
+class FaceQualityResponse(BaseModel):
+    """The quality gate's verdict, in the uploader's language."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    passed: bool
+    face_count: int = Field(alias="faceCount")
+    errors: List[Dict[str, str]] = Field(default_factory=list)
+    warnings: List[Dict[str, str]] = Field(default_factory=list)
+
+
+class FaceAnalysisResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    quality: FaceQualityResponse
+    # Null when no face was found. ``landmarks`` inside it is only present
+    # when the request asked for them: 478 points is about 30 kB of JSON.
+    analysis: Optional[Dict[str, Any]] = None
+    embedded_notices: Dict[str, str] = Field(default_factory=dict, alias="embeddedNotices")
+
+
+class AvatarRegisterResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    avatar: AvatarFaceEntry
+    quality: Optional[FaceQualityResponse] = None
+
+
+class LipSyncScoreResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    job_id: str = Field(alias="jobId")
+    score: Dict[str, Any]

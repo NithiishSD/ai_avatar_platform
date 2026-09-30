@@ -8,7 +8,7 @@ We are building an open-source platform that turns a script, a voice sample and 
 
 The platform has two halves joined by one contract. The audio half turns text into speech, clones voices, and extracts millisecond timestamps of every sound. The vision half reads a face, then moves its mouth to match those timestamps.
 
-**Where it stands (29 Sep 2026):** the audio half is at roadmap Phase 3; the vision half has just started Phase 1. Only Integration Gate 0 has been passed, so no talking avatar exists yet. 214 automated tests pass.
+**Where it stands (30 Sep 2026):** the first talking avatar exists. A sentence goes in and a lip-synced MP4 of a registered face comes out, by command line and through the API, with a measured sync score. It speaks with a stock voice, not a cloned one, so Integration Gate 2 is not passed yet. 446 automated tests pass. (The PDF copy of this document predates this update.)
 
 | Area | Status | Evidence |
 | --- | --- | --- |
@@ -17,10 +17,12 @@ The platform has two halves joined by one contract. The audio half turns text in
 | Emotion control | Working | 6 presets, measured duration and loudness ratios |
 | Phoneme and viseme timing | Working | Forced alignment to 15 visemes, now multilingual |
 | Voice cloning | Wired, never run | XTTS-v2 weights not yet downloaded |
-| Face analysis | Built, not integrated | 478 landmarks, 52 blendshapes verified on a photo |
-| Lip-synced video | Not started | The Gate 2 target |
+| Face analysis | Working, in the API | 478 landmarks, 52 blendshapes; quality gate rejects unusable photos |
+| Avatar faces | Working | Consent-enforcing store; synthetic faces from Stable Diffusion 1.5 |
+| Lip-synced video | Working (CPU blendshape engine) | SyncNet LSE-C: English 2.8, Hindi 4.7, Tamil 6.8 (real video is about 6 to 8); offset 0 frames |
+| Neural lip sync (Wav2Lip) | Integrated, not run | Checkpoint is non-commercial; a person must opt in |
 
-**The one thing to do next:** produce the first talking avatar (Gate 2). Everything already built only becomes visible to a judge once a face moves to a voice.
+**The one thing to do next:** give the avatar a cloned voice (XTTS-v2 weights and a consented reference), which is what Gate 2 still needs, and decide whether to accept Wav2Lip's licence to raise the English sync score.
 
 ## The problem and why it matters
 
@@ -92,6 +94,44 @@ The backend validates every job: timestamps must be ordered, non-negative, and f
 - The contract is small enough to reason about: audio, timings, emotion, quality.
 - Integration becomes a checklist (does the real job validate?) rather than a merge of two codebases.
 
+## Engineering flowcharts
+
+Six charts, one per question a newcomer asks. They are drawn by
+`scripts/make_diagrams.py`, so they can be corrected when the code changes.
+
+**1. What happens between a script and a video?** Two pipelines that meet only
+at the `AvatarRenderJob` contract.
+
+![System overview](images/system_overview.png)
+
+**2. How does the speech side choose a model?** Five routes; the on-disk weight
+audit says which are real.
+
+![Speech routing](images/speech_routing.png)
+
+**3. How is a face allowed in?** Consent first, then the quality gate, and the
+consent record is checked again before every render.
+
+![Avatar consent and quality gate](images/avatar_consent_gate.png)
+
+**4. What does the render worker do with a job?** The photo is rigged once; the
+phoneme timestamps become one row of blendshape weights per frame; a named
+engine turns weights into frames.
+
+![Render pipeline](images/render_pipeline.png)
+
+**5. How does a job move through the API?** Accepted in milliseconds, rendered
+on a worker, polled for status.
+
+![Render job lifecycle](images/render_job_lifecycle.png)
+
+**6. How do we know the lips match the audio?** SyncNet, with controls that
+show the metric responds to a real delay.
+
+![Lip-sync metric](images/lipsync_metric.png)
+
+---
+
 ## Audio pillar: from text to timed speech
 
 The audio pillar takes text (and optionally a voice sample) and returns a WAV file plus a list saying which mouth shape to make at every millisecond. That list is what lets the vision pillar lip-sync.
@@ -140,7 +180,7 @@ Every clip can be scored automatically with torchaudio SQUIM, which predicts MOS
 
 ## Vision pillar: from a photo to a moving face
 
-The vision pillar reads one photo, understands the face in it, and then animates the mouth to match the audio pillar's viseme timings. Face analysis is built and verified; lip sync is the next step.
+The vision pillar reads one photo, understands the face in it, and then animates the mouth to match the audio pillar's viseme timings. Face analysis and a CPU lip-sync engine are built and verified.
 
 ### 1. Face analysis (built)
 
@@ -163,7 +203,17 @@ Verified on a real photo: all 478 points landed correctly on eyes, lips, nose an
 
 MediaPipe's selfie segmenter separates the person from the background, so we can swap the background for a clean colour or a studio image. It returns a soft mask, so edges are feathered rather than cut out.
 
-### 3. Lip sync (next): three options, chosen for a 6 GB GPU
+### 3. Lip sync: what is built (30 Sep 2026)
+
+The CPU blendshape engine is built and verified: visemes map to ARKit
+blendshape weights (`viseme_blendshapes.py`), a timeline smooths them into
+per-frame weights (`face_animation.py`), and a mesh warp of the photo renders
+each frame (`face_warp.py`). Measured with SyncNet (LSE-C, real video is about
+6 to 8): English 2.8, Hindi 4.7, Tamil 6.8, with the best offset at 0 frames in
+every clip. Wav2Lip is integrated as a second engine but its non-commercial
+checkpoint has not been fetched. The options considered follow.
+
+### 3a. Lip sync options for a 6 GB GPU
 
 | Option | How it works | Quality | Fits 6 GB? | Role |
 | --- | --- | --- | --- | --- |
@@ -237,18 +287,18 @@ The official MediaPipe test photo turned out to be a White House portrait whose 
 
 ## Current status
 
-The audio side is at Phase 3 and the vision side at early Phase 1; only Integration Gate 0 has been passed. The gates are joint demos, so the audio lead does not yet show up in anything a viewer can see.
+As of 30 Sep 2026 the audio side is at Phase 3 and the vision side has a working Phase 2 render path. Gate 0 is passed; Gate 1's criterion is met through the API but the UI has not been checked in a browser; Gate 2 waits on a cloned voice.
 
 ### By roadmap phase
 
 | Phase | Audio and backend | Vision and UI |
 | --- | --- | --- |
 | 0 Setup and contract freeze | Done | Done |
-| 1 Speech engine / face analysis | Partial: 2 of 5 models have weights | Face analysis built, not wired to API or UI |
-| 2 Voice cloning / lip sync | Partial: alignment done, cloning never run | Not started |
-| 3 Multilingual and emotion / avatar styling | Done and benchmarked | Not started |
+| 1 Speech engine / face analysis | Partial: 2 of 5 models have weights | Face analysis live in the API; UI panel built, not yet checked in a browser |
+| 2 Voice cloning / lip sync | Partial: alignment done, cloning never run | Blendshape lip sync verified and measured; Wav2Lip integrated, weights not fetched |
+| 3 Multilingual and emotion / avatar styling | Done and benchmarked | Hindi and Tamil avatars and emotion-driven faces verified; styling and background swap not started |
 | 4 Streaming / real-time video | Not started | Not started |
-| 5 Consent and watermarking | About one third: keys, rate limits, provenance | Not started |
+| 5 Consent and watermarking | About one third: keys, rate limits, provenance | Face consent enforced at registration and render; visible AI label on every video |
 | 6 Scale and final showcase | Not started | Not started |
 
 ### Measured results (Phase 3 benchmark, 17 Sep 2026)
@@ -266,7 +316,8 @@ Other measured facts: Kokoro generates speech 57 times faster than real time; MM
 ### Known gaps
 
 - Three speech models (XTTS-v2, Higgs, Dia) have no weights; a fetch script is ready.
-- No lip-synced video exists yet.
+- No cloned voice yet, so the talking avatar uses stock voices.
+- English lip sync is detectable but weak (LSE-C 2.8); the UI has not been checked in a browser.
 - OpenVoice V2, named in the requirements, is not integrated.
 - No database persistence; job history is lost on restart.
 - The capacity figure comes from an in-process test, not a deployed server under load.

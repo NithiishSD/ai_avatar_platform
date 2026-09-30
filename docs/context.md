@@ -6,7 +6,7 @@ in `docs/DEBUGGING.md`. Add a new entry at the top of the log for every work
 session using the template below. Older sections further down predate this
 structure and some of their claims were corrected in later entries.
 
-Last updated: 2026-09-29 (Session 4)
+Last updated: 2026-09-30 (Session 5)
 Roadmap source: `AI_Avatar_Platform_2_Developer_Roadmap.pdf`
 Primary requirements source: `4895e15d-...AI_Avatar_Creation_Platform_using_Open_Source_Tech.pdf`
 **⚠ That PDF is corrupted and unreadable — see "Blocked: requirements source lost" below.**
@@ -21,6 +21,71 @@ Verified: <how: tests run + count, live run on real weights/data, numbers, outpu
 Not done / open: <what is still missing, and why>
 Next: <the next task ID>
 ```
+
+---
+
+## Session 5 (2026-09-30): vision pipeline end to end - first talking avatar, measured
+Tasks: G1-01..G1-04 Verified, G1-05 Built, G1-06 Built; G2-01..G2-06 Verified, G2-07 Blocked
+(licence), G2-08 Verified, G2-10 Built; G3-01, G3-02 Verified; FD-03 Verified; IM-07 Built.
+Changed:
+- `backend/render_engine.py` (new): `AvatarRenderJob` -> MP4. Preflight (avatar, consent,
+  audio URL, engine weights), two named engines with no fallback between them, burned-in
+  "AI-generated" label, `RenderResult` with engine, timings, ffprobe data and warnings.
+- `backend/lipsync_metric.py` (new): SyncNet v2 LSE-C / LSE-D / offset.
+- `backend/avatar_generator.py` + `scripts/make_avatar.py` (new): synthetic faces from
+  SD 1.5 (seed walk until the quality gate passes), and registration of human photos.
+- `scripts/render_avatar.py` (new): text + face -> MP4 in one command, `--metric` to score.
+- `backend/face_animation.py`: each phoneme is now held until the next one starts (max
+  240 ms). MMS_FA emits ~20 ms CTC spans with gaps; read literally the mean jawOpen was
+  0.05 and the mouth barely moved.
+- `backend/job_queue.py`, `celery_app.py`: the in-memory queue runs jobs on one worker
+  thread (QUEUED -> PROCESSING -> COMPLETED/FAILED, progress, result, error); the Celery
+  task renders and records status in Redis.
+- `backend/app.py`, `contracts.py`: `GET/POST/DELETE /api/v1/avatar/faces`,
+  `GET .../faces/{id}/image`, `POST /api/v1/avatar/face/analyze`, render-job preflight and
+  `?engine=`, `POST .../render-job/{id}/lipsync-score`; `/health` gains `visionWeights`
+  and `render`. `RenderJobResponse` gained optional fields; `AvatarRenderJob` is unchanged.
+- `frontend/src/AvatarPanel.jsx` (new): avatar picker, landmark canvas, photo registration
+  with consent basis, render button, progress, video player, SyncNet score. The old
+  "Create Render Job" button (hard-coded avatar that did not exist) is removed.
+- `scripts/doctor.py`: vision weights, ffmpeg/ffprobe, avatar faces judged by usability.
+- `scripts/make_diagrams.py` + six flowcharts in `docs/images/`.
+- Tests: 200 new (446 total) across 14 new files; `tests/fixtures/synthetic_face.json`
+  holds the landmarks of the generated face (no image is committed).
+Verified (live, real weights, 30 Sep 2026, RTX 4050):
+- Suite: 446 tests pass. `doctor.py`: 32 pass, 6 warn, 0 fail.
+- Face: `make_avatar.py --synthetic --avatar-id demo --seed 7` -> 512x512, 478 landmarks,
+  yaw -0.6 / pitch +5.0 / roll +1.2. The first prompt produced a closed-eyes face that
+  passed with a warning, which is why generated faces now reject on that warning.
+- Renders in `outputs/renders/` (blendshape engine, 25 fps, 512x512, SyncNet offset 0 for all):
+
+  | Clip | Speech model | Frames / length | Render time | LSE-C | LSE-D |
+  |---|---|---|---|---|---|
+  | gate2-demo (English) | kokoro | 162 / 6.50 s | 1.97 s | 2.82 | 12.61 |
+  | gate3-hindi | mms-tts | 145 / 5.81 s | 1.01 s | 4.66 | 10.60 |
+  | gate3-tamil | mms-tts | 131 / 5.25 s | 1.56 s | 6.79 | 8.52 |
+  | gate3-joy | kokoro | 100 / 4.00 s | 1.13 s | 2.95 | 10.28 |
+  | gate3-sorrow | kokoro | 126 / 5.03 s | 1.32 s | 2.79 | 10.18 |
+
+  Method: `syncnet-v2 LSE-C/LSE-D, 25 fps, face box from first frame`. For scale, real
+  talking-head video scores LSE-C about 6-8. Metric controls on gate2-demo: audio delayed
+  200 / 400 ms -> offset -5 / -10 frames; unrelated audio -> LSE-C 0.68.
+- API, in_memory queue: render job accepted in 8 ms (202), COMPLETED in under 1 s for a
+  4.75 s clip, MP4 served as `video/mp4`; unknown avatar 404, `s3://` audio 400, `wav2lip`
+  without weights 400 (not downgraded). Audio/video stream gap 0.00-0.06 s.
+Not done / open:
+- The UI was **not** looked at in a browser: the automation browser could not reach
+  localhost. `npm run build` passes and every route the panel calls was exercised by script.
+- Gate 2 is not passed: no cloned voice (XTTS-v2 weights need the CPML accepted), and
+  English lip sync at LSE-C 2.8 is detectable but weak. Wav2Lip would likely raise it; its
+  checkpoint is non-commercial and needs a person to opt in.
+- Celery/Redis render path is unit-tested with a fake Redis, not run against a real broker.
+- The synthetic face is usable but not evidence; no consented human face or voice yet.
+- Not built: background replacement in the render path (G3-03), head-pose sign check
+  (G1-07), MuseTalk (G2-09), a face-generation API route (CLI only), studio edits that the
+  fetched SFace / multiclass-segmenter weights are for.
+- The lip line shows a thin dark edge on wide openings in the blendshape engine.
+Next: check G1-05 / G2-10 in a browser; then G1-08, G1-09, and the G2-07 licence decision.
 
 ---
 

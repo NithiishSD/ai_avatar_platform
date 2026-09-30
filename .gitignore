@@ -72,3 +72,6 @@ inputs/smoke_reference_*
 # consent, and a repository is a publication. Register them locally with
 # their provenance sidecar instead.
 inputs/faces/*
+
+# Rendered videos are generated media, regenerable with scripts/render_avatar.py.
+outputs/renders/

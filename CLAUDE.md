@@ -21,7 +21,8 @@ one photo → a talking, lip-synced avatar video. Every model must be open
 source and run locally on the hardware below.
 
 The one outcome that matters most right now: **Integration Gate 2 — a cloned
-voice driving a lip-synced face.** Everything else is secondary until it exists.
+voice driving a lip-synced face.** The lip-synced face exists; the cloned voice
+does not (XTTS-v2 weights). Everything else is secondary until it does.
 
 ## 2. Hard constraints
 
@@ -94,6 +95,11 @@ PY=./backend/.conda/bin/python          # Python 3.10.21 with all deps
 | Fetch missing weights | `PYTHONPATH=backend $PY scripts/fetch_models.py [--only xtts-v2] [--all]` |
 | Benchmark vs thresholds | `PYTHONPATH=backend $PY scripts/benchmark_phase3.py` → `docs/benchmarks/` |
 | Smoke voice reference | `PYTHONPATH=backend $PY scripts/make_reference.py --smoke` |
+| Make a synthetic avatar face | `PYTHONPATH=backend $PY scripts/make_avatar.py --synthetic --avatar-id demo --seed 7` |
+| Register a real face | `PYTHONPATH=backend $PY scripts/make_avatar.py --human FILE --avatar-id ID --subject NAME --consent subject-provided` |
+| Text + face → talking MP4 | `PYTHONPATH=backend $PY scripts/render_avatar.py --text "..." --face demo [--metric]` → `outputs/renders/` |
+| Vision weights status / fetch | `PYTHONPATH=backend $PY scripts/fetch_vision_models.py [--dry-run] [--only KEY]` |
+| Redraw the flowcharts | `$PY scripts/make_diagrams.py` → `docs/images/` |
 | Register human reference | `PYTHONPATH=backend $PY scripts/make_reference.py --human FILE --speaker NAME --licence L --consent open-licence` |
 | Redis + Postgres (optional) | `./start-docker.sh` (only needed when `QUEUE_BACKEND=celery`) |
 
@@ -102,7 +108,8 @@ PY=./backend/.conda/bin/python          # Python 3.10.21 with all deps
 
 Config lives in `.env` (template: `.env.example`). Key switches:
 `QUEUE_BACKEND=in_memory` (Celery eager, no Redis needed) or `celery`;
-`AUTH_ENABLED` + `API_KEYS`; `RATE_LIMIT_RPM`; `CORS_ORIGINS`.
+`AUTH_ENABLED` + `API_KEYS`; `RATE_LIMIT_RPM`; `CORS_ORIGINS`;
+`RENDER_ENGINE=blendshape` (default) or `wav2lip`.
 
 ## 5. Architecture
 
@@ -133,17 +140,30 @@ FastAPI accepts every step as a job; Celery runs it (eager in development).
 | `backend/security.py` | API keys, token-bucket rate limit | Live |
 | `backend/provenance.py` | Consent/provenance sidecars and admissibility | Live |
 | `backend/model_registry.py` | On-disk weight audit (no downloads, no torch) | Live |
-| `backend/face_engine.py` | MediaPipe landmarks, bbox, head pose, blendshapes, crop, segmentation | Built + checked on one photo; **tests not yet run; no API route** |
-| `frontend/src/App.jsx` | Creator studio: synthesis, clone picker, emotions, viseme display, render-job | Live |
+| `backend/face_engine.py` | MediaPipe landmarks, bbox, head pose, blendshapes, quality gate, segmenters, shared locked engine | Live |
+| `backend/avatar_store.py` | Registry of faces in `inputs/faces`; enforces consent and the quality gate | Live |
+| `backend/avatar_generator.py` | Synthetic faces from SD 1.5, seed walk until the gate passes | Live (CLI only) |
+| `backend/viseme_blendshapes.py` | 15 visemes and 6 emotions → ARKit blendshape weights | Live |
+| `backend/face_animation.py` | Timestamps → smoothed per-frame weights, closures, energy gate, blinks | Live |
+| `backend/face_warp.py` | `PortraitAnimator`: CPU mesh warp, procedural mouth interior and eyelids | Live |
+| `backend/video_io.py` | ffmpeg encode/mux, ffprobe, frame and audio readers | Live |
+| `backend/render_engine.py` | `AvatarRenderJob` → MP4; preflight; engines `blendshape` / `wav2lip`; AI label | Live |
+| `backend/wav2lip_engine.py` | Wav2Lip network + inference | Built; checkpoint not fetched (licence) |
+| `backend/lipsync_metric.py` | SyncNet LSE-C / LSE-D / offset | Live |
+| `backend/gpu_utils.py` | VRAM guard and model release registry | Live for vision models; TTS router not registered |
+| `frontend/src/App.jsx` | Creator studio: synthesis, clone picker, emotions, viseme display | Live |
+| `frontend/src/AvatarPanel.jsx` | Avatar picker, landmark canvas, photo registration, render, video, sync score | Built; not yet checked in a browser |
 | `frontend/src/App.new.jsx` | Earlier sample UI, unused | Candidate for removal |
+
+Flowcharts of all of this: `docs/images/` (see `docs/PROJECT_DOCUMENTATION.md`, "Engineering flowcharts").
 
 ### Key data
 
 - **15 visemes**: `viseme_sil, PP, FF, TH, DD, kk, CH, SS, nn, RR, aa, E, I, O, U`.
 - **Audio**: generated WAV is 24 kHz mono (MMS-TTS natively 16 kHz).
 - **Paths**: generated media → `outputs/` (served at `/outputs`); voice
-  references → `inputs/`; face photos → `inputs/faces/`; MediaPipe bundles →
-  `.models/mediapipe/`; ECAPA → `.models/ecapa/`; HF models → `~/.cache/huggingface/hub`.
+  references → `inputs/`; face photos → `inputs/faces/` (never committed);
+  rendered videos → `outputs/renders/`; vision weights → `.models/{mediapipe,syncnet,sface,wav2lip}/`; ECAPA → `.models/ecapa/`; HF models → `~/.cache/huggingface/hub`.
 - **Coqui download dir** depends on `XDG_DATA_HOME`, which the VS Code snap
   rewrites; `model_registry.py` checks both locations.
 
@@ -176,11 +196,15 @@ A task is **done** only when all are true:
 
 ## 8. Current state (update when it changes)
 
-- Last verified suite: **214 tests passing** (before `test_face_engine.py`
-  was added; that file has not been run yet).
-- Gates passed: **Gate 0 only.**
-- Weights present: Kokoro, MMS-TTS (hin, tam, swh, spa), ECAPA, MediaPipe
-  face landmarker + selfie segmenter. Missing: XTTS-v2, Higgs, Dia.
-- `inputs/` holds only a synthetic smoke reference (not admissible evidence).
-  No consented face photo exists yet.
+- Last verified suite: **446 tests passing** (30 Sep 2026). `doctor.py`: 32 pass, 6 warn, 0 fail.
+- Gates passed: **Gate 0.** Gate 1's criterion is met through the API and CLI but the
+  UI overlay has not been looked at. Gate 2 is not passed: there is no cloned voice.
+- What works end to end: text → Kokoro or MMS-TTS speech → alignment → render job →
+  lip-synced MP4 of a registered face, by CLI and by API, with a SyncNet score.
+- Measured lip sync (blendshape engine, SyncNet LSE-C, real video ≈ 6–8): English 2.8,
+  Hindi 4.7, Tamil 6.8; offset 0 frames in every clip. Details in `docs/context.md`.
+- Weights present: Kokoro, MMS-TTS (hin, tam, swh, spa), ECAPA, MediaPipe landmarker +
+  both segmenters, SyncNet, SFace, SD 1.5. Missing: XTTS-v2, Higgs, Dia, Wav2Lip.
+- `inputs/` holds a synthetic smoke voice reference and one synthetic face (`demo`):
+  both usable, neither admissible as evidence. No consented human voice or face yet.
 - Next task: see the top of `docs/MILESTONES.md`.

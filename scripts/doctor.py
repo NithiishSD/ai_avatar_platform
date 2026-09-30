@@ -154,16 +154,17 @@ def check_speech_weights() -> None:
 
 
 def check_other_weights() -> None:
-    from face_engine import FACE_LANDMARKER_TASK, SELFIE_SEGMENTER_TFLITE
+    from model_registry import audit_vision_weights
 
-    for label, path in (
-        ("face_landmarker", FACE_LANDMARKER_TASK),
-        ("selfie_segmenter", SELFIE_SEGMENTER_TFLITE),
-    ):
-        present = path.is_file()
-        record("models", label, "PASS" if present else "WARN",
-               str(path.relative_to(PROJECT_ROOT)) if present else "missing",
-               "" if present else "Fetch MediaPipe bundles into .models/mediapipe/ (task G1-03)")
+    for status in audit_vision_weights():
+        # Without the landmarker no face can be analysed or rendered at all.
+        severity = "FAIL" if status.key == "face-landmarker" else "WARN"
+        record(
+            "models", status.key,
+            "PASS" if status.present else severity,
+            f"{status.size_label} — {status.detail}",
+            "" if status.present else f"scripts/fetch_vision_models.py --only {status.key}",
+        )
 
     ecapa = PROJECT_ROOT / ".models" / "ecapa" / "embedding_model.ckpt"
     record("models", "ecapa", "PASS" if ecapa.is_file() else "WARN",
@@ -195,8 +196,25 @@ def check_references() -> None:
     faces = [p for p in (inputs / "faces").glob("*") if p.suffix.lower() in image_ext]
     report("voice references", voices,
            "scripts/make_reference.py --human FILE ... (or --smoke for pipeline tests)")
-    report("face photos", faces,
-           "Add a photo you have rights to in inputs/faces/ with a .provenance.json sidecar")
+    # For a face the question is "may it be animated", not "is it evidence":
+    # a synthetic face is usable for rendering even though it proves nothing.
+    if not faces:
+        record("inputs", "avatar faces", "WARN", "none present",
+               "scripts/make_avatar.py --synthetic --avatar-id demo  (or --human FILE ...)")
+    else:
+        usable = sum(provenance.usability(p)[0] for p in faces)
+        record("inputs", "avatar faces", "PASS" if usable else "WARN",
+               f"{len(faces)} image(s), {usable} usable (provenance permits animation)",
+               "" if usable == len(faces) else
+               "Register unrecorded images with scripts/make_avatar.py, or remove them")
+
+
+def check_ffmpeg() -> None:
+    for binary in ("ffmpeg", "ffprobe"):
+        path = shutil.which(binary)
+        record("hardware", binary, "PASS" if path else "FAIL",
+               path or "not on PATH; videos cannot be encoded",
+               "" if path else "sudo apt install ffmpeg")
 
 
 def check_config() -> None:
@@ -267,6 +285,7 @@ CHECKS = [
     ("packages", "imports", check_packages),
     ("hardware", "cuda", check_gpu),
     ("hardware", "disk", check_disk),
+    ("hardware", "ffmpeg", check_ffmpeg),
     ("models", "speech weights", check_speech_weights),
     ("models", "other weights", check_other_weights),
     ("inputs", "references", check_references),

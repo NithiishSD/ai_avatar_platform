@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import "./App.css";
+import AvatarPanel from "./AvatarPanel";
 
 const API_BASE = "http://localhost:8000";
 
@@ -26,25 +27,6 @@ const EMOTION_INFO = {
 };
 
 const ENGLISH_CODES = ["en", "en-us", "en-gb", "en-au", "en-ca"];
-
-const buildSampleRenderJob = () => ({
-  jobId: `JOB-${Date.now()}`,
-  avatarId: "AVATAR_TEST_01",
-  audioUrl: "https://example.com/audio/test.wav",
-  sampleRate: 24000,
-  durationSeconds: 2.5,
-  phonemeTimestamps: [
-    { phoneme: "SIL", viseme: "viseme_sil", startMs: 0,    endMs: 250  },
-    { phoneme: "EH",  viseme: "viseme_E",   startMs: 250,  endMs: 650  },
-    { phoneme: "L",   viseme: "viseme_L",   startMs: 650,  endMs: 950  },
-    { phoneme: "OW",  viseme: "viseme_O",   startMs: 950,  endMs: 1400 },
-    { phoneme: "SIL", viseme: "viseme_sil", startMs: 1400, endMs: 1800 },
-  ],
-  emotionVector: { happy: 0.7, neutral: 0.3, eyeblinkRate: 4.5 },
-  renderQuality: "1080P_HQ",
-  targetFps: 30,
-});
-
 
 /*
  * Mirror of emotion_engine.to_render_emotion_vector for the render-job payload.
@@ -140,8 +122,6 @@ function App() {
   const [taskId, setTaskId]       = useState("");
   const [taskStatus, setTaskStatus] = useState("idle");
   const [modelUsed, setModelUsed] = useState(null);
-  const [jobId, setJobId]         = useState("");
-  const [jobStatus, setJobStatus] = useState("idle");
   const [error, setError]         = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [audioUrl, setAudioUrl]   = useState("");
@@ -358,47 +338,6 @@ function App() {
       setError(err.message || "Could not start synthesis");
     } finally {
       setIsSubmitting(false);
-    }
-  };
-
-  /* ---------- render job with aligned audio ------------------------- */
-  const handleCreateRenderJob = async () => {
-    setError("");
-    try {
-      // Use synthesized audio and aligned timestamps if available, otherwise sample
-      const timestamps = phonemeTimestamps.length > 0
-        ? phonemeTimestamps
-        : buildSampleRenderJob().phonemeTimestamps;
-
-      const duration = timestamps.length > 0
-        ? timestamps[timestamps.length - 1].endMs / 1000.0
-        : 2.5;
-
-      const jobPayload = {
-        jobId: `JOB-${Date.now()}`,
-        avatarId: "AVATAR_FEMALE_01",
-        audioUrl: `${API_BASE}/outputs/speech.wav`,
-        sampleRate: 24000,
-        durationSeconds: Math.max(duration, 0.5),
-        phonemeTimestamps: timestamps,
-        // Send the emotion the audio was actually rendered with, so the face
-        // matches the voice. Falls back to the Phase 0 default when neutral.
-        emotionVector: buildRenderEmotionVector(emotionReport),
-        renderQuality: "1080P_HQ",
-        targetFps: 30,
-      };
-
-      const res = await fetch(`${API_BASE}/api/v1/avatar/render-job`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(jobPayload),
-      });
-      const payload = await res.json();
-      if (!res.ok) throw new Error(payload.detail || "Render job creation failed");
-      setJobId(payload.jobId);
-      setJobStatus(payload.status);
-    } catch (err) {
-      setError(err.message || "Could not create render job");
     }
   };
 
@@ -754,15 +693,6 @@ function App() {
               <button type="submit" id="generate-btn" disabled={isSubmitting}>
                 {isSubmitting ? "Synthesizing..." : "Generate Speech"}
               </button>
-              <button
-                type="button"
-                id="render-job-btn"
-                className="secondary"
-                onClick={handleCreateRenderJob}
-                title="Create avatar video rendering job using synthesized audio and phoneme timestamps"
-              >
-                Create Render Job
-              </button>
             </div>
           </form>
 
@@ -944,16 +874,6 @@ function App() {
           )}
 
           <div className="info-card">
-            <label>Render Job ID</label>
-            <strong>{jobId || "Not created"}</strong>
-          </div>
-
-          <div className="info-card">
-            <label>Render Job Status</label>
-            <strong>{jobStatus}</strong>
-          </div>
-
-          <div className="info-card">
             <label>Output Audio</label>
             <strong>
               {taskStatus === "SUCCESS"
@@ -982,6 +902,13 @@ function App() {
               </div>
             ) : null}
           </div>
+
+          <AvatarPanel
+            apiBase={API_BASE}
+            phonemeTimestamps={phonemeTimestamps}
+            emotionVector={buildRenderEmotionVector(emotionReport)}
+            audioReady={taskStatus === "SUCCESS"}
+          />
         </section>
       </main>
     </div>

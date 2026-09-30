@@ -1,7 +1,7 @@
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from dotenv import load_dotenv
 
 project_root = Path(__file__).resolve().parents[1]
@@ -11,9 +11,14 @@ if dotenv_path.exists():
 else:
     load_dotenv()
 
-from celery_app import celery, synthesize_audio
+from celery_app import celery, run_render, synthesize_audio
 from contracts import (
     AudioSynthesisRequest,
+    AvatarFaceEntry,
+    AvatarFacesResponse,
+    AvatarRegisterResponse,
+    FaceAnalysisResponse,
+    LipSyncScoreResponse,
     AvatarRenderJob,
     RenderJobResponse,
     SynthesisJobResponse,
@@ -28,18 +33,26 @@ from contracts import (
     VoiceSimilarityRequest,
     VoiceSimilarityResponse,
 )
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import avatar_store
 import language_registry
+import provenance
+import render_engine
 from audio_utils import list_voice_samples, SUPPORTED_EXTENSIONS
 from alignment_engine import ForcedAligner, PhonemeToVisemeMapper
 from emotion_engine import preset_catalogue
 from job_queue import CeleryJobQueue, InMemoryJobQueue
-from model_registry import audit_summary, log_weight_audit
+from model_registry import (
+    audit_summary,
+    log_vision_audit,
+    log_weight_audit,
+    vision_audit_summary,
+)
 from quality_auditor import SpeechQualityAuditor
 from security import API_KEY_HEADER, SecurityGate
 
@@ -66,6 +79,12 @@ async def lifespan(_: FastAPI):
             f"{', '.join(s.key for s in missing)}"
         )
         print("[Model Weights] Fetch them with: python scripts/fetch_models.py")
+    vision = log_vision_audit()
+    vision_missing = [s for s in vision if not s.present]
+    print(f"[Vision Weights] {len(vision) - len(vision_missing)}/{len(vision)} available")
+    for status in vision:
+        mark = "OK  " if status.present else "MISS"
+        print(f"  {mark}  {status.key:<21} {status.size_label:>8}  {status.detail}")
     print("=" * 60)
     yield
 
@@ -126,7 +145,10 @@ outputs_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/outputs", StaticFiles(directory=str(outputs_dir)), name="outputs")
 
 queue_backend = os.getenv("QUEUE_BACKEND", "in_memory").lower()
-job_queue = CeleryJobQueue() if queue_backend == "celery" else InMemoryJobQueue()
+job_queue = (
+    CeleryJobQueue() if queue_backend == "celery" else InMemoryJobQueue(runner=run_render)
+)
+faces = avatar_store.AvatarStore()
 
 # One auditor for the process: SQUIM weights load once, on first audit.
 quality_auditor = SpeechQualityAuditor()
@@ -153,6 +175,16 @@ class VoiceSamplesResponse(BaseModel):
     inputs_dir: str
 
 
+def _render_engines() -> dict:
+    """Which render engines can run right now (by checkpoint presence)."""
+    from wav2lip_engine import shared_wav2lip_engine
+
+    return {
+        render_engine.ENGINE_BLENDSHAPE: True,
+        render_engine.ENGINE_WAV2LIP: shared_wav2lip_engine().available,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
@@ -171,6 +203,11 @@ def health() -> dict:
             "visemes": PhonemeToVisemeMapper.get_supported_visemes(),
         },
         "modelWeights": audit_summary(),
+        "visionWeights": vision_audit_summary(),
+        "render": {
+            "defaultEngine": render_engine.default_engine(),
+            "engines": _render_engines(),
+        },
     }
 
 
@@ -246,25 +283,227 @@ def list_samples() -> VoiceSamplesResponse:
 
 
 
+# ---------------------------------------------------------------------------
+# Avatar faces -- the consent-enforcing store, and face analysis
+# ---------------------------------------------------------------------------
+def _quality_payload(report) -> dict:
+    return report.to_dict()
+
+
+@app.get("/api/v1/avatar/faces", response_model=AvatarFacesResponse)
+def list_avatar_faces() -> AvatarFacesResponse:
+    """Every image in ``inputs/faces`` and whether its provenance permits use."""
+    return AvatarFacesResponse(
+        avatars=[AvatarFaceEntry.model_validate(r.to_dict()) for r in faces.list()],
+        consentBases=sorted(provenance.FACE_CONSENT_BASES),
+        renderEngines=_render_engines(),
+    )
+
+
+@app.post(
+    "/api/v1/avatar/faces",
+    response_model=AvatarRegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def register_avatar_face(
+    file: UploadFile = File(...),
+    avatar_id: str = Form(..., alias="avatarId"),
+    subject: str = Form(""),
+    consent_basis: str = Form("", alias="consentBasis"),
+    licence: str = Form(""),
+    notes: str = Form(""),
+) -> AvatarRegisterResponse:
+    """
+    Register a photo of a real person as an avatar.
+
+    Uploads are always recorded as human: a caller cannot label a photo
+    "synthetic" to skip the consent basis. Synthetic faces come from
+    ``scripts/make_avatar.py --synthetic``, which records how they were made.
+    """
+    data = await file.read()
+    try:
+        record, report = faces.register(
+            data,
+            avatar_id=avatar_id,
+            source=provenance.HUMAN,
+            subject=subject,
+            licence=licence,
+            consent_basis=consent_basis,
+            notes=notes,
+        )
+    except avatar_store.AvatarRejected as err:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"message": str(err), "quality": _quality_payload(err.report)},
+        ) from err
+    except avatar_store.AvatarError as err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
+    except Exception as err:  # noqa: BLE001 - e.g. the landmarker bundle is missing
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(err)
+        ) from err
+    return AvatarRegisterResponse(
+        avatar=AvatarFaceEntry.model_validate(record.to_dict()),
+        quality=_quality_payload(report) if report is not None else None,
+    )
+
+
+def _avatar_or_http(avatar_id: str, usable: bool = True):
+    try:
+        return faces.require_usable(avatar_id) if usable else faces.get(avatar_id)
+    except avatar_store.AvatarError as err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
+    except avatar_store.AvatarNotFound as err:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(err)) from err
+    except avatar_store.AvatarConsentError as err:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(err)) from err
+
+
+@app.get("/api/v1/avatar/faces/{avatar_id}/image")
+def get_avatar_image(avatar_id: str) -> FileResponse:
+    """The avatar image. Refused for an image whose provenance forbids use."""
+    record = _avatar_or_http(avatar_id)
+    return FileResponse(record.path, media_type="image/png")
+
+
+@app.delete("/api/v1/avatar/faces/{avatar_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_avatar_face(avatar_id: str) -> None:
+    _avatar_or_http(avatar_id, usable=False)
+    faces.delete(avatar_id)
+
+
+@app.post("/api/v1/avatar/face/analyze", response_model=FaceAnalysisResponse)
+async def analyze_face(
+    file: Optional[UploadFile] = File(None),
+    avatar_id: Optional[str] = Form(None, alias="avatarId"),
+    include_landmarks: bool = Form(False, alias="includeLandmarks"),
+) -> FaceAnalysisResponse:
+    """
+    Landmarks, head pose, blendshapes and the quality verdict for one photo.
+
+    Send either an image ``file`` (analysed and discarded, never stored) or
+    the ``avatarId`` of a registered face.
+    """
+    from face_engine import FACE_ENGINE_LOCK, FaceEngineUnavailable, shared_face_engine
+
+    if (file is None) == (avatar_id is None):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="send exactly one of: an image 'file', or an 'avatarId'",
+        )
+    try:
+        if file is not None:
+            image, notices = avatar_store.decode_image(await file.read())
+        else:
+            image, notices = avatar_store.decode_image(_avatar_or_http(avatar_id).path)
+        with FACE_ENGINE_LOCK:
+            report = shared_face_engine().check_quality(image)
+    except avatar_store.AvatarError as err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
+    except FaceEngineUnavailable as err:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(err)
+        ) from err
+    return FaceAnalysisResponse(
+        quality=_quality_payload(report),
+        analysis=(
+            report.analysis.to_dict(include_landmarks=include_landmarks)
+            if report.analysis is not None
+            else None
+        ),
+        embeddedNotices=notices,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Render jobs
+# ---------------------------------------------------------------------------
+def _render_response(job_id: str, queued_job) -> RenderJobResponse:
+    result = queued_job.result
+    started = queued_job.status.value != "QUEUED"
+    return RenderJobResponse(
+        jobId=job_id,
+        status=queued_job.status,
+        engine=(result or {}).get("engine") or queued_job.engine,
+        progress=round(queued_job.progress, 3) if started else None,
+        videoUrl=(result or {}).get("videoUrl"),
+        error=queued_job.error,
+        result=result,
+    )
+
+
 @app.post(
     "/api/v1/avatar/render-job",
     response_model=RenderJobResponse,
+    response_model_exclude_none=True,
     status_code=status.HTTP_202_ACCEPTED,
 )
-def create_render_job(job: AvatarRenderJob) -> RenderJobResponse:
+def create_render_job(job: AvatarRenderJob, engine: Optional[str] = None) -> RenderJobResponse:
+    """
+    Queue a render. ``?engine=blendshape|wav2lip`` picks the lip-sync engine.
+
+    A job that could never render -- unknown avatar, an image without
+    consent, audio this server cannot read, an engine with no weights -- is
+    rejected here with the reason, not accepted and failed later.
+    """
+    if getattr(job_queue, "executes", False):
+        try:
+            engine = render_engine.validate_engine(engine)
+            render_engine.preflight(job, engine, faces)
+        except avatar_store.AvatarError as err:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
+        except avatar_store.AvatarNotFound as err:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(err)) from err
+        except avatar_store.AvatarConsentError as err:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(err)) from err
+        except render_engine.RenderError as err:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
     try:
-        queued_job = job_queue.enqueue(job)
+        queued_job = job_queue.enqueue(job, engine)
     except ValueError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
-    return RenderJobResponse(jobId=queued_job.job.job_id, status=queued_job.status)
+    return _render_response(queued_job.job.job_id, queued_job)
 
 
-@app.get("/api/v1/avatar/render-job/{job_id}", response_model=RenderJobResponse)
+@app.get(
+    "/api/v1/avatar/render-job/{job_id}",
+    response_model=RenderJobResponse,
+    response_model_exclude_none=True,
+)
 def get_render_job(job_id: str) -> RenderJobResponse:
     queued_job = job_queue.get(job_id)
     if queued_job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="render job not found")
-    return RenderJobResponse(jobId=job_id, status=queued_job.status)
+    return _render_response(job_id, queued_job)
+
+
+@app.post(
+    "/api/v1/avatar/render-job/{job_id}/lipsync-score",
+    response_model=LipSyncScoreResponse,
+)
+def score_render_job(job_id: str) -> LipSyncScoreResponse:
+    """SyncNet LSE-C / LSE-D for a finished render. The score names its method."""
+    import lipsync_metric
+
+    queued_job = job_queue.get(job_id)
+    if queued_job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="render job not found")
+    if queued_job.result is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"render job is {queued_job.status.value}; there is no video to score yet",
+        )
+    try:
+        score = lipsync_metric.score_video(queued_job.result["outputPath"])
+    except lipsync_metric.SyncNetUnavailable as err:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(err)
+        ) from err
+    except (lipsync_metric.LipSyncMetricError, FileNotFoundError) as err:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(err)
+        ) from err
+    return LipSyncScoreResponse(jobId=job_id, score=score.to_dict())
 
 
 @app.post(
