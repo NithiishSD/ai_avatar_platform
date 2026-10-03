@@ -97,6 +97,11 @@ class AudioUrlTests(RenderCase):
             with self.assertRaises(RenderError):
                 render_engine.resolve_audio_url(url)
 
+    def test_nul_byte_is_a_render_error_not_a_crash(self):
+        for url in ("http://h/outputs/a%00b.wav", "file:///home/x%00.wav"):
+            with self.assertRaises(RenderError):
+                render_engine.resolve_audio_url(url)
+
     def test_missing_file_says_to_synthesize_first(self):
         with self.assertRaises(RenderError) as ctx:
             render_engine.resolve_audio_url("http://localhost/outputs/nope.wav")
@@ -109,7 +114,14 @@ class PlanningTests(RenderCase):
         tricky = render_engine.output_path_for("../../etc/passwd")
         self.assertEqual(tricky.parent, self.outputs / "renders")
         self.assertNotIn("..", tricky.name)
-        self.assertTrue(render_engine.output_path_for("///").name.startswith("job_"))
+        self.assertTrue(render_engine.output_path_for("///").name.startswith("job-"))
+
+    def test_different_job_ids_never_share_a_file(self):
+        ids = ["a b", "a_b", "a/b", "_a_b_", "x" * 80 + "1", "x" * 80 + "2", "///", "//"]
+        names = {render_engine.output_path_for(job_id).name for job_id in ids}
+        self.assertEqual(len(names), len(ids))
+        for job_id in ids:
+            self.assertEqual(render_engine.output_path_for(job_id).parent, self.outputs / "renders")
 
     def test_quality_caps_size_without_upscaling(self):
         self.assertEqual(render_engine.output_size(2048, 2048, RenderQuality.PREVIEW), (512, 512))
@@ -246,7 +258,33 @@ class RenderJobTests(RenderCase):
         with mock.patch("render_engine.PortraitAnimator.render", side_effect=RuntimeError("boom")):
             with self.assertRaises(RuntimeError):
                 render_engine.render_job(self.job(), store=self.store)
-        self.assertFalse((self.outputs / "renders" / "JOB-1.mp4").exists())
+        self.assertEqual(list((self.outputs / "renders").glob("*")), [])
+
+    def test_failed_rerender_keeps_the_earlier_finished_video(self):
+        self.wav(1.0)
+        first = render_engine.render_job(self.job(), store=self.store)
+        before = Path(first.output_path).read_bytes()
+        with mock.patch("render_engine.PortraitAnimator.render", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                render_engine.render_job(self.job(), store=self.store)
+        self.assertEqual(Path(first.output_path).read_bytes(), before)
+
+    def test_every_rendered_frame_is_in_the_file_and_no_audio_is_cut(self):
+        # 3.017 s at 30 fps used to write 91 frames and keep 90 (-shortest).
+        self.wav(3.017)
+        result = render_engine.render_job(self.job(targetFps=30, durationSeconds=3.017), store=self.store)
+        self.assertEqual(result.frame_count, 91)
+        self.assertEqual(result.media["frameCount"], 91)
+        self.assertAlmostEqual(result.media["audioDuration"], 3.017, delta=0.03)
+        self.assertEqual(result.warnings, [])
+
+    def test_clip_shorter_than_a_frame_still_has_a_video_stream(self):
+        self.wav(0.6)
+        job = self.job(targetFps=1, durationSeconds=0.6,
+                       phonemeTimestamps=[{"phoneme": "AA", "viseme": "viseme_aa", "startMs": 0, "endMs": 400}])
+        result = render_engine.render_job(job, store=self.store)
+        info = video_io.probe(result.output_path)
+        self.assertTrue(info.has_video and info.has_audio)
 
 
 if __name__ == "__main__":

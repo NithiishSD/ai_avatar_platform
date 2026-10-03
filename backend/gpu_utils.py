@@ -33,6 +33,19 @@ def register_releaser(name: str, release: Callable[[], None]) -> None:
     _releasers[name] = release
 
 
+def preferred_device() -> Optional[str]:
+    """
+    ``AVATAR_DEVICE`` ("cpu" or "cuda") when set, else ``None`` for automatic.
+
+    The escape hatch for a GPU someone else is using: every vision model here
+    is small enough to run on CPU, just slower.
+    """
+    import os
+
+    value = os.getenv("AVATAR_DEVICE", "").strip().lower()
+    return value if value in ("cpu", "cuda") else None
+
+
 def cuda_available() -> bool:
     try:
         import torch
@@ -102,10 +115,18 @@ def ensure_vram(required_mb: int, purpose: str, keep: Optional[str] = None) -> N
             "Freed GPU memory for %s by unloading: %s", purpose, ", ".join(released) or "cache"
         )
         return
+    import torch
+
+    own = int(torch.cuda.memory_allocated() // (1024 * 1024))
+    holder = (
+        f"This process still holds {own} MiB in models that did not register a "
+        "releaser; restart it, or render in a separate process."
+        if own > 256
+        else "Another process is holding the card: check `nvidia-smi`, close it, and retry."
+    )
     raise InsufficientVRAM(
         f"{purpose} needs about {required_mb} MiB of free GPU memory but only "
-        f"{free} MiB is free. Another process is holding the card: check "
-        "`nvidia-smi`, close it, and retry."
+        f"{free} MiB is free. {holder}"
     )
 
 

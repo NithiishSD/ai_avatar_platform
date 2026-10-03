@@ -26,8 +26,14 @@ class FakeRedis:
     def exists(self, key):
         return key in self.values
 
-    def set(self, key, value):
+    def set(self, key, value, nx=False):
+        if nx and key in self.values:
+            return None
         self.values[key] = value
+        return True
+
+    def delete(self, key):
+        self.values.pop(key, None)
 
     def get(self, key):
         return self.values.get(key)
@@ -126,6 +132,19 @@ class CeleryQueueTests(unittest.TestCase):
         self.assertEqual(done.status, JobStatus.COMPLETED)
         self.assertEqual(done.result["videoUrl"], "/outputs/renders/J1.mp4")
         queue.update("unknown", status="FAILED")  # no record: a no-op, not a crash
+
+
+    def test_duplicate_is_refused_and_a_failed_publish_leaves_no_orphan(self):
+        redis = FakeRedis()
+        queue = CeleryJobQueue(redis_client=redis)
+        with mock.patch("celery_app.process_render_job.delay"):
+            queue.enqueue(job())
+            with self.assertRaises(ValueError):
+                queue.enqueue(job())
+        with mock.patch("celery_app.process_render_job.delay", side_effect=ConnectionError("broker down")):
+            with self.assertRaises(ConnectionError):
+                queue.enqueue(job("J2"))
+        self.assertIsNone(queue.get("J2"))
 
 
 class RenderTaskTests(unittest.TestCase):

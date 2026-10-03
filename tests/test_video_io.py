@@ -45,6 +45,12 @@ class CommandTests(unittest.TestCase):
         for flag in ("a.wav", "aac", "-shortest"):
             self.assertIn(flag, voiced)
 
+    def test_explicit_duration_replaces_shortest(self):
+        with mock.patch("video_io.shutil.which", return_value="/usr/bin/ffmpeg"):
+            command = VideoWriter("x.mp4", 64, 64, 25, audio_path="a.wav", duration=3.017).command()
+        self.assertNotIn("-shortest", command)
+        self.assertEqual(command[command.index("-t") + 1], "3.017000")
+
     def test_missing_audio_file_fails_before_encoding(self):
         with self.assertRaises(FileNotFoundError):
             with VideoWriter("x.mp4", 64, 64, 25, audio_path="/nonexistent/a.wav"):

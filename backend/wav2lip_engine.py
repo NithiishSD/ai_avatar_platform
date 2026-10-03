@@ -246,13 +246,19 @@ def face_box_from_bbox(
 
 
 def _feather_mask(height: int, width: int) -> np.ndarray:
-    """Soft-edged paste mask, so the repainted box has no visible border."""
+    """
+    Soft-edged paste mask covering the lower part of the face box.
+
+    The network only generates the lower half; its upper half is a 96 px
+    copy of the input. Pasting that back would replace sharp eyes and brows
+    with a blurry upsample, so the mask starts just above the midline.
+    """
     import cv2
 
     mask = np.zeros((height, width), dtype=np.float32)
     inset_y = max(1, int(height * 0.08))
     inset_x = max(1, int(width * 0.08))
-    mask[inset_y : height - inset_y, inset_x : width - inset_x] = 1.0
+    mask[int(height * 0.46) : height - inset_y, inset_x : width - inset_x] = 1.0
     sigma = max(1.0, min(height, width) * 0.04)
     return cv2.GaussianBlur(mask, (0, 0), sigma)[:, :, None]
 
@@ -423,5 +429,5 @@ _shared_engine: Optional[Wav2LipEngine] = None
 def shared_wav2lip_engine() -> Wav2LipEngine:
     global _shared_engine
     if _shared_engine is None:
-        _shared_engine = Wav2LipEngine()
+        _shared_engine = Wav2LipEngine(device=gpu_utils.preferred_device())
     return _shared_engine

@@ -196,6 +196,8 @@ class SynthesisJobResponse(BaseModel):
     output_path: Optional[str] = Field(default=None, alias="outputPath")
     duration_seconds: Optional[float] = Field(default=None, alias="durationSeconds")
     phoneme_timestamps: Optional[List[PhonemeTimestamp]] = Field(default=None, alias="phonemeTimestamps")
+    # "mms_fa" = measured from the audio; "acoustic-fallback" = estimated.
+    alignment_method: Optional[str] = Field(default=None, alias="alignmentMethod")
     emotion: Optional[Dict[str, Any]] = Field(default=None)
     quality_report: Optional[Dict[str, Any]] = Field(default=None, alias="qualityReport")
     language: Optional[Dict[str, Any]] = Field(default=None)

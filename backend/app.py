@@ -41,6 +41,7 @@ from pydantic import BaseModel
 
 import avatar_store
 import language_registry
+from face_engine import FaceEngineUnavailable
 import provenance
 import render_engine
 from audio_utils import list_voice_samples, SUPPORTED_EXTENSIONS
@@ -290,6 +291,18 @@ def _quality_payload(report) -> dict:
     return report.to_dict()
 
 
+async def _read_upload(file: UploadFile) -> bytes:
+    """Read an upload, refusing one over the limit without buffering all of it."""
+    limit = avatar_store.MAX_UPLOAD_BYTES
+    data = await file.read(limit + 1)
+    if len(data) > limit:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"image is larger than the {limit // (1024 * 1024)} MB limit",
+        )
+    return data
+
+
 @app.get("/api/v1/avatar/faces", response_model=AvatarFacesResponse)
 def list_avatar_faces() -> AvatarFacesResponse:
     """Every image in ``inputs/faces`` and whether its provenance permits use."""
@@ -320,7 +333,7 @@ async def register_avatar_face(
     "synthetic" to skip the consent basis. Synthetic faces come from
     ``scripts/make_avatar.py --synthetic``, which records how they were made.
     """
-    data = await file.read()
+    data = await _read_upload(file)
     try:
         record, report = faces.register(
             data,
@@ -338,7 +351,7 @@ async def register_avatar_face(
         ) from err
     except avatar_store.AvatarError as err:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
-    except Exception as err:  # noqa: BLE001 - e.g. the landmarker bundle is missing
+    except FaceEngineUnavailable as err:  # the landmarker bundle is missing
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(err)
         ) from err
@@ -384,7 +397,7 @@ async def analyze_face(
     Send either an image ``file`` (analysed and discarded, never stored) or
     the ``avatarId`` of a registered face.
     """
-    from face_engine import FACE_ENGINE_LOCK, FaceEngineUnavailable, shared_face_engine
+    from face_engine import FACE_ENGINE_LOCK, shared_face_engine
 
     if (file is None) == (avatar_id is None):
         raise HTTPException(
@@ -393,7 +406,7 @@ async def analyze_face(
         )
     try:
         if file is not None:
-            image, notices = avatar_store.decode_image(await file.read())
+            image, notices = avatar_store.decode_image(await _read_upload(file))
         else:
             image, notices = avatar_store.decode_image(_avatar_or_http(avatar_id).path)
         with FACE_ENGINE_LOCK:
@@ -462,11 +475,18 @@ def create_render_job(job: AvatarRenderJob, engine: Optional[str] = None) -> Ren
         queued_job = job_queue.enqueue(job, engine)
     except ValueError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    except Exception as error:  # noqa: BLE001 - broker or status store unreachable
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"render queue unavailable: {error}. Is Redis running (./start-docker.sh)?",
+        ) from error
     return _render_response(queued_job.job.job_id, queued_job)
 
 
 @app.get(
-    "/api/v1/avatar/render-job/{job_id}",
+    # ``:path`` because jobId is an unconstrained contract string and may
+    # contain a slash; without it such a job could be queued but never polled.
+    "/api/v1/avatar/render-job/{job_id:path}",
     response_model=RenderJobResponse,
     response_model_exclude_none=True,
 )
@@ -478,7 +498,7 @@ def get_render_job(job_id: str) -> RenderJobResponse:
 
 
 @app.post(
-    "/api/v1/avatar/render-job/{job_id}/lipsync-score",
+    "/api/v1/avatar/render-job/{job_id:path}/lipsync-score",
     response_model=LipSyncScoreResponse,
 )
 def score_render_job(job_id: str) -> LipSyncScoreResponse:
@@ -548,6 +568,7 @@ def _job_response(task_id: str, task_status: str, result: dict) -> SynthesisJobR
         outputPath=result.get("output_path"),
         durationSeconds=result.get("duration_seconds"),
         phonemeTimestamps=result.get("phoneme_timestamps"),
+        alignmentMethod=result.get("alignment_method"),
         emotion=result.get("emotion"),
         qualityReport=result.get("quality_report"),
         language=result.get("language"),

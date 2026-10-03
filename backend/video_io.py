@@ -69,9 +69,9 @@ class VideoWriter:
             for frame in frames:
                 writer.write(frame)
 
-    ``-shortest`` trims whichever stream runs long, so the container never
-    ends on a frozen frame or a tail of silence; the two streams end up within
-    one frame of each other.
+    Pass ``duration`` (the audio's length) and the output is cut to exactly
+    that: the caller writes enough frames to cover it, and no frame or audio
+    is dropped. Without it ``-shortest`` trims whichever stream runs long.
     """
 
     def __init__(
@@ -83,6 +83,7 @@ class VideoWriter:
         audio_path: Optional[Union[str, Path]] = None,
         crf: int = 20,
         preset: str = "veryfast",
+        duration: Optional[float] = None,
     ) -> None:
         if width % 2 or height % 2:
             raise ValueError(
@@ -92,6 +93,7 @@ class VideoWriter:
         self.width, self.height, self.fps = int(width), int(height), int(fps)
         self.audio_path = Path(audio_path) if audio_path else None
         self.crf, self.preset = int(crf), preset
+        self.duration = float(duration) if duration else None
         self.frames_written = 0
         self._process: Optional[subprocess.Popen] = None
 
@@ -116,7 +118,8 @@ class VideoWriter:
             "-pix_fmt", "yuv420p",
         ]
         if self.audio_path is not None:
-            cmd += ["-c:a", "aac", "-b:a", "160k", "-shortest"]
+            cmd += ["-c:a", "aac", "-b:a", "160k"]
+            cmd += ["-t", f"{self.duration:.6f}"] if self.duration else ["-shortest"]
         cmd += ["-movflags", "+faststart", str(self.output_path)]
         return cmd
 

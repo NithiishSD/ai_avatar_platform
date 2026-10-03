@@ -85,9 +85,10 @@ class EngineTests(unittest.TestCase):
         frames = [np.zeros((200, 200, 3), dtype=np.uint8) for _ in range(6)]
         out = list(engine.sync_frames(iter(frames), (50, 50, 150, 150), "x.wav", 25, 6))
         self.assertEqual(len(out), 6)
-        self.assertGreaterEqual(int(out[0][100, 100, 0]), 250)  # centre of the box: repainted
+        self.assertGreaterEqual(int(out[0][125, 100, 0]), 250)  # mouth area: repainted
         self.assertEqual(int(out[0][10, 10, 0]), 0)          # outside: untouched
-        self.assertLess(int(out[0][52, 52, 0]), 128)         # feathered edge
+        self.assertLess(int(out[0][70, 100, 0]), 8)          # eyes and brows: left at source quality
+        self.assertLess(int(out[0][125, 52, 0]), 128)        # feathered edge
         self.assertEqual(int(frames[0].max()), 0)            # inputs not modified
 
     def test_tiny_face_box_is_refused(self):

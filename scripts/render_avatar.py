@@ -47,10 +47,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--quality", default="PREVIEW", choices=["PREVIEW", "1080P_HQ"])
     parser.add_argument("--fps", type=int, default=25)
     parser.add_argument("--job-id", default=None)
+    parser.add_argument(
+        "--device", default=None, choices=["cpu", "cuda"],
+        help="force every model onto this device (use cpu when another process holds the GPU)",
+    )
     parser.add_argument("--no-label", action="store_true", help="do not burn in the AI-generated label")
     parser.add_argument("--metric", action="store_true", help="score lip sync with SyncNet (LSE-C / LSE-D)")
     parser.add_argument("--json", action="store_true", help="print the result as JSON")
     args = parser.parse_args(argv)
+
+    if args.device:
+        import os
+
+        os.environ["AVATAR_DEVICE"] = args.device
 
     from avatar_store import AvatarConsentError, AvatarError, AvatarNotFound, AvatarStore
     from contracts import AvatarRenderJob
@@ -69,8 +78,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     from emotion_engine import to_render_emotion_vector
     from voice_engine import VoiceEngineRouter
 
+    # The speech engine prints progress banners; with --json, stdout has to
+    # carry the JSON document and nothing else.
+    real_stdout = sys.stdout
+    if args.json:
+        sys.stdout = sys.stderr
+
     mode = args.mode or ("clone" if args.voice else "fast")
-    speech = VoiceEngineRouter().synthesize(
+    speech = VoiceEngineRouter(device=args.device).synthesize(
         text=args.text,
         mode=mode,
         speaker_wav=args.voice,
@@ -118,6 +133,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "audioPath": str(audio_path),
             "durationSeconds": round(speech.duration_seconds, 3),
             "phonemeCount": len(timestamps),
+            "alignmentMethod": speech.alignment_method,
         },
         "render": result.to_dict(),
     }
@@ -131,13 +147,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             payload["lipSync"] = {"error": f"{type(err).__name__}: {err}"}
 
     if args.json:
-        print(json.dumps(payload, indent=2))
+        print(json.dumps(payload, indent=2), file=real_stdout)
         return 0
 
     media = result.media
     print("\n" + "=" * 60)
     print(f"Video         : {result.output_path}")
     print(f"Speech model  : {speech.model} (mode {speech.mode}), {len(timestamps)} phonemes")
+    print(f"Alignment     : {speech.alignment_method}")
+    if speech.alignment_method == "acoustic-fallback":
+        print("Warning       : phoneme timing was ESTIMATED, not measured (see the aligner warning above)")
     print(f"Render engine : {result.engine}")
     print(f"Frames        : {result.frame_count} at {result.fps} fps, {result.width}x{result.height}")
     print(

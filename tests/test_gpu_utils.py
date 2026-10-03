@@ -36,12 +36,25 @@ class GpuUtilsTests(unittest.TestCase):
         own.assert_not_called()
 
     def test_still_short_raises_with_the_numbers(self):
-        with mock.patch("gpu_utils.free_vram_mb", side_effect=[500, 600]):
-            with self.assertRaises(gpu_utils.InsufficientVRAM) as ctx:
-                gpu_utils.ensure_vram(1200, "Wav2Lip")
+        torch = mock.MagicMock()
+        torch.cuda.memory_allocated.return_value = 0
+        with mock.patch.dict("sys.modules", {"torch": torch}):
+            with mock.patch("gpu_utils.free_vram_mb", side_effect=[500, 600]):
+                with self.assertRaises(gpu_utils.InsufficientVRAM) as ctx:
+                    gpu_utils.ensure_vram(1200, "Wav2Lip")
         message = str(ctx.exception)
         for fragment in ("1200", "600", "nvidia-smi"):
             self.assertIn(fragment, message)
+
+    def test_blames_this_process_when_it_is_the_one_holding_memory(self):
+        torch = mock.MagicMock()
+        torch.cuda.memory_allocated.return_value = 3000 * 1024 * 1024
+        with mock.patch.dict("sys.modules", {"torch": torch}):
+            with mock.patch("gpu_utils.free_vram_mb", side_effect=[500, 600]):
+                with self.assertRaises(gpu_utils.InsufficientVRAM) as ctx:
+                    gpu_utils.ensure_vram(1200, "Wav2Lip")
+        self.assertIn("This process still holds 3000 MiB", str(ctx.exception))
+        self.assertNotIn("Another process", str(ctx.exception))
 
     def test_one_failing_releaser_does_not_stop_the_others(self):
         good = mock.Mock()

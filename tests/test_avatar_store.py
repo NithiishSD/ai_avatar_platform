@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from unittest import mock
+
 import numpy as np
 from PIL import Image
 
@@ -75,6 +77,30 @@ class DecodeTests(unittest.TestCase):
         self.assertEqual(notices, {})
         self.assertEqual(decode_image(np.zeros((10, 12), dtype=np.uint8))[0].shape, (10, 12, 3))
         self.assertEqual(decode_image(np.zeros((10, 12, 4), dtype=np.uint8))[0].shape, (10, 12, 3))
+
+    def test_user_comment_and_png_text_notices_are_found(self):
+        from PIL import PngImagePlugin
+
+        exif = Image.Exif()
+        exif[0x8769] = {0x9286: b"ASCII\x00\x00\x00No derivative works"}
+        buffer = io.BytesIO()
+        Image.new("RGB", (32, 32)).save(buffer, format="JPEG", exif=exif)
+        self.assertEqual(decode_image(buffer.getvalue())[1]["userComment"], "No derivative works")
+
+        meta = PngImagePlugin.PngInfo()
+        meta.add_text("Copyright", "(c) Someone, all rights reserved")
+        buffer = io.BytesIO()
+        Image.new("RGB", (32, 32)).save(buffer, format="PNG", pnginfo=meta)
+        self.assertIn("all rights reserved", decode_image(buffer.getvalue())[1]["Copyright"])
+
+    def test_oversized_canvas_and_truncated_files_are_refused_cleanly(self):
+        with mock.patch("avatar_store.MAX_IMAGE_PIXELS", 1000):
+            with self.assertRaises(AvatarError) as ctx:
+                decode_image(png_bytes(size=(64, 48)))
+        self.assertIn("megapixels", str(ctx.exception))
+        with self.assertRaises(AvatarError) as ctx:
+            decode_image(png_bytes(size=(256, 256))[:200])
+        self.assertIn("could not be decoded", str(ctx.exception))
 
     def test_not_an_image_says_so(self):
         with self.assertRaises(AvatarError) as ctx:
@@ -155,6 +181,17 @@ class RegistrationTests(StoreCase):
         record, _ = self.human(overwrite=True, subject="Alice Again")
         self.assertEqual(record.provenance["speaker"], "Alice Again")
 
+    def test_failed_overwrite_never_leaves_a_new_face_under_the_old_consent(self):
+        self.human()
+        with mock.patch("avatar_store.provenance.write", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.store.register(
+                    np.zeros((128, 128, 3), dtype=np.uint8), avatar_id="alice",
+                    source=provenance.SYNTHETIC, overwrite=True,
+                )
+        with self.assertRaises(AvatarConsentError):
+            self.store.require_usable("alice")
+
     def test_quality_gate_rejects_and_writes_nothing(self):
         cases = {
             "no_face": [],
@@ -219,6 +256,21 @@ class ConsentEnforcementTests(StoreCase):
         (self.root / "notes.txt").write_text("x")
         Image.new("RGB", (8, 8)).save(self.root / "bad name.png")
         self.assertEqual([r.avatar_id for r in self.store.list()], ["alice"])
+
+    def test_upper_case_extension_is_found_as_well_as_listed(self):
+        self.root.mkdir(parents=True)
+        Image.new("RGB", (32, 32)).save(self.root / "shout.PNG", format="PNG")
+        self.assertEqual([r.avatar_id for r in self.store.list()], ["shout"])
+        self.assertEqual(self.store.get("shout").avatar_id, "shout")
+        self.store.delete("shout")
+        self.assertEqual(self.store.list(), [])
+
+    def test_unreadable_sidecar_means_not_usable_not_a_crash(self):
+        record, _ = self.human()
+        sidecar = provenance.sidecar_path(record.path)
+        for content in (b"[1, 2]", b"\xff\xfe not utf-8", b"{broken"):
+            sidecar.write_bytes(content)
+            self.assertFalse(self.store.get("alice").usable)
 
     def test_empty_store_lists_nothing(self):
         self.assertEqual(self.store.list(), [])

@@ -31,6 +31,9 @@ class FrameCountTests(unittest.TestCase):
         self.assertEqual(frame_count_for(2.0, 25), 50)
         self.assertEqual(frame_count_for(14.5, 30), 435)
         self.assertEqual(frame_count_for(0.001, 25), 1)
+        # Rounded up: the video must cover the audio.
+        self.assertEqual(frame_count_for(3.017, 30), 91)
+        self.assertEqual(frame_count_for(1.49, 1), 2)
 
     def test_track_has_exactly_that_many_frames(self):
         for duration, fps in ((1.0, 25), (2.48, 30), (0.5, 60)):
@@ -92,6 +95,12 @@ class MouthMotionTests(unittest.TestCase):
         self.assertGreater(jaw[15], 0.5)
         self.assertGreater(jaw[55], 0.5)
 
+    def test_later_segment_owns_an_overlap_with_a_closure(self):
+        visemes = [ts("viseme_PP", 0, 600), ts("viseme_aa", 200, 800)]
+        jaw = build_animation(visemes, 0.8, 100).column("jawOpen")
+        self.assertGreater(jaw[40], 0.5)   # inside the overlap: the vowel wins
+        self.assertLess(jaw[8], 0.05)      # before it: lips closed
+
     def test_unknown_visemes_are_counted_and_rendered_as_rest(self):
         with self.assertLogs("face_animation", level="WARNING"):
             track = build_animation([ts("viseme_B", 0, 500), ts("viseme_B", 500, 900)], 1.0, 25)
@@ -114,6 +123,28 @@ class EnergyGateTests(unittest.TestCase):
         self.assertTrue(track.energy_gated)
         self.assertGreater(jaw[5], 0.5)
         self.assertLess(jaw[-3], 0.02)
+
+    def test_mostly_silent_clip_is_not_normalised_to_zero(self):
+        import soundfile as sf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pause.wav"
+            tone = 0.5 * np.sin(2 * np.pi * 220 * np.arange(1600) / 16000.0)  # 0.1 s of speech
+            sf.write(path, np.concatenate([tone, np.zeros(16000 * 4)]).astype(np.float32), 16000)
+            envelope = speech_energy_envelope(path)
+        self.assertGreater(envelope[:18].min(), 0.9)
+
+    def test_truly_silent_clip_disables_the_gate_instead_of_closing_the_mouth(self):
+        import soundfile as sf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "silent.wav"
+            sf.write(path, np.zeros(16000, dtype=np.float32), 16000)
+            envelope = speech_energy_envelope(path)
+        self.assertEqual(len(envelope), 0)
+        track = build_animation([ts("viseme_aa", 0, 1000)], 1.0, 25, energy_envelope=envelope)
+        self.assertFalse(track.energy_gated)
+        self.assertGreater(track.column("jawOpen").max(), 0.5)
 
     def test_envelope_from_a_wav_is_normalised(self):
         import soundfile as sf

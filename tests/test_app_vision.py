@@ -116,6 +116,20 @@ class FaceStoreRouteTests(VisionApiCase):
         self.assertEqual(bad.status_code, 400)
         self.assertEqual(self.upload(avatarId="../evil").status_code, 400)
 
+    def test_oversized_upload_is_413(self):
+        with mock.patch("avatar_store.MAX_UPLOAD_BYTES", 100):
+            self.assertEqual(self.upload().status_code, 413)
+            analyze = self.client.post(
+                "/api/v1/avatar/face/analyze", files={"file": ("f.png", png(), "image/png")}
+            )
+            self.assertEqual(analyze.status_code, 413)
+
+    def test_corrupt_image_is_400_not_500(self):
+        response = self.client.post(
+            "/api/v1/avatar/face/analyze", files={"file": ("f.png", png()[:300], "image/png")}
+        )
+        self.assertEqual(response.status_code, 400)
+
     def test_image_route_serves_only_usable_faces(self):
         self.add_synthetic()
         ok = self.client.get("/api/v1/avatar/faces/demo/image")
@@ -256,6 +270,22 @@ class RenderRouteTests(VisionApiCase):
             self.assertEqual(response.status_code, code, response.text)
             self.assertIn(fragment, response.json()["detail"])
         self.assertEqual(self.ran, [])
+
+    def test_job_id_with_a_slash_can_be_polled_and_nul_audio_is_400(self):
+        created = self.client.post("/api/v1/avatar/render-job", json=self.payload(jobId="team/clip 1"))
+        self.assertEqual(created.status_code, 202, created.text)
+        self.assertEqual(self.wait("team/clip 1")["status"], "COMPLETED")
+        bad = self.client.post(
+            "/api/v1/avatar/render-job",
+            json=self.payload(jobId="nul", audioUrl="http://testserver/outputs/a%00b.wav"),
+        )
+        self.assertEqual(bad.status_code, 400)
+
+    def test_queue_outage_is_503(self):
+        with mock.patch.object(self.queue, "enqueue", side_effect=ConnectionError("redis down")):
+            response = self.client.post("/api/v1/avatar/render-job", json=self.payload(jobId="down"))
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("redis down", response.json()["detail"])
 
     def test_face_without_consent_is_403(self):
         provenance.sidecar_path(self.store.get("demo").path).unlink()

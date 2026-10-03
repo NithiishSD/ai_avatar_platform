@@ -159,9 +159,13 @@ def load(audio_path: Path | str) -> Optional[VoiceProvenance]:
     if not path.is_file():
         return None
     try:
-        return VoiceProvenance.from_dict(json.loads(path.read_text()))
-    except (json.JSONDecodeError, OSError, TypeError):
+        raw = json.loads(path.read_text())
+    except (ValueError, OSError, TypeError):  # ValueError covers bad JSON and bad UTF-8
         return None
+    # A sidecar that parses but is not a record is no record at all.
+    if not isinstance(raw, dict):
+        return None
+    return VoiceProvenance.from_dict(raw)
 
 
 def write(

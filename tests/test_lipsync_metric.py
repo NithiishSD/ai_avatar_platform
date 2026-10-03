@@ -148,12 +148,14 @@ class ScoreVideoTests(unittest.TestCase):
         scorer = mock.Mock(available=True)
         scorer.embed.return_value = (lip, np.roll(lip, 4, axis=0))
         frames = [np.zeros((120, 160, 3), dtype=np.uint8)] * 65
-        with mock.patch("lipsync_metric.video_io.probe", return_value=mock.Mock(has_video=True, has_audio=True)), \
+        with mock.patch("lipsync_metric.video_io.probe", return_value=mock.Mock(has_video=True, has_audio=True, video_duration=1.0)), \
              mock.patch("lipsync_metric.video_io.read_frames", return_value=iter(frames)), \
              mock.patch("lipsync_metric.video_io.read_audio", return_value=np.zeros(16000 * 3, dtype=np.float32)):
             score = lipsync_metric.score_video("x.mp4", face_box=(40, 20, 60, 80), scorer=scorer)
         crops, mfcc = scorer.embed.call_args.args
+        # 65 frames although the container claimed 1.0 s: the buffer grows.
         self.assertEqual(crops.shape, (65, 224, 224, 3))
+        self.assertEqual(crops.dtype, np.uint8)
         self.assertEqual(mfcc.shape[0], 13)
         self.assertEqual(score.offset_frames, -4)
         self.assertEqual(score.frames, 65)

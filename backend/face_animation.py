@@ -74,8 +74,13 @@ TimestampLike = Union[Mapping[str, object], object]
 
 
 def frame_count_for(duration_seconds: float, fps: int) -> int:
-    """Frames needed to cover ``duration_seconds`` at ``fps`` (at least one)."""
-    return max(1, int(round(float(duration_seconds) * int(fps))))
+    """
+    Frames needed to cover ``duration_seconds`` at ``fps`` (at least one).
+
+    Rounded up, so the video is never shorter than the audio it carries; the
+    epsilon keeps an exact product such as 2.0 s x 25 from becoming 51.
+    """
+    return max(1, int(math.ceil(float(duration_seconds) * int(fps) - 1e-6)))
 
 
 def _field(item: TimestampLike, snake: str, camel: str):
@@ -169,9 +174,13 @@ def speech_energy_envelope(
     padded = np.zeros(steps * hop, dtype=np.float32)
     padded[: len(mono)] = mono
     rms = np.sqrt((padded.reshape(steps, hop) ** 2).mean(axis=1))
-    reference = float(np.percentile(rms, 95)) if rms.size else 0.0
-    if reference <= 1e-6:
-        return np.zeros(steps, dtype=np.float32)
+    # Percentile over the voiced steps only: in a clip that is mostly pauses
+    # the plain 95th percentile is itself silence, which would normalise
+    # every step to zero and shut the mouth for the whole clip.
+    voiced = rms[rms > 1e-4]
+    if voiced.size == 0:
+        return np.zeros(0, dtype=np.float32)  # truly silent: nothing to gate on
+    reference = float(np.percentile(voiced, 95))
     return np.clip(rms / reference, 0.0, 1.0).astype(np.float32)
 
 
@@ -241,7 +250,7 @@ def build_animation(
     """
     Build the per-frame blendshape track for a render job.
 
-    ``frame_count == round(duration_seconds * fps)``; frame ``i`` is sampled at
+    ``frame_count == ceil(duration_seconds * fps)``; frame ``i`` is sampled at
     its centre, ``(i + 0.5) / fps``, so the first and last frames are not
     biased toward the clip edges.
     """
@@ -275,6 +284,8 @@ def build_animation(
         a = int(min(steps, max(0, math.floor(start_ms / GRID_MS))))
         b = int(min(steps, max(a + 1, math.ceil(end_ms / GRID_MS))))
         grid[a:b, :] = 0.0
+        # The later segment owns the overlap, including its closure gate.
+        closure[a:b] = 0.0
         for shape, weight in VISEME_BLENDSHAPES[canonical].items():
             grid[a:b, index[shape]] = weight
         strength = CLOSURE_VISEMES.get(canonical)

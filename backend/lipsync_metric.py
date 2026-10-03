@@ -262,15 +262,19 @@ class SyncNetScorer:
                 f"clip is too short to score: {max(0, windows)} windows, need {MIN_WINDOWS} "
                 f"(about {(MIN_WINDOWS + WINDOW_FRAMES) / SYNCNET_FPS:.1f} s)"
             )
-        # (frames, H, W, 3) -> (3, frames, H, W), values left in 0..255 as trained.
-        video = torch.from_numpy(np.ascontiguousarray(crops.transpose(3, 0, 1, 2))).float()
+        # Kept as uint8 and converted a batch at a time: a float copy of the
+        # whole clip is 600 kB per frame. Values stay in 0..255, as trained.
+        video = torch.from_numpy(np.ascontiguousarray(crops))
         sound = torch.from_numpy(np.ascontiguousarray(mfcc)).float()
         lip_out: List[np.ndarray] = []
         aud_out: List[np.ndarray] = []
         with torch.no_grad():
             for start in range(0, windows, batch_size):
                 stop = min(windows, start + batch_size)
-                lips = torch.stack([video[:, i : i + WINDOW_FRAMES] for i in range(start, stop)])
+                # (window, H, W, 3) -> (3, window, H, W)
+                lips = torch.stack(
+                    [video[i : i + WINDOW_FRAMES].permute(3, 0, 1, 2) for i in range(start, stop)]
+                ).float()
                 auds = torch.stack(
                     [
                         sound[:, i * MFCC_PER_FRAME : i * MFCC_PER_FRAME + WINDOW_FRAMES * MFCC_PER_FRAME]
@@ -293,7 +297,7 @@ _shared_scorer: Optional[SyncNetScorer] = None
 def shared_scorer() -> SyncNetScorer:
     global _shared_scorer
     if _shared_scorer is None:
-        _shared_scorer = SyncNetScorer()
+        _shared_scorer = SyncNetScorer(device=gpu_utils.preferred_device())
     return _shared_scorer
 
 
@@ -327,7 +331,9 @@ def score_video(
         raise LipSyncMetricError(f"{Path(video_path).name} needs both a video and an audio stream")
 
     crop_box: Optional[Tuple[int, int, int, int]] = None
-    crops: List[np.ndarray] = []
+    expected = max(1, int(round(info.video_duration * SYNCNET_FPS)) + 2)
+    crops = np.empty((expected, CROP_SIZE, CROP_SIZE, 3), dtype=np.uint8)
+    count = 0
     for frame in video_io.read_frames(video_path, fps=SYNCNET_FPS):
         if crop_box is None:
             if face_box is None:
@@ -343,12 +349,16 @@ def score_video(
                 face_box = (box.x, box.y, box.width, box.height)
             crop_box = syncnet_crop_box(*face_box)
         crop = cv2.resize(crop_padded(frame, crop_box), (CROP_SIZE, CROP_SIZE), interpolation=cv2.INTER_AREA)
-        crops.append(crop[:, :, ::-1])  # SyncNet was trained on BGR frames
-    if not crops:
+        if count == len(crops):  # the container under-reported its length
+            crops = np.concatenate([crops, np.empty_like(crops)])
+        crops[count] = crop[:, :, ::-1]  # SyncNet was trained on BGR frames
+        count += 1
+    if count == 0:
         raise LipSyncMetricError(f"{Path(video_path).name} has no decodable frames")
+    crops = crops[:count]
 
     mfcc = mfcc_features(video_io.read_audio(video_path, SYNCNET_SAMPLE_RATE))
-    lip, audio = scorer.embed(np.stack(crops), mfcc)
+    lip, audio = scorer.embed(crops, mfcc)
     lse_c, lse_d, offset = sync_scores(lip, audio)
 
     warnings: List[str] = []
@@ -362,7 +372,7 @@ def score_video(
         lse_d=lse_d,
         offset_frames=offset,
         windows=int(lip.shape[0]),
-        frames=len(crops),
+        frames=count,
         face_box=tuple(int(v) for v in face_box),  # type: ignore[arg-type]
         warnings=warnings,
     )

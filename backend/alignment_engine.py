@@ -246,6 +246,12 @@ class ForcedAligner:
         self._mms_aligner = None
         self._mms_tokenizer = None
         self._mms_failed = False
+        # How the most recent ``align`` call produced its timestamps. The
+        # acoustic fallback spreads phonemes evenly by text, which is a guess:
+        # callers surface this so a guessed timeline is never mistaken for a
+        # measured one (golden rule 1).
+        self.last_method: Optional[str] = None
+        self.last_fallback_reason: Optional[str] = None
 
     def _get_mms_pipeline(self):
         """Lazy loader for torchaudio MMS_FA pipeline."""
@@ -257,13 +263,29 @@ class ForcedAligner:
         try:
             import torchaudio.pipelines as pipelines
             bundle = pipelines.MMS_FA
-            model = bundle.get_model().to(self.device)
             tokenizer = bundle.get_tokenizer()
+            model = bundle.get_model()
+            try:
+                model = model.to(self.device)
+            except RuntimeError as exc:
+                if self.device == "cpu":
+                    raise
+                # Usually another process holding the GPU. The aligner is
+                # small enough to run on CPU, and a slower real alignment
+                # beats a fast guess.
+                logger.warning(
+                    "MMS_FA could not be placed on %s (%s); running the aligner on CPU instead.",
+                    self.device, str(exc).splitlines()[0],
+                )
+                torch.cuda.empty_cache()
+                self.device = "cpu"
+                model = model.to("cpu")
             self._mms_aligner = model
             self._mms_tokenizer = tokenizer
             logger.info("Loaded torchaudio MMS_FA forced aligner on %s", self.device)
             return self._mms_aligner, self._mms_tokenizer
         except Exception as exc:
+            self.last_fallback_reason = f"MMS_FA could not be loaded: {str(exc).splitlines()[0]}"
             logger.warning("Could not load MMS_FA pipeline (%s). Using acoustic fallback.", exc)
             self._mms_failed = True
             return None, None
@@ -318,6 +340,7 @@ class ForcedAligner:
         cleaned_text = transcript.strip() if transcript else ""
         if not cleaned_text:
             # Silence timestamp if text is empty
+            self.last_method = "silence"
             return [
                 PhonemeTimestamp(
                     phoneme="SIL",
@@ -334,14 +357,34 @@ class ForcedAligner:
         # Try neural MMS_FA alignment if possible
         model, tokenizer = self._get_mms_pipeline()
         if model is not None and tokenizer is not None:
-            try:
-                timestamps = self._align_mms(waveform, sample_rate, alignable_text, model, tokenizer, duration_ms)
-                if timestamps:
-                    return timestamps
-            except Exception as err:
-                logger.debug("MMS_FA inference failed, falling back to acoustic aligner: %s", err)
+            for attempt in range(2):
+                try:
+                    timestamps = self._align_mms(waveform, sample_rate, alignable_text, model, tokenizer, duration_ms)
+                    if timestamps:
+                        self.last_method = "mms_fa"
+                        self.last_fallback_reason = None
+                        return timestamps
+                    self.last_fallback_reason = "MMS_FA returned no spans for this transcript"
+                    break
+                except Exception as err:  # noqa: BLE001
+                    out_of_memory = "out of memory" in str(err).lower()
+                    if attempt == 0 and self.device != "cpu" and out_of_memory:
+                        logger.warning("MMS_FA ran out of GPU memory; retrying the alignment on CPU.")
+                        torch.cuda.empty_cache()
+                        self.device = "cpu"
+                        model = self._mms_aligner = model.to("cpu")
+                        continue
+                    self.last_fallback_reason = f"MMS_FA inference failed: {str(err).splitlines()[0]}"
+                    break
 
-        # Fallback to acoustic / syllabic aligner
+        # Fallback to acoustic / syllabic aligner. Loud on purpose: these
+        # timestamps are spread by text length, not measured from the audio.
+        self.last_method = "acoustic-fallback"
+        logger.warning(
+            "FORCED ALIGNMENT FELL BACK to the acoustic guess (%s). Phoneme timing is "
+            "estimated, not measured; lip sync will be loose.",
+            self.last_fallback_reason or "MMS_FA unavailable",
+        )
         return self._acoustic_align(alignable_text, duration_ms)
 
     @staticmethod

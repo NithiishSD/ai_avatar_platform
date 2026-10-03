@@ -69,6 +69,9 @@ class SynthesisResult:
     model: str
     mode: str
     phoneme_timestamps: Optional[list] = None
+    # "mms_fa" when the timestamps were measured from the audio,
+    # "acoustic-fallback" when they were only estimated from the text.
+    alignment_method: Optional[str] = None
     emotion: Optional[dict] = None
     quality_report: Optional[dict] = None
     language: Optional[dict] = None
@@ -106,6 +109,20 @@ class VoiceEngineRouter:
         self._higgs_failed = False
         self._dia_failed = False
         self._mms_failed = False
+
+        # Lets the vision side make room on the 6 GB card before it loads a
+        # model (golden rule 5). Everything reloads lazily on the next call.
+        import gpu_utils
+
+        gpu_utils.register_releaser("tts-router", self.release)
+
+    def release(self) -> None:
+        """Drop the heavy TTS models from memory; they reload on next use."""
+        self.kokoro_pipeline = None
+        self.xtts_model = None
+        self._higgs_pipe = None
+        self._dia_model = None
+        self._dia_processor = None
 
     @property
     def auditor(self) -> SpeechQualityAuditor:
@@ -582,6 +599,7 @@ class VoiceEngineRouter:
 
         # Generate millisecond phoneme/viseme timestamps if requested
         phoneme_timestamps = None
+        alignment_method = None
         if return_alignment:
             try:
                 aligner = ForcedAligner(device=self.device)
@@ -592,7 +610,13 @@ class VoiceEngineRouter:
                     language=language,
                 )
                 phoneme_timestamps = [t.model_dump(by_alias=True) for t in timestamps]
-                print(f"[Aligner] Extracted {len(phoneme_timestamps)} phoneme/viseme timestamps.")
+                alignment_method = aligner.last_method
+                print(
+                    f"[Aligner] Extracted {len(phoneme_timestamps)} phoneme/viseme timestamps "
+                    f"({alignment_method})."
+                )
+                if alignment_method == "acoustic-fallback":
+                    print(f"[Aligner] WARNING: timing is estimated, not measured: {aligner.last_fallback_reason}")
             except Exception as align_err:
                 logger.warning("Forced alignment failed: %s", align_err)
 
@@ -624,6 +648,7 @@ class VoiceEngineRouter:
             model=model_key,
             mode=mode,
             phoneme_timestamps=phoneme_timestamps,
+            alignment_method=alignment_method,
             emotion=emotion_report,
             quality_report=quality_report,
             language=language_info,

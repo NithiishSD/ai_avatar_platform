@@ -100,6 +100,24 @@ class PortraitAnimatorTests(unittest.TestCase):
             self.assertLess(smile[corner, 1], -0.5)
             self.assertGreater(frown[corner, 1], 0.5)
 
+    def test_smile_lifts_both_lips_together_without_tearing_them(self):
+        disp = self.animator.displacements({"mouthSmileLeft": 1.0, "mouthSmileRight": 1.0})
+        # Pairs of upper/lower inner-lip points near the corners move as one.
+        for upper, lower in ((191, 95), (415, 324)):
+            self.assertLess(abs(disp[upper, 1] - disp[lower, 1]), 1.0)
+            self.assertLess(disp[lower, 1], -0.3)
+
+    def test_photo_with_an_open_mouth_can_be_closed(self):
+        opened = synthetic_analysis()
+        opened.blendshapes = {**opened.blendshapes, "jawOpen": 0.5}
+        animator = PortraitAnimator(self.image, opened)
+        animator._gap_at = np.full_like(animator._gap_at, 6.0)
+        animator._f_close[animator._below, 1] = -6.0
+        rest = animator.displacements({})
+        speaking = animator.displacements(dict(opened.blendshapes))
+        self.assertLess(rest[14, 1], -3.0)           # silence: lower lip comes up
+        self.assertLess(abs(speaking[14, 1]), 1.0)   # the photo's own pose: left alone
+
     def test_pucker_narrows_and_stretch_widens_the_mouth(self):
         def width(weights):
             d = self.animator.displacements(weights)

@@ -23,6 +23,7 @@ back as a blendshape render.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -114,7 +115,10 @@ def resolve_audio_url(audio_url: str) -> Path:
             "returned by POST /api/v1/audio/synthesize, or a file:// URL to a file "
             "in the project's outputs/ or inputs/ folder."
         )
-    resolved = candidate.resolve()
+    try:
+        resolved = candidate.resolve()
+    except (ValueError, OSError) as err:  # e.g. an embedded NUL byte
+        raise RenderError(f"audioUrl is not a usable path: {err}") from err
     roots = (OUTPUTS_DIR.resolve(), INPUTS_DIR.resolve())
     if not any(root in resolved.parents for root in roots):
         raise RenderError("audioUrl must point inside the project's outputs/ or inputs/ folder")
@@ -127,8 +131,17 @@ def resolve_audio_url(audio_url: str) -> Path:
 
 
 def output_path_for(job_id: str) -> Path:
-    """``outputs/renders/<jobId>.mp4`` with the id reduced to a safe filename."""
-    name = _SAFE_NAME.sub("_", job_id).strip("_")[:80] or f"job_{seed_from_job_id(job_id):08x}"
+    """
+    ``outputs/renders/<jobId>.mp4`` with the id reduced to a safe filename.
+
+    An id that is already a safe filename is used as-is. Any other id gets a
+    hash of the original appended, so two different jobs ("a b" and "a_b")
+    can never be given the same file.
+    """
+    name = _SAFE_NAME.sub("_", job_id).strip("_")[:80]
+    if name != job_id:
+        digest = hashlib.sha256(job_id.encode("utf-8")).hexdigest()[:10]
+        name = f"{name or 'job'}-{digest}"
     return RENDERS_DIR / f"{name}.mp4"
 
 
@@ -306,17 +319,32 @@ def render_job(
         frames = _warp_frames(animator, track, include_mouth=True)
 
     destination = Path(output_path) if output_path else output_path_for(job.job_id)
-    with video_io.VideoWriter(destination, width, height, job.target_fps, audio_path=audio_path) as writer:
-        for index, frame in enumerate(frames):
-            writer.write(_stamp_label(frame) if label else frame)
-            if progress is not None and (index % 10 == 0 or index + 1 == total):
-                progress(index + 1, total)
-    if engine_name == ENGINE_WAV2LIP:
-        peak_vram = gpu_utils.peak_vram_mb()
+    # Encoded beside the destination and moved into place only when complete,
+    # so a failed render never truncates or deletes an earlier finished video.
+    partial = destination.with_name(destination.stem + ".partial.mp4")
+    try:
+        with video_io.VideoWriter(
+            partial, width, height, job.target_fps, audio_path=audio_path, duration=duration
+        ) as writer:
+            for index, frame in enumerate(frames):
+                writer.write(_stamp_label(frame) if label else frame)
+                if progress is not None and (index % 10 == 0 or index + 1 == total):
+                    progress(index + 1, total)
+        if engine_name == ENGINE_WAV2LIP:
+            peak_vram = gpu_utils.peak_vram_mb()
 
-    media = video_io.probe(destination)
-    if not (media.has_video and media.has_audio):
-        raise RenderError(f"{destination.name} is missing a stream: {media.to_dict()}")
+        media = video_io.probe(partial)
+        if not (media.has_video and media.has_audio):
+            raise RenderError(
+                f"the encoder produced a file with a missing stream ({media.to_dict()}); "
+                "the clip may be shorter than one frame at this targetFps"
+            )
+        os.replace(partial, destination)
+    finally:
+        partial.unlink(missing_ok=True)
+    if media.frame_count and media.frame_count != total:
+        warnings.append(f"{total} frames were rendered but the file holds {media.frame_count}")
+        total = media.frame_count
 
     try:
         relative = destination.resolve().relative_to(OUTPUTS_DIR.resolve())

@@ -105,22 +105,26 @@ class CeleryJobQueue:
         return f"avatar:render-job:{job_id}"
 
     def enqueue(self, job: AvatarRenderJob, engine: Optional[str] = None) -> QueuedJob:
-        if self._redis.exists(self._key(job.job_id)):
-            raise ValueError(f"jobId already exists: {job.job_id}")
         from celery_app import process_render_job
 
         queued_job = QueuedJob(job=job, engine=engine)
-        self._redis.set(
-            self._key(job.job_id),
-            json.dumps(
-                {
-                    "job": job.model_dump(by_alias=True, mode="json"),
-                    "status": queued_job.status.value,
-                    "engine": engine,
-                }
-            ),
+        record = json.dumps(
+            {
+                "job": job.model_dump(by_alias=True, mode="json"),
+                "status": queued_job.status.value,
+                "engine": engine,
+            }
         )
-        process_render_job.delay(job.model_dump(by_alias=True, mode="json"), engine)
+        # SET NX claims the id atomically: two requests cannot both pass a
+        # separate exists-then-set check.
+        if not self._redis.set(self._key(job.job_id), record, nx=True):
+            raise ValueError(f"jobId already exists: {job.job_id}")
+        try:
+            process_render_job.delay(job.model_dump(by_alias=True, mode="json"), engine)
+        except Exception:
+            # Never published: do not leave a record that says QUEUED forever.
+            self._redis.delete(self._key(job.job_id))
+            raise
         return queued_job
 
     def update(self, job_id: str, **changes) -> None:

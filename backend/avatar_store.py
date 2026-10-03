@@ -52,6 +52,14 @@ AVATAR_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 # 40-megapixel phone photo would only cost memory.
 MAX_IMAGE_SIDE = 2048
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+# Checked from the header, before any pixel is decoded: a few kilobytes of
+# PNG can declare a gigapixel canvas.
+MAX_IMAGE_PIXELS = 40_000_000
+
+# Text chunks (PNG tEXt, JPEG comment, XMP) that can carry a rights notice.
+_INFO_NOTICE_KEYS = ("copyright", "author", "artist", "description", "comment", "rights")
+_EXIF_SUB_IFD = 0x8769
+_EXIF_USER_COMMENT = 0x9286
 
 # EXIF tags that can carry rights or usage text a human should read.
 _EXIF_NOTICE_TAGS = {
@@ -133,12 +141,33 @@ def _embedded_notices(image) -> Dict[str, str]:
         exif = image.getexif()
     except Exception:  # noqa: BLE001 - a malformed EXIF block is not fatal
         return notices
-    for tag, label in _EXIF_NOTICE_TAGS.items():
-        value = exif.get(tag)
+
+    def keep(label: str, value) -> None:
         if isinstance(value, bytes):
             value = value.decode("utf-8", errors="ignore")
         if isinstance(value, str) and value.strip("\x00 \t\r\n"):
-            notices[label] = value.strip("\x00 \t\r\n")[:500]
+            notices.setdefault(label, value.strip("\x00 \t\r\n")[:500])
+
+    for tag, label in _EXIF_NOTICE_TAGS.items():
+        keep(label, exif.get(tag))
+    # UserComment lives in the Exif sub-IFD, behind an 8-byte charset marker.
+    try:
+        comment = exif.get_ifd(_EXIF_SUB_IFD).get(_EXIF_USER_COMMENT)
+    except Exception:  # noqa: BLE001
+        comment = None
+    if isinstance(comment, bytes) and len(comment) > 8:
+        comment = comment[8:]
+    keep("userComment", comment)
+    # Rights text outside EXIF: PNG text chunks, JPEG comments, XMP.
+    for key, value in getattr(image, "info", {}).items():
+        lowered = str(key).lower()
+        if any(name in lowered for name in _INFO_NOTICE_KEYS):
+            keep(str(key), value)
+        elif lowered in ("xmp", "xml:com.adobe.xmp") and value:
+            text = value.decode("utf-8", errors="ignore") if isinstance(value, bytes) else str(value)
+            match = re.search(r"<dc:rights>(.*?)</dc:rights>", text, re.S)
+            if match:
+                keep("xmpRights", re.sub(r"<[^>]+>", " ", match.group(1)))
     return notices
 
 
@@ -174,12 +203,20 @@ def decode_image(image: Union[bytes, bytearray, str, Path, np.ndarray]) -> Tuple
                 if not path.is_file():
                     raise AvatarError(f"image not found: {path}")
                 handle = Image.open(path)
+            if handle.width * handle.height > MAX_IMAGE_PIXELS:
+                raise AvatarError(
+                    f"image is {handle.width}x{handle.height} pixels; the limit is "
+                    f"{MAX_IMAGE_PIXELS // 1_000_000} megapixels"
+                )
             handle.load()
         except UnidentifiedImageError as err:
             raise AvatarError(
                 "the file is not an image this project can read "
                 f"(supported: {', '.join(IMAGE_EXTENSIONS)})"
             ) from err
+        except (OSError, Image.DecompressionBombError) as err:
+            # Truncated or corrupt data, or a canvas PIL itself refuses.
+            raise AvatarError(f"the image could not be decoded: {err}") from err
         notices = _embedded_notices(handle)
         handle = ImageOps.exif_transpose(handle).convert("RGB")
 
@@ -210,10 +247,13 @@ class AvatarStore:
         return self._engine if self._engine is not None else shared_face_engine()
 
     def _find(self, avatar_id: str) -> Optional[Path]:
-        for extension in IMAGE_EXTENSIONS:
-            candidate = self.root / f"{avatar_id}{extension}"
-            if candidate.is_file():
-                return candidate
+        # Same rule as ``list``: the extension is matched case-insensitively,
+        # so whatever is listed can also be fetched and deleted.
+        if not self.root.is_dir():
+            return None
+        for path in sorted(self.root.iterdir()):
+            if path.stem == avatar_id and path.suffix.lower() in IMAGE_EXTENSIONS and path.is_file():
+                return path
         return None
 
     def _record(self, avatar_id: str, path: Path) -> AvatarRecord:
@@ -340,10 +380,15 @@ class AvatarStore:
         from PIL import Image
 
         self.root.mkdir(parents=True, exist_ok=True)
-        if existing is not None and existing.suffix.lower() != ".png":
-            existing.unlink()
-            provenance.sidecar_path(existing).unlink(missing_ok=True)
         path = self.root / f"{avatar_id}.png"
+        # Fail closed: the old record goes before the new pixels arrive. If
+        # anything below fails, the image has no sidecar and cannot be used,
+        # instead of a new face inheriting the previous subject's consent.
+        if existing is not None:
+            provenance.sidecar_path(existing).unlink(missing_ok=True)
+            if existing != path:
+                existing.unlink()
+        provenance.sidecar_path(path).unlink(missing_ok=True)
         Image.fromarray(array, "RGB").save(path, format="PNG")
 
         lineage = dict(extra or {})

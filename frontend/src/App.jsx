@@ -126,6 +126,7 @@ function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [audioUrl, setAudioUrl]   = useState("");
   const [phonemeTimestamps, setPhonemeTimestamps] = useState([]);
+  const [alignmentMethod, setAlignmentMethod] = useState("");
   const [activeViseme, setActiveViseme] = useState("viseme_sil");
   const [showTimeline, setShowTimeline] = useState(false);
 
@@ -232,6 +233,7 @@ function App() {
   const applySynthesisPayload = useCallback((payload) => {
     if (payload.modelUsed) setModelUsed(payload.modelUsed);
     if (payload.phonemeTimestamps) setPhonemeTimestamps(payload.phonemeTimestamps);
+    if (payload.alignmentMethod) setAlignmentMethod(payload.alignmentMethod);
     if (payload.qualityReport) setQualityReport(payload.qualityReport);
     if (payload.emotion) setEmotionReport(payload.emotion);
     if (payload.latencyMs != null) setLatencyMs(payload.latencyMs);
@@ -908,6 +910,7 @@ function App() {
             phonemeTimestamps={phonemeTimestamps}
             emotionVector={buildRenderEmotionVector(emotionReport)}
             audioReady={taskStatus === "SUCCESS"}
+            alignmentMethod={alignmentMethod}
           />
         </section>
       </main>

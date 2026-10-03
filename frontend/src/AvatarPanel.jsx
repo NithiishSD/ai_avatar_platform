@@ -83,7 +83,7 @@ function LandmarkCanvas({ imageUrl, analysis, showMesh }) {
   );
 }
 
-export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector, audioReady }) {
+export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector, audioReady, alignmentMethod }) {
   const [avatars, setAvatars] = useState([]);
   const [consentBases, setConsentBases] = useState([]);
   const [engines, setEngines] = useState({ blendshape: true });
@@ -152,13 +152,13 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
     if (!job || FINISHED.includes(job.status)) return undefined;
     const timer = setInterval(async () => {
       try {
-        const res = await fetch(`${apiBase}/api/v1/avatar/render-job/${job.jobId}`);
+        const res = await fetch(`${apiBase}/api/v1/avatar/render-job/${encodeURIComponent(job.jobId)}`);
         const payload = await res.json();
         if (res.ok) setJob(payload);
       } catch {
         /* transient: keep polling */
       }
-    }, 400);
+    }, 1000); // well under the API's default 120 requests/minute limit
     return () => clearInterval(timer);
   }, [apiBase, job]);
 
@@ -198,7 +198,7 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
     setScoring(true);
     setError("");
     try {
-      const res = await fetch(`${apiBase}/api/v1/avatar/render-job/${job.jobId}/lipsync-score`, { method: "POST" });
+      const res = await fetch(`${apiBase}/api/v1/avatar/render-job/${encodeURIComponent(job.jobId)}/lipsync-score`, { method: "POST" });
       const body = await res.json();
       if (!res.ok) throw new Error(detailOf(body, "Lip-sync scoring failed"));
       setScore(body.score);
@@ -344,6 +344,12 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
           disabled={!canRender || rendering} onClick={handleRender}>
           {rendering ? "Rendering…" : "Render Avatar Video"}
         </button>
+        {alignmentMethod === "acoustic-fallback" && (
+          <div style={{ ...small, color: "#fbbf24", marginTop: "6px" }}>
+            ⚠ Phoneme timing for this clip was estimated, not measured (the forced aligner could not run).
+            Lip sync will be loose.
+          </div>
+        )}
         {!canRender && (
           <div style={{ ...small, marginTop: "6px" }}>
             {!selected?.usable

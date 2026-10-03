@@ -465,18 +465,31 @@ class PortraitAnimator:
             smile = target.smile
         wide_gain = WIDE_GAIN if target.wide >= 0 else PUCKER_GAIN
 
+        # A photo taken mid-word has to be able to close: bring the lips
+        # together by however much less open the target is than the photo.
+        close = min(1.0, 2.0 * target.press)
+        if photo.open > 1e-3 and target.open < photo.open:
+            close = max(close, (photo.open - target.open) / photo.open)
+        upper = max(0.0, target.upper - photo.upper)
+        lower = max(0.0, target.lower - photo.lower)
+
+        # Fields that move the two lips differently. Only these can push the
+        # lower lip through the upper one, so only these are clamped; the
+        # corner fields below move both sides together and must not be.
         local = (
             open_amount * self._f_open
-            + target.lower * self._f_lower
-            + target.upper * self._f_upper
-            + target.wide * wide_gain * self._f_wide
-            + smile * self._f_smile
+            + lower * self._f_lower
             + target.press * self._f_press
-            + min(1.0, 2.0 * target.press) * self._f_close
+            + close * self._f_close
         )
-        # The lower lip can never pass through the upper one.
         floor = -self._gap_at
         local[self._below, 1] = np.maximum(local[self._below, 1], floor[self._below])
+        local = (
+            local
+            + upper * self._f_upper
+            + target.wide * wide_gain * self._f_wide
+            + smile * self._f_smile
+        )
 
         image = local[:, :1] * self.ex[None, :] + local[:, 1:] * self.ey[None, :]
 
