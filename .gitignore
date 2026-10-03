@@ -75,3 +75,8 @@ inputs/faces/*
 
 # Rendered videos are generated media, regenerable with scripts/render_avatar.py.
 outputs/renders/
+
+# Faces and voice references are never committed: they are photos and
+# recordings of people, and golden rule 3 makes consent a precondition of use,
+# not of storage. Provenance sidecars stay local with the media they describe.
+inputs/

@@ -133,7 +133,7 @@ FastAPI accepts every step as a job; Celery runs it (eager in development).
 | `backend/voice_engine.py` | `VoiceEngineRouter`: Kokoro, XTTS-v2, Higgs 3B, Dia 1.6B, MMS-TTS | Live; only Kokoro + MMS have weights |
 | `backend/mms_engine.py`, `language_registry.py` | MMS-TTS per-language VITS, LRU cache, ISO codes | Live |
 | `backend/romanizer.py` | Shared lazy `uroman` (MMS input + aligner) | Live |
-| `backend/alignment_engine.py` | MMS_FA forced alignment → phonemes → 15 visemes; acoustic fallback | Live |
+| `backend/alignment_engine.py` | MMS_FA forced alignment → phonemes → 15 visemes; acoustic fallback, reported via `last_method` | Live |
 | `backend/emotion_engine.py` | Emotion vectors → prosody; `to_render_emotion_vector` | Live |
 | `backend/quality_auditor.py` | SQUIM MOS/PESQ/STOI, ECAPA similarity | Live |
 | `backend/audio_utils.py` | Probe, validate, convert to 24 kHz mono for cloning | Live |
@@ -148,9 +148,9 @@ FastAPI accepts every step as a job; Celery runs it (eager in development).
 | `backend/face_warp.py` | `PortraitAnimator`: CPU mesh warp, procedural mouth interior and eyelids | Live |
 | `backend/video_io.py` | ffmpeg encode/mux, ffprobe, frame and audio readers | Live |
 | `backend/render_engine.py` | `AvatarRenderJob` → MP4; preflight; engines `blendshape` / `wav2lip`; AI label | Live |
-| `backend/wav2lip_engine.py` | Wav2Lip network + inference | Built; checkpoint not fetched (licence) |
+| `backend/wav2lip_engine.py` | Wav2Lip network + inference | Built; checkpoint now fetched, never run live |
 | `backend/lipsync_metric.py` | SyncNet LSE-C / LSE-D / offset | Live |
-| `backend/gpu_utils.py` | VRAM guard and model release registry | Live for vision models; TTS router not registered |
+| `backend/gpu_utils.py` | VRAM guard and model release registry; `AVATAR_DEVICE` override | Live; the TTS router now registers a releaser |
 | `frontend/src/App.jsx` | Creator studio: synthesis, clone picker, emotions, viseme display | Live |
 | `frontend/src/AvatarPanel.jsx` | Avatar picker, landmark canvas, photo registration, render, video, sync score | Built; not yet checked in a browser |
 | `frontend/src/App.new.jsx` | Earlier sample UI, unused | Candidate for removal |
@@ -196,15 +196,28 @@ A task is **done** only when all are true:
 
 ## 8. Current state (update when it changes)
 
-- Last verified suite: **446 tests passing** (30 Sep 2026). `doctor.py`: 32 pass, 6 warn, 0 fail.
+- Last verified suite: **475 tests passing** (3 Oct 2026). `doctor.py`: 33 pass, 5 warn, 0 fail.
+- `QUEUE_BACKEND=in_memory` really does need no Redis now. Celery reads
+  `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` from the environment and they beat the
+  constructor arguments, so in_memory mode had been storing eager results in Redis;
+  `celery_app.py` clears those two variables in that mode. If you add Celery settings to
+  `.env`, remember they outrank code.
 - Gates passed: **Gate 0.** Gate 1's criterion is met through the API and CLI but the
-  UI overlay has not been looked at. Gate 2 is not passed: there is no cloned voice.
+  UI overlay has not been looked at. Gate 2 is not passed, but its blockers are gone: all
+  weights and an admissible reference now exist, and nothing has been run with them.
 - What works end to end: text → Kokoro or MMS-TTS speech → alignment → render job →
   lip-synced MP4 of a registered face, by CLI and by API, with a SyncNet score.
 - Measured lip sync (blendshape engine, SyncNet LSE-C, real video ≈ 6–8): English 2.8,
   Hindi 4.7, Tamil 6.8; offset 0 frames in every clip. Details in `docs/context.md`.
-- Weights present: Kokoro, MMS-TTS (hin, tam, swh, spa), ECAPA, MediaPipe landmarker +
-  both segmenters, SyncNet, SFace, SD 1.5. Missing: XTTS-v2, Higgs, Dia, Wav2Lip.
-- `inputs/` holds a synthetic smoke voice reference and one synthetic face (`demo`):
-  both usable, neither admissible as evidence. No consented human voice or face yet.
+- Weights present: Kokoro, **XTTS-v2**, MMS-TTS (hin, tam, swh, spa), ECAPA, MediaPipe
+  landmarker + both segmenters, SyncNet, SFace, SD 1.5, **Wav2Lip**. Higgs and Dia are
+  cached metadata only (no weight file) and would try to download on first use.
+  So 3 of 5 TTS models have weights; the requirement is 5+, and OpenVoice V2 is not
+  integrated at all.
+- `inputs/` holds the synthetic smoke reference, one synthetic face (`demo`, usable but
+  never admissible), and `ljspeech_reference.wav` — 50.3 s, public domain, open-licence
+  consent, **admissible as evidence**. Still no consented human *face*.
+- **CUDA is not visible from the VS Code sandbox shell** (`torch.cuda.is_available()` is
+  False, `nvidia-smi` not found); this is the sandbox issue logged in August, not a
+  regression. Run GPU work from a host terminal. `AVATAR_DEVICE=cpu` forces CPU.
 - Next task: see the top of `docs/MILESTONES.md`.

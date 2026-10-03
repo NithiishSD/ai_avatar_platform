@@ -287,15 +287,15 @@ The official MediaPipe test photo turned out to be a White House portrait whose 
 
 ## Current status
 
-As of 30 Sep 2026 the audio side is at Phase 3 and the vision side has a working Phase 2 render path. Gate 0 is passed; Gate 1's criterion is met through the API but the UI has not been checked in a browser; Gate 2 waits on a cloned voice.
+As of 3 Oct 2026 the audio side is at Phase 3 and the vision side has a working Phase 2 render path. Gate 0 is passed; Gate 1's criterion is met through the API but the UI has not been checked in a browser. Gate 2 no longer waits on anything external: XTTS-v2 and Wav2Lip weights are on disk and an admissible 50.3 s human voice reference is registered. It waits on those being run.
 
 ### By roadmap phase
 
 | Phase | Audio and backend | Vision and UI |
 | --- | --- | --- |
 | 0 Setup and contract freeze | Done | Done |
-| 1 Speech engine / face analysis | Partial: 2 of 5 models have weights | Face analysis live in the API; UI panel built, not yet checked in a browser |
-| 2 Voice cloning / lip sync | Partial: alignment done, cloning never run | Blendshape lip sync verified and measured; Wav2Lip integrated, weights not fetched |
+| 1 Speech engine / face analysis | Partial: 3 of 5 models have weights (Kokoro, MMS-TTS, XTTS-v2); Higgs and Dia are metadata only | Face analysis live in the API; UI panel built, not yet checked in a browser |
+| 2 Voice cloning / lip sync | Partial: alignment done and now reports whether timing was measured or guessed; XTTS-v2 weights present, cloning still never run | Blendshape lip sync verified and measured; Wav2Lip integrated and its checkpoint fetched, but never run on real weights |
 | 3 Multilingual and emotion / avatar styling | Done and benchmarked | Hindi and Tamil avatars and emotion-driven faces verified; styling and background swap not started |
 | 4 Streaming / real-time video | Not started | Not started |
 | 5 Consent and watermarking | About one third: keys, rate limits, provenance | Face consent enforced at registration and render; visible AI label on every video |
@@ -315,8 +315,10 @@ Other measured facts: Kokoro generates speech 57 times faster than real time; MM
 
 ### Known gaps
 
-- Three speech models (XTTS-v2, Higgs, Dia) have no weights; a fetch script is ready.
-- No cloned voice yet, so the talking avatar uses stock voices.
+- Two speech models (Higgs, Dia) have cached metadata but no weight file; a fetch script is ready.
+- No cloned voice yet, so the talking avatar uses stock voices — the weights and an
+  admissible reference are now both in place, so this is a run away, not a blocker.
+- One test fails: `test_celery_queue_publishes_validated_payload` reaches a live Redis.
 - English lip sync is detectable but weak (LSE-C 2.8); the UI has not been checked in a browser.
 - OpenVoice V2, named in the requirements, is not integrated.
 - No database persistence; job history is lost on restart.

@@ -76,6 +76,7 @@ bundles, reference provenance, `.env`, and whether the API is up. Fix every
 | Symptom | Cause | Fix |
 |---|---|---|
 | Job stuck in `QUEUED` forever | `QUEUE_BACKEND=celery` with no worker running, or `.env` not loaded | Use `in_memory` in development, or start a Celery worker + Redis |
+| `ConnectionRefusedError` on `localhost:6379` although `QUEUE_BACKEND=in_memory` | Celery reads `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` from the environment, and they **outrank** the broker/backend passed in code. `.env` sets both to Redis, so in_memory mode stored eager results in Redis anyway. Fixed 3 Oct 2026 by clearing them in that mode | Confirm `celery.conf.result_backend` is `cache+memory://`. If you add a `CELERY_*` setting to `.env`, remember it beats the code |
 | `401` from every call | `AUTH_ENABLED=true` | Send `X-API-Key`, or disable auth in `.env` for local work |
 | `429 Too Many Requests` | Rate limit (default 120/min per key or IP) | Raise `RATE_LIMIT_RPM` for load tests; per process, so × workers |
 | Browser CORS error | Frontend origin not allowed | Leave `CORS_ORIGINS` empty in dev (any localhost port allowed) or list the origin |
@@ -100,3 +101,15 @@ bundles, reference provenance, `.env`, and whether the API is up. Fix every
 | Benchmark reports | `docs/benchmarks/` |
 | Model caches | `~/.cache/huggingface/hub`, Coqui dir (see audit), `.models/` |
 | Session history of past fixes | `docs/context.md` |
+
+### Avatar rendering and lip sync
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| SyncNet LSE-C suddenly lower, best offset -1, `alignmentMethod` is `acoustic-fallback` | The forced aligner could not run, so phoneme timing was estimated from the text. Seen on 30 Sep 2026 when another process (an Ollama server) held 4.6 GB of VRAM | Check `nvidia-smi`. The aligner now retries on CPU by itself; if it still falls back, the warning `FORCED ALIGNMENT FELL BACK` gives the reason |
+| `InsufficientVRAM` / `CUDA out of memory` when rendering or cloning | Another process holds the GPU, or this process still holds a TTS model | Close the other process, or run on CPU: `scripts/render_avatar.py --device cpu`, or `AVATAR_DEVICE=cpu` in `.env` |
+| Render job rejected: "the 'wav2lip' engine has no checkpoint" | Licence-gated weights not fetched | `scripts/fetch_vision_models.py --only wav2lip --accept-licence wav2lip`, or use `engine=blendshape` |
+| Render job rejected: "audioUrl ... is not renderable here" | The worker only reads this server's own `/outputs/` URLs and `file://` paths inside the project | Pass the URL returned by `POST /api/v1/audio/synthesize` |
+| 403 "no provenance record" for an avatar | An image was copied into `inputs/faces/` by hand | Register it: `scripts/make_avatar.py --human FILE --avatar-id ID --subject NAME --consent ...` |
+| Mouth barely moves | Timestamps are sparse and unheld, or the clip is silent | Check `phonemeTimestamps` is non-empty and `alignmentMethod` is `mms_fa`; `RenderResult.warnings` lists unknown visemes |
+| `ffmpeg was not found on PATH` | System ffmpeg missing | `sudo apt install ffmpeg` |

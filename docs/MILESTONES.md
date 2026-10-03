@@ -15,9 +15,14 @@ Update the status when you start or finish a task, and log the details in
 | `Blocked` | Waiting on something named in the Notes column |
 | `Cut` | Deliberately dropped for now (reason given) |
 
-**Next up:** look at the UI in a browser (`G1-05`, `G2-10`), then unblock Gate 2:
-accept the XTTS-v2 licence (`G1-08`), register a human voice (`G1-09`), and decide on
-Wav2Lip's licence (`G2-07`).
+**Next up:** Gate 2's blockers are gone — XTTS-v2 and Wav2Lip weights are on disk and
+an admissible human voice reference is registered. Nothing has been *run* yet. In order:
+run the live XTTS-v2 clone + ECAPA similarity (`G1-10`), then the Wav2Lip render
+(`G2-07`). The UI (`G1-05`, `G2-10`) still needs a human to look at it in a browser.
+
+**Note on hardware:** CUDA is not visible from the VS Code sandbox shell
+(`torch.cuda.is_available()` is False, `nvidia-smi` not found). `G1-10` and `G2-07` must
+be run from a host terminal, or they will crawl on CPU.
 
 ---
 
@@ -27,7 +32,7 @@ Wav2Lip's licence (`G2-07`).
 |---|---|---|
 | Gate 0 | Contracts frozen; mock payloads flow end to end | Passed |
 | Gate 1 | Text produces speech **and** 468+ landmarks map onto a reference photo | Met through the API and CLI on 30 Sep (synthetic face); the UI overlay has not been looked at, so not signed off |
-| Gate 2 | Cloned voice + single photo → accurately lip-synced video clip | Not passed: the video path works with a Kokoro voice, but no cloned voice exists (XTTS-v2 missing) and LSE-C is 2.8 in English |
+| Gate 2 | Cloned voice + single photo → accurately lip-synced video clip | Not passed: every input now exists (XTTS-v2 weights, Wav2Lip weights, an admissible 50.3 s human reference) but no clone has been generated and no Wav2Lip render attempted. English LSE-C is 2.8 on the blendshape engine |
 | Gate 3 | Custom avatar speaks a cloned multilingual voice with emotion | Not passed |
 | Final demo | Measured, consented, rehearsed showcase | Not passed |
 
@@ -48,9 +53,9 @@ blendshapes — all live, not mocked.
 | G1-05 | Frontend: upload photo, draw landmarks + bbox on canvas | Built | Manual check, screenshot in log | `frontend/src/AvatarPanel.jsx`; `npm run build` passes. **Not yet looked at in a browser** |
 | G1-06 | Face quality gate: reject no face, multiple faces, \ | Built | > 30° | Unit tests for every reject path; live only on passing photos and one closed-eyes warning | Unit tests + live | Clear user-facing messages |
 | G1-07 | Validate head-pose sign convention on a photo at a known angle | Todo | Left/right and up/down signs confirmed | Magnitudes correct; signs unverified |
-| G1-08 | Fetch XTTS-v2 (human accepts Coqui CPML first) | Blocked | `fetch_models.py --dry-run` shows present | Licence acceptance needed |
-| G1-09 | Register a consented human voice reference (e.g. LJSpeech clip) | Todo | `make_reference.py --human …` → admissible | Own voice not required |
-| G1-10 | Live XTTS-v2 clone + ECAPA similarity via benchmark | Todo | Benchmark row shows MEASURED, > 85% | Depends on G1-08, G1-09 |
+| G1-08 | Fetch XTTS-v2 (human accepts Coqui CPML first) | Verified | `fetch_models.py --dry-run` shows present | CPML accepted; `doctor.py` 3 Oct shows 1.3 GB of weights present. Not yet loaded or run |
+| G1-09 | Register a consented human voice reference (e.g. LJSpeech clip) | Verified | `make_reference.py --human …` → admissible | `inputs/ljspeech_reference.wav`, 50.3 s (inside the 30–60 s requirement), public domain, `consentBasis: open-licence` → **admissible as evidence**. The project's first admissible reference |
+| G1-10 | Live XTTS-v2 clone + ECAPA similarity via benchmark | Todo | Benchmark row shows MEASURED, > 85% | **Unblocked:** G1-08 and G1-09 are both done, so this is now just a run. Needs a GPU-visible shell. Highest-value task in the repo |
 
 ## Gate 2 — first talking avatar (target: end of week 2)
 
@@ -66,7 +71,7 @@ score recorded.
 | G2-04 | Mux audio + frames to MP4 (ffmpeg) | Verified | `ffprobe` shows both streams, equal duration | `video_io.py`; stream gap 0.00-0.06 s on five live renders |
 | G2-05 | `scripts/render_avatar.py` end-to-end CLI | Verified | One command → MP4 in `outputs/` | `outputs/renders/gate2-demo.mp4`: 162 frames, 1.3-2.0 s to render 6.5 s |
 | G2-06 | Render worker consumes `POST /api/v1/avatar/render-job` | Verified | Job goes QUEUED → SUCCESS with video URL | in_memory queue live (202 in 8 ms, COMPLETED with video URL). Celery/Redis path is unit-tested with a fake Redis only |
-| G2-07 | Wav2Lip integration (GPU, unload TTS first) | Blocked | MP4 + peak VRAM logged < 6 GB | Engine and render path Built and unit-tested; checkpoint needs a human to accept the non-commercial licence (`fetch_vision_models.py --only wav2lip --accept-licence wav2lip`) |
+| G2-07 | Wav2Lip integration (GPU, unload TTS first) | Built | MP4 + peak VRAM logged < 6 GB | No longer blocked: `.models/wav2lip/wav2lip_gan.pth` (436 MB) is present, licence accepted. Engine and render path unit-tested but **never run on real weights**. The TTS router now registers a releaser with `gpu_utils`, so the unload-first requirement is satisfiable |
 | G2-08 | Lip-sync metric: SyncNet LSE-C / LSE-D | Verified | Numbers recorded with method | `lipsync_metric.py`; controls: 200/400 ms audio delay read as -5/-10 frames, wrong audio LSE-C 0.7 |
 | G2-09 | MuseTalk trial at reduced resolution | Todo | Works or documented OOM | Optional quality upgrade |
 | G2-10 | UI: render button, progress, video player | Built | Manual check | In `AvatarPanel.jsx`; not yet looked at in a browser |

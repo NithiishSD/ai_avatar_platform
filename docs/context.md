@@ -24,6 +24,91 @@ Next: <the next task ID>
 
 ---
 
+## Session 6 (2026-10-03): status audit, in_memory/Redis config fix, docs caught up
+
+This session audited the repo against the docs, found the docs badly behind reality, and
+corrected them; then fixed the one failing test, which turned out to be reporting a real
+configuration bug rather than a test problem. The other code changes described below were
+already in the working tree, uncommitted and unlogged, when the session started.
+
+Tasks: G1-08 Blocked -> Verified, G1-09 Todo -> Verified, G2-07 Blocked -> Built.
+G1-10 still Todo but no longer blocked.
+
+Found in the working tree (uncommitted, 30 files, +596/-100, 28 new tests):
+- `alignment_engine.py`: tracks `last_method` / `last_fallback_reason` and logs loudly
+  when phoneme timing was *estimated* from text rather than measured from audio. Closes a
+  real golden-rule-1 hole - a guessed timeline was previously indistinguishable from a
+  measured one. Surfaced through `SynthesisResult.alignment_method`. Also retries the
+  aligner on CPU on CUDA OOM rather than silently dropping to the acoustic guess.
+- `voice_engine.py`: `VoiceEngineRouter.release()` registered with `gpu_utils`, so the
+  vision side can now make room on the 6 GB card before loading Wav2Lip (golden rule 5).
+  This closes the "TTS router not registered" gap that `CLAUDE.md` had recorded.
+- `gpu_utils.py`: `AVATAR_DEVICE=cpu|cuda` override; `InsufficientVRAM` now distinguishes
+  "this process holds N MiB in unregistered models" from "another process holds the card".
+- Smaller hardening across `render_engine`, `video_io`, `avatar_store`, `job_queue`,
+  `face_warp`, `face_animation`, `lipsync_metric`, `provenance`, `wav2lip_engine`.
+
+Weights and data that arrived since Session 5 (confirmed by `doctor.py`, 3 Oct):
+- **XTTS-v2**, 1.3 GB - the Coqui CPML was accepted. G1-08 done.
+- **Wav2Lip** `wav2lip_gan.pth`, 436 MB - non-commercial licence accepted. G2-07 unblocked.
+- **`inputs/ljspeech_reference.wav`** - 50.3 s (ffprobe), inside the 30-60 s requirement,
+  LJ Speech 1.1 public domain, `consentBasis: open-licence`. The project's first voice
+  reference that is **admissible as evidence**. G1-09 done.
+
+Verified (this session, 3 Oct 2026):
+- Suite on arrival: **474 tests, 1 error** (was 446 passing on 30 Sep). Now **475 passing**.
+- **Fixed a real config bug that the failing test was correctly reporting.** First read was
+  that `test_celery_queue_publishes_validated_payload` was simply a unit test reaching a
+  live service (golden rule 6). It was not. Celery reads `CELERY_BROKER_URL` and
+  `CELERY_RESULT_BACKEND` straight from the environment, and those **take precedence over
+  the constructor arguments and over any later `conf` assignment**. `.env` sets both to
+  Redis for the celery backend, and `load_dotenv()` in `celery_app.py` puts them in
+  `os.environ`. So `QUEUE_BACKEND=in_memory` - documented as "Celery eager, no Redis
+  needed" - built an app with `broker="memory://"`, `backend="cache+memory://"` and then
+  silently got Redis for both. With `task_store_eager_result=True`, every eager task tried
+  to write its result to a Redis that in_memory mode promises not to require.
+  Fix: `celery_app.py` clears those two env vars in the in_memory branch before
+  constructing the app (they belong to the celery backend only). Verified: broker and
+  backend now resolve to `memory://` / `cache+memory://` with a `CacheBackend`, and a live
+  `synthesize_audio.delay(...)` ran eagerly, reached SUCCESS and read its result back with
+  **no Redis running** (Kokoro, CPU, 14.4 s cold).
+  This was masked until now because Redis was running via `start-docker.sh` during earlier
+  sessions. It is exactly the shape golden rule 1 warns about: config that looks like it
+  worked.
+- Also fixed the test's own state leak: it reset `task_always_eager` to a hard `False` on
+  the way out, which is both wrong for in_memory mode and leaked into every later test. It
+  now saves and restores the previous value via `addCleanup`.
+- Added `test_in_memory_mode_never_points_celery_at_redis`: reloads `celery_app` with
+  `CELERY_*` pointing at Redis and asserts the resolved broker and backend contain no
+  "redis". Guards the regression directly.
+- `doctor.py`: **33 pass, 5 warn, 0 fail** (was 32/6/0).
+- `torch.cuda.is_available()` is **False** and `nvidia-smi` is not on PATH in this shell.
+  This is the VS Code sandbox isolation logged on 2026-08-27, not a regression - the host
+  has an RTX 4050. Consequence: no GPU work could be attempted this session.
+
+Docs corrected (the point of the session):
+- `docs/MILESTONES.md`: G1-08, G1-09, G2-07 statuses; Gate 2 row; "Next up" rewritten.
+- `CLAUDE.md` section 8 rewritten; three stale module-map rows fixed.
+- `docs/PROJECT_DOCUMENTATION.md`: phase table said "2 of 5 models have weights", now 3 of
+  5; Phase 2 row; current-status paragraph; known-gaps list.
+
+Not done / open:
+- **Nothing has been run with the new weights.** No XTTS-v2 clone has ever been generated;
+  no Wav2Lip render has ever been attempted. Both are status `Built`/`Todo`, not Verified,
+  and the docs now say so. Gate 2 is gated on runs, not on licences or downloads.
+- The UI (G1-05, G2-10) still has not been looked at in a browser.
+- The only benchmark report is from 17 Sep, three weeks stale. Cloning similarity is still
+  "Not measured" - but for the first time it is measurable, against an admissible reference.
+- Higgs and Dia are cached metadata only; they would attempt a download on first use.
+  3 of 5 TTS models have weights against a 5+ requirement; OpenVoice V2 is not integrated.
+- Phases: 1 of 7 complete (Phase 0). Phases 4 (streaming) and 6 (scale) are untouched and
+  carry targets nothing currently measured comes near.
+
+Next: G1-10 (live XTTS-v2 clone + ECAPA) from a host terminal with GPU access, then
+G2-07 (Wav2Lip render, TTS released first).
+
+---
+
 ## Session 5 (2026-09-30): vision pipeline end to end - first talking avatar, measured
 Tasks: G1-01..G1-04 Verified, G1-05 Built, G1-06 Built; G2-01..G2-06 Verified, G2-07 Blocked
 (licence), G2-08 Verified, G2-10 Built; G3-01, G3-02 Verified; FD-03 Verified; IM-07 Built.

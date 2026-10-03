@@ -38,6 +38,19 @@ def get_router() -> VoiceEngineRouter:
 is_in_memory = os.getenv("QUEUE_BACKEND", "in_memory").lower() != "celery"
 
 if is_in_memory:
+    # Celery reads CELERY_BROKER_URL / CELERY_RESULT_BACKEND straight from the
+    # environment, and they take precedence over both the constructor
+    # arguments below and any later conf assignment. Since .env sets both to
+    # Redis for the celery backend, in_memory mode was silently storing its
+    # eager results in a Redis that need not be running - the one thing
+    # "QUEUE_BACKEND=in_memory" promises it does not do. They belong to the
+    # celery backend only, so clear them before the app reads them.
+    for _celery_env in ("CELERY_BROKER_URL", "CELERY_RESULT_BACKEND"):
+        if os.environ.pop(_celery_env, None):
+            logger.debug(
+                "QUEUE_BACKEND=in_memory: ignoring %s (in-process broker only)",
+                _celery_env,
+            )
     celery = Celery(
         "avatar_platform",
         broker="memory://",
