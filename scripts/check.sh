@@ -20,8 +20,10 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 # The project interpreter, never whatever `python` is on PATH: base conda is
 # Python 3.14 and cannot import this project's pinned dependencies.
-PY=./backend/.conda/bin/python
-BIN=./backend/.conda/bin
+# `${PY:-...}` keeps a value already set in the environment, which is how CI
+# (no conda env, a plain virtualenv) runs this same script unchanged.
+PY=${PY:-./backend/.conda/bin/python}
+BIN=${BIN:-./backend/.conda/bin}
 
 lint() {
   echo "== lint (ruff)"
@@ -30,7 +32,8 @@ lint() {
 
 types() {
   echo "== types (pyrefly)"
-  "$BIN/pyrefly" check --output-format min-text
+  # pyrefly.toml names the local conda interpreter; pass the one in use.
+  "$BIN/pyrefly" check --output-format min-text --python-interpreter-path "$PY"
 }
 
 test_() {
