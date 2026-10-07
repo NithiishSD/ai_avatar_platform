@@ -26,7 +26,7 @@ records what was verified live, with the real command and result.
 | T2.3 | Verified on CPU — waiting on M-04 (peak VRAM on the host GPU, and a look at the video) | (this commit) |
 | T2.6 | Done — 4 usable engines; the 5th (XTTS-v2) waits on M-03 | 6b94d3c, b55e538, f5d85bc |
 | T2.4 | Done | (this commit) |
-| T2.5 | Next | |
+| T2.5 | Done (visual check of the video still in M-04) | (this commit) |
 
 ## Log
 
@@ -577,3 +577,24 @@ Gate 2 ("audio from a cloned voice + a single photo → an accurately lip-synced
 clip") is **demonstrated end to end** but not signed off: clone similarity is
 far below target (XTTS-v2 pending M-03), and nobody has watched the video yet
 (M-04). Not marked passed.
+
+### 2026-10-08 — T2.5 clone flow in the UI
+
+`App.jsx`: a "Cloning engine" selector in clone mode sends `cloneEngine`; it
+preselects a cloner whose weights `/health` reports present and disables one
+without weights. Stale hints fixed: dialogue is Bark, High Quality says it
+cannot run here, the router badge follows the chosen cloner. `/health`
+`capabilities.models` no longer lists Higgs/Dia (it advertised models that
+503) and gains `cloneEngines`.
+
+Verified, real servers and weights, CPU:
+- `scripts/check.sh` → ruff clean, pyrefly 0 errors, 535 tests OK; `npm run lint` exit 0.
+- `npx playwright test clone.spec.js` → **passed (17.2 s)**: clone mode, OpenVoice
+  V2, `ljspeech_reference`, Model Used badge `openvoice-v2`, alignment measured,
+  render (blendshape) → COMPLETED, `<video>` readyState ≥ 1, duration > 1 s,
+  width > 0, response is an MP4 (`ftyp`).
+- The test can fail: with the `cloneEngine` line commented out the API default
+  (XTTS-v2, no weights) is used and the run fails at the badge
+  ("Expected substring: openvoice-v2 / Received: Model Used—"); restored → passes.
+
+Not done: XTTS-v2 through the UI (M-03); someone watching the video (M-04).

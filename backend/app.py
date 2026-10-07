@@ -57,7 +57,7 @@ from model_registry import (
 )
 from quality_auditor import SpeechQualityAuditor
 from security import API_KEY_HEADER, SecurityGate
-from voice_engine import ModelWeightsMissing, VoiceConsentRequired
+from voice_engine import CLONE_ENGINES, ModelWeightsMissing, VoiceConsentRequired
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +204,10 @@ def health() -> dict:
         "capabilities": {
             # Keys the router can select. Routable is not the same as usable:
             # modelWeights below says which ones have weights on disk.
-            "models": ["kokoro", "xtts-v2", "higgs-tts-2", "dia-1.6b", "mms-tts"],
+            # Higgs and Dia are not listed: they cannot load on this stack
+            # (D-32), so advertising them would promise what 503s.
+            "models": ["kokoro", "xtts-v2", "openvoice-v2", "bark", "mms-tts"],
+            "cloneEngines": list(CLONE_ENGINES),
             "languages": language_registry.supported_count(),
             "emotions": [preset["name"] for preset in preset_catalogue()],
             "visemes": PhonemeToVisemeMapper.get_supported_visemes(),

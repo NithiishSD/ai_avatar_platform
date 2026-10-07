@@ -123,12 +123,13 @@ class HealthCapabilityTests(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app_module.app)
 
-    def test_health_advertises_all_five_models(self):
+    def test_health_advertises_only_models_that_can_run(self):
         capabilities = self.client.get("/health").json()["capabilities"]
         self.assertEqual(
             set(capabilities["models"]),
-            {"kokoro", "xtts-v2", "higgs-tts-2", "dia-1.6b", "mms-tts"},
+            {"kokoro", "xtts-v2", "openvoice-v2", "bark", "mms-tts"},
         )
+        self.assertEqual(capabilities["cloneEngines"], ["xtts-v2", "openvoice-v2"])
 
     def test_health_advertises_the_fifteen_visemes(self):
         capabilities = self.client.get("/health").json()["capabilities"]

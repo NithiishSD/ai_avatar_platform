@@ -9,9 +9,9 @@ const API_BASE = "http://localhost:8000";
 /* ------------------------------------------------------------------ */
 const MODE_INFO = {
   fast:         { label: "⚡ Fast (Kokoro 82M)",         hint: "Sub-second English synthesis. Best for real-time use." },
-  clone:        { label: "🎤 Voice Clone (XTTS-v2)",     hint: "Zero-shot cloning from a reference recording. Multilingual." },
-  high_quality: { label: "🏆 High Quality (Higgs 3B)",   hint: "Ultra-high MOS, multilingual. Slower, GPU-intensive." },
-  dialogue:     { label: "💬 Dialogue (Dia 1.6B)",        hint: "Multi-speaker with [S1] / [S2] tags. Great for conversations." },
+  clone:        { label: "🎤 Voice Clone",               hint: "Zero-shot cloning from a consented reference recording. Pick the cloning engine below." },
+  high_quality: { label: "🏆 High Quality (Higgs 3B)",   hint: "Cannot run on this stack (transformers <4.48). The server answers 503 with the reason." },
+  dialogue:     { label: "💬 Dialogue (Bark)",            hint: "Two voices with [S1] / [S2] tags. Slow on a CPU (about 10x real time)." },
   multilingual: { label: "🌍 Multilingual (MMS-TTS)",    hint: "Facebook MMS-TTS. Forces the MMS path for 1000+ languages." },
 };
 
@@ -24,6 +24,13 @@ const EMOTION_INFO = {
   authority:    { label: "🎓 Authority",      hint: "Deeper and level, but still projecting." },
   calm:         { label: "😌 Calm",           hint: "Soft and unhurried." },
   excitement:   { label: "🤩 Excitement",     hint: "Fast, loud, strongly rising." },
+};
+
+/* Engines mode="clone" can use. The first is the API's default; the UI only
+   preselects one whose weights /health says are on disk. */
+const CLONE_ENGINE_INFO = {
+  "xtts-v2":      { label: "XTTS-v2 (Coqui, non-commercial)", hint: "Highest similarity; 17 languages." },
+  "openvoice-v2": { label: "OpenVoice V2 (MIT)",              hint: "Recolours a base voice (Kokoro / MMS-TTS) with the reference's timbre." },
 };
 
 const ENGLISH_CODES = ["en", "en-us", "en-gb", "en-au", "en-ca"];
@@ -78,6 +85,8 @@ function ModelBadge({ modelUsed }) {
     "higgs-tts-2":"#fbbf24",
     "dia-1.6b":   "#c4b5fd",
     "mms-tts":    "#f0abfc",
+    "bark":       "#fdba74",
+    "openvoice-v2": "#5eead4",
   };
   return (
     <span style={{
@@ -105,6 +114,8 @@ function App() {
   const [pitch, setPitch]         = useState(1.0);
   const [returnAlignment, setReturnAlignment] = useState(true);
   const [selectedSample, setSelectedSample]   = useState("");
+  const [cloneEngine, setCloneEngine]         = useState("");
+  const [weightsPresent, setWeightsPresent]   = useState({});
 
   /* Phase 3: emotion prosody, multilingual catalogue, quality auditing */
   const [emotion, setEmotion]                 = useState("");
@@ -139,8 +150,8 @@ function App() {
 
   /* ---------- computed predicted model (client-side hint) ----------- */
   const predictedModel = (() => {
-    if (mode === "dialogue" || style === "dialogue" || text.includes("[S1]") || text.includes("[S2]")) return "dia-1.6b";
-    if (mode === "clone") return "xtts-v2";
+    if (mode === "dialogue" || style === "dialogue" || text.includes("[S1]") || text.includes("[S2]")) return "bark";
+    if (mode === "clone") return cloneEngine || "xtts-v2";
     if (mode === "high_quality" || quality === "high") return "higgs-tts-2";
     if (mode === "multilingual") return languageInfo?.mmsSupported ? "mms-tts" : "unsupported";
     const lang = language.toLowerCase().replace("_", "-");
@@ -191,7 +202,15 @@ function App() {
         return res.json();
       })
       .then((data) => {
-        if (!ignore) setBackendStatus(`${data.status} (${data.queueBackend})`);
+        if (ignore) return;
+        setBackendStatus(`${data.status} (${data.queueBackend})`);
+        const present = Object.fromEntries(
+          (data.modelWeights?.models ?? []).map((m) => [m.key, m.present]),
+        );
+        setWeightsPresent(present);
+        // Preselect a cloner that can actually run; never one that would 503.
+        const usable = (data.capabilities?.cloneEngines ?? []).find((key) => present[key]);
+        setCloneEngine((current) => current || usable || "xtts-v2");
       })
       .catch((err) => {
         if (ignore) return;
@@ -332,6 +351,7 @@ function App() {
           );
         }
         body.speakerWav = selectedSample;
+        if (cloneEngine) body.cloneEngine = cloneEngine;
       }
 
       const res = await fetch(`${API_BASE}/api/v1/audio/synthesize`, {
@@ -444,6 +464,25 @@ function App() {
                     {samplesLoading ? "Scanning…" : "↻ Refresh"}
                   </button>
                 </div>
+
+                <label style={{ display: "block", fontSize: "0.8rem", color: "#94a3b8", marginBottom: "10px" }}>
+                  Cloning engine
+                  <select
+                    id="clone-engine-select"
+                    value={cloneEngine}
+                    onChange={(e) => setCloneEngine(e.target.value)}
+                    style={{ marginTop: "4px" }}
+                  >
+                    {Object.entries(CLONE_ENGINE_INFO).map(([key, { label }]) => (
+                      <option key={key} value={key} disabled={weightsPresent[key] === false}>
+                        {label}{weightsPresent[key] === false ? " - weights not fetched" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <span style={{ fontSize: "0.72rem", color: "#64748b", display: "block", marginTop: "3px" }}>
+                    {CLONE_ENGINE_INFO[cloneEngine]?.hint}
+                  </span>
+                </label>
 
                 {samplesError && (
                   <div style={{ color: "#f87171", fontSize: "0.8rem", marginBottom: "8px" }}>

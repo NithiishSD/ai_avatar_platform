@@ -32,7 +32,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-09 | `test_voice_engine.py` prosody tests | pass |
 | R-10 | `test_face_engine.py`; E2E `avatar.spec.js` (mesh drawn inside the face box, measured from canvas pixels); pose signs measured on real MediaPipe (T1.3) + `PoseFallbackTests` | pass |
 | R-11 | `test_face_quality.py` | pass |
-| R-12 | `test_render_engine.py`, `test_app_vision.py`; live: cloned voice → Wav2Lip video through the API (`clone_to_video.py`, T2.4) | pass |
+| R-12 | `test_render_engine.py`, `test_app_vision.py`; E2E `clone.spec.js`; live: cloned voice → Wav2Lip video through the API (`clone_to_video.py`, T2.4) | pass |
 | R-13 | `test_render_engine.py` engine selection; live: blendshape and Wav2Lip on the same 3 jobs (T2.3) | pass |
 | R-14 | `test_viseme_blendshapes.py`, `test_face_animation.py` | pass |
 | R-15 | `test_avatar_generator.py`; API in T3.2 | partial (CLI only) |
@@ -44,7 +44,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-21 | T6.1 | gap |
 | R-22 | `test_security.py` | pass |
 | R-23 | `test_model_registry.py`, `test_app.py` health; live: /health lists higgs/dia unavailable (T1.4) | pass |
-| R-24 | E2E `smoke.spec.js` (T0.6), `synthesis.spec.js` (T1.1), `avatar.spec.js` (T1.2). Still to come: T2.5, T3.4, T4.3 | partial |
+| R-24 | E2E `smoke.spec.js` (T0.6), `synthesis.spec.js` (T1.1), `avatar.spec.js` (T1.2), `clone.spec.js` (T2.5: clone → render → video decodes). Still to come: T3.4, T4.3 | partial |
 | R-25 | T7.1 | gap |
 | R-26 | T7.2 | gap |
 | R-27 | T6.2 | gap |
