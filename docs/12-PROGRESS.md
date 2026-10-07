@@ -28,14 +28,26 @@ records what was verified live, with the real command and result.
 | T2.4 | Done | (this commit) |
 | T2.5 | Done (visual check of the video still in M-04) | 13f696c |
 | T3.1 | Done | 63367d0 |
-| T3.2 | Done | (this commit) |
+| T3.2 | Done | 031d475 |
 | T3.5 | Done | ae92ce9 |
-| T6.2 | Done | (this commit) |
-| T6.1 | Done | (this commit) |
-| T7.1 | Done | (this commit) |
-| T7.3 | Done (4 documented exceptions, D-41) | (this commit) |
-| T7.5 | Done (two HTML `placeholder` attributes remain by decision D-40) | (this commit) |
+| T6.2 | Done | d62dd62 |
+| T6.1 | Done | 0dfb64b |
+| T7.1 | Done | 98902e3 |
+| T7.3 | Done (4 documented exceptions, D-41) | ec5b180 |
+| T7.5 | Done (two HTML `placeholder` attributes remain by decision D-40) | d62dd62 |
 | T3.3 | Next | |
+
+**Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
+T3.3 cross-lingual cloning (XTTS part blocked by M-03; OpenVoice cross-lingual already measured) ->
+T3.4 Gate 3 flow (custom avatar + cloned multilingual voice + emotion, E2E) ->
+T6.3 load test -> T6.4 concurrency test (50+ jobs) -> T6.5 security review ->
+M4 live: T4.1 streaming TTS (`WS /api/v1/live`) -> T4.2 live frames -> T4.3 live UI + E2E -> T4.4 latency ->
+M5: T5.1 audio watermark -> T5.2 video watermark + signed manifest -> T5.3 verify endpoint -> T5.4 audit trail ->
+T6.6 re-run benchmarks (incl. the unexplained blendshape offset -4, see T7.1 entry) ->
+T7.2 Docker (build is heavy: torch image) -> T7.4 documentation pass -> T7.6 README -> T7.7 final verification.
+Waiting on the owner, cannot be done here: T2.1 (M-03 XTTS-v2 licence), T2.3 sign-off (M-04 host GPU + look at the video).
+Environment gotchas learned: never `pkill -f` / `pgrep -f` with a pattern that also appears in your own
+command line (it kills the shell, exit 144); find the server by `ss -ltnp 'sport = :8000'`.
 
 ## Log
 
