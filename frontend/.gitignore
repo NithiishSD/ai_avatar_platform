@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Vite pre-bundles dependencies here on every dev run; generated, never source.
+.vite

@@ -11,8 +11,9 @@ records what was verified live, with the real command and result.
 | T0.2 | Done (on main, before the branch rule) | ab1b917 |
 | T0.1–T0.2 on m1 | Done | 1065342 |
 | T0.3 | Done | 3a603c2 |
-| T0.4 | Done | (this commit) |
-| T0.5 | Next | |
+| T0.4 | Done | 9c88e6d |
+| T0.5 | Done — browser check in T0.6 | (this commit) |
+| T0.6 | Next | |
 
 ## Log
 
@@ -114,3 +115,26 @@ Verified:
 - face_warp A/B: same aligned job (33 phonemes, 3.0 s) rendered with HEAD's and
   the new `face_warp.py` in separate processes → decoded video md5
   `6461f0c482dafc61` both, audio md5 identical. 75 frames pixel-identical.
+
+### 2026-10-07 — T0.5 frontend lint and build clean
+
+`npm run lint` failed (it scanned `.vite/deps`, React's pre-bundled copy, which
+was also **tracked in git** — 8 files, now untracked and ignored). On `src/`
+alone, 7 real warnings, and behind them real defects:
+- race: language info, language search and the health check set state from
+  responses with no cancellation, so an out-of-order slow reply could overwrite
+  a newer one (wrong language shown). All now use an `ignore` flag in cleanup.
+- `fetchSamples` read `selectedSample` and was rebuilt on every selection, so
+  its effect carried an `eslint-disable` for the missing dependency. Now a
+  functional update, deps `[]`, called from the mode-change handler.
+- `AvatarPanel` reset analysis to null inside an effect (extra render, and the
+  previous face could flash). Analysis is now stored keyed by avatarId and
+  derived.
+- polling effect missing `applySynthesisPayload` in deps.
+Probe before fixing (scratch file): oxlint flags `useEffect(() => { load(); })`
+when `load` sets state, but not inline async/`.then` setState with a flag.
+
+Verified:
+- `npm run lint` (now `--deny-warnings`) → exit 0; a planted warning → exit 1.
+- `npm run build` → built in 1.05 s, no warnings.
+- Browser behaviour: verified by the T0.6 E2E run (below).

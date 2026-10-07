@@ -88,8 +88,14 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
   const [consentBases, setConsentBases] = useState([]);
   const [engines, setEngines] = useState({ blendshape: true });
   const [avatarId, setAvatarId] = useState("");
-  const [analysis, setAnalysis] = useState(null);
-  const [quality, setQuality] = useState(null);
+  // A face analysis is stored with the avatarId it describes and only read
+  // back while that avatar is still selected. Switching avatars therefore
+  // shows nothing - not the previous face's landmarks - until the new result
+  // lands, with no reset-to-null inside an effect.
+  const [faceResult, setFaceResult] = useState({ avatarId: "", analysis: null, quality: null });
+  const currentResult = faceResult.avatarId === avatarId ? faceResult : null;
+  const analysis = currentResult?.analysis ?? null;
+  const quality = currentResult?.quality ?? null;
   const [showMesh, setShowMesh] = useState(true);
   const [engine, setEngine] = useState("blendshape");
   const [renderQuality, setRenderQuality] = useState("PREVIEW");
@@ -102,31 +108,40 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
   const [uploadFile, setUploadFile] = useState(null);
   const [uploading, setUploading] = useState(false);
 
-  const loadAvatars = useCallback(async () => {
-    try {
-      const res = await fetch(`${apiBase}/api/v1/avatar/faces`);
-      const payload = await res.json();
-      if (!res.ok) throw new Error(detailOf(payload, "Could not list avatars"));
-      setAvatars(payload.avatars);
-      setConsentBases(payload.consentBases);
-      setEngines(payload.renderEngines);
-      setAvatarId((current) => {
-        if (current && payload.avatars.some((a) => a.avatarId === current)) return current;
-        return payload.avatars.find((a) => a.usable)?.avatarId || "";
-      });
-    } catch (err) {
-      setError(err.message);
-    }
+  /* Fetching and applying are separate so the mount effect can drop a
+     response that arrives after the panel unmounts, while the registration
+     handler simply awaits both. */
+  const fetchAvatarList = useCallback(async () => {
+    const res = await fetch(`${apiBase}/api/v1/avatar/faces`);
+    const payload = await res.json();
+    if (!res.ok) throw new Error(detailOf(payload, "Could not list avatars"));
+    return payload;
   }, [apiBase]);
 
+  const applyAvatarList = useCallback((payload) => {
+    setAvatars(payload.avatars);
+    setConsentBases(payload.consentBases);
+    setEngines(payload.renderEngines);
+    setAvatarId((current) => {
+      if (current && payload.avatars.some((a) => a.avatarId === current)) return current;
+      return payload.avatars.find((a) => a.usable)?.avatarId || "";
+    });
+  }, []);
+
   useEffect(() => {
-    loadAvatars();
-  }, [loadAvatars]);
+    let ignore = false;
+    fetchAvatarList()
+      .then((payload) => {
+        if (!ignore) applyAvatarList(payload);
+      })
+      .catch((err) => {
+        if (!ignore) setError(err.message);
+      });
+    return () => { ignore = true; };
+  }, [fetchAvatarList, applyAvatarList]);
 
   /* Landmarks, pose and the quality verdict for the selected face. */
   useEffect(() => {
-    setAnalysis(null);
-    setQuality(null);
     if (!avatarId) return undefined;
     let cancelled = false;
     const form = new FormData();
@@ -137,8 +152,7 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
         const payload = await res.json();
         if (!res.ok) throw new Error(detailOf(payload, "Face analysis failed"));
         if (!cancelled) {
-          setAnalysis(payload.analysis);
-          setQuality(payload.quality);
+          setFaceResult({ avatarId, analysis: payload.analysis, quality: payload.quality });
         }
       })
       .catch((err) => !cancelled && setError(err.message));
@@ -223,7 +237,7 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
       if (!res.ok) throw new Error(detailOf(body, "Registration failed"));
       setShowUpload(false);
       setUploadFile(null);
-      await loadAvatars();
+      applyAvatarList(await fetchAvatarList());
       setAvatarId(body.avatar.avatarId);
     } catch (err) {
       setError(err.message);

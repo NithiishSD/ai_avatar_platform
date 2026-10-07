@@ -149,20 +149,10 @@ function App() {
     return languageInfo?.mmsSupported ? "mms-tts" : "higgs-tts-2";
   })();
 
-  /* ---------- backend health check ---------------------------------- */
-  const checkBackend = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/health`);
-      if (!res.ok) throw new Error("Backend unavailable");
-      const data = await res.json();
-      setBackendStatus(`${data.status} (${data.queueBackend})`);
-    } catch (err) {
-      setBackendStatus("Offline");
-      setError(err.message || "Unable to reach backend");
-    }
-  };
-
   /* ---------- voice sample scanning --------------------------------- */
+  /* Called from the events that need it - switching to clone mode and the
+     refresh button - not from an effect. React's guidance for state that
+     follows a user action is to update it in that action's handler. */
   const fetchSamples = useCallback(async () => {
     setSamplesLoading(true);
     setSamplesError("");
@@ -173,61 +163,84 @@ function App() {
       setVoiceSamples(data.samples ?? []);
       setInputsDir(data.inputs_dir ?? "");
       setSupportedFormats(data.supported_formats ?? []);
-      // Auto-select first sample if none selected
-      if (!selectedSample && data.samples?.length > 0) {
-        setSelectedSample(data.samples[0].path);
+      // Keep the user's choice, otherwise default to the first sample. The
+      // functional update reads the current value without making this
+      // callback depend on it (it used to be rebuilt on every selection).
+      if (data.samples?.length > 0) {
+        const first = data.samples[0].path;
+        setSelectedSample((current) => current || first);
       }
     } catch (err) {
       setSamplesError(err.message || "Could not load voice samples");
     } finally {
       setSamplesLoading(false);
     }
-  }, [selectedSample]);
-
-  /* ---------- multilingual catalogue search ------------------------- */
-  const searchLanguages = useCallback(async (query) => {
-    try {
-      const res = await fetch(
-        `${API_BASE}/api/v1/audio/languages?q=${encodeURIComponent(query)}&limit=40`
-      );
-      if (!res.ok) throw new Error(`Language search failed: ${res.status}`);
-      const data = await res.json();
-      setLanguageResults(data.languages ?? []);
-      setLanguageTotal(data.total ?? 0);
-    } catch (err) {
-      setError(err.message || "Could not search languages");
-    }
   }, []);
+
+  /* ---------- requests that follow state ----------------------------- */
+  /* Each effect below owns an `ignore` flag that its cleanup sets. If the
+     input changes again before a response arrives, the stale response is
+     dropped instead of overwriting the newer one: without it, a slow reply
+     for the previous language could land last and show the wrong one. */
+
+  useEffect(() => {
+    let ignore = false;
+    fetch(`${API_BASE}/health`)
+      .then((res) => {
+        if (!res.ok) throw new Error("Backend unavailable");
+        return res.json();
+      })
+      .then((data) => {
+        if (!ignore) setBackendStatus(`${data.status} (${data.queueBackend})`);
+      })
+      .catch((err) => {
+        if (ignore) return;
+        setBackendStatus("Offline");
+        setError(err.message || "Unable to reach backend");
+      });
+    return () => { ignore = true; };
+  }, []);
+
+  /* Debounced catalogue search: 1077 languages, one request per pause. The
+     first run, with an empty query, loads the initial list. */
+  useEffect(() => {
+    let ignore = false;
+    const timer = window.setTimeout(() => {
+      fetch(`${API_BASE}/api/v1/audio/languages?q=${encodeURIComponent(languageQuery)}&limit=40`)
+        .then((res) => {
+          if (!res.ok) throw new Error(`Language search failed: ${res.status}`);
+          return res.json();
+        })
+        .then((data) => {
+          if (ignore) return;
+          setLanguageResults(data.languages ?? []);
+          setLanguageTotal(data.total ?? 0);
+        })
+        .catch((err) => {
+          if (!ignore) setError(err.message || "Could not search languages");
+        });
+    }, 250);
+    return () => {
+      ignore = true;
+      window.clearTimeout(timer);
+    };
+  }, [languageQuery]);
 
   /* Resolve whichever code is selected, so the UI can say which backend
      will actually speak it before the user hits Generate. */
-  const describeLanguage = useCallback(async (code) => {
-    if (!code) return;
-    try {
-      const res = await fetch(
-        `${API_BASE}/api/v1/audio/languages/${encodeURIComponent(code)}`
-      );
-      if (!res.ok) return;
-      setLanguageInfo(await res.json());
-    } catch {
-      setLanguageInfo(null);
-    }
-  }, []);
-
-  useEffect(() => { checkBackend(); }, []);
-  useEffect(() => { searchLanguages(""); }, [searchLanguages]);
-  useEffect(() => { describeLanguage(language); }, [language, describeLanguage]);
-
-  /* Debounce the catalogue search: 1077 languages, one request per pause. */
   useEffect(() => {
-    const timer = window.setTimeout(() => searchLanguages(languageQuery), 250);
-    return () => window.clearTimeout(timer);
-  }, [languageQuery, searchLanguages]);
-
-  // Fetch samples when mode switches to clone
-  useEffect(() => {
-    if (mode === "clone") fetchSamples();
-  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!language) return undefined;
+    let ignore = false;
+    fetch(`${API_BASE}/api/v1/audio/languages/${encodeURIComponent(language)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!ignore && data) setLanguageInfo(data);
+      })
+      .catch(() => {
+        if (!ignore) setLanguageInfo(null);
+      });
+    return () => { ignore = true; };
+  }, [language]);
 
   /* ---------- shared reader for a synthesis response ---------------- */
   const applySynthesisPayload = useCallback((payload) => {
@@ -279,7 +292,9 @@ function App() {
     }, 1500);
 
     return () => window.clearTimeout(timer);
-  }, [taskId, taskStatus]);
+    // applySynthesisPayload is a stable useCallback; listing it is free and
+    // keeps the effect honest if that ever changes.
+  }, [taskId, taskStatus, applySynthesisPayload]);
 
   /* ---------- synthesis submit -------------------------------------- */
   const handleSynthesize = async (event) => {
@@ -379,7 +394,14 @@ function App() {
             {/* Mode row */}
             <label>
               Synthesis Mode
-              <select id="mode-select" value={mode} onChange={(e) => setMode(e.target.value)}>
+              <select
+                id="mode-select"
+                value={mode}
+                onChange={(e) => {
+                  setMode(e.target.value);
+                  if (e.target.value === "clone") fetchSamples();
+                }}
+              >
                 {Object.entries(MODE_INFO).map(([val, { label }]) => (
                   <option key={val} value={val}>{label}</option>
                 ))}
