@@ -26,7 +26,9 @@ records what was verified live, with the real command and result.
 | T2.3 | Verified on CPU — waiting on M-04 (peak VRAM on the host GPU, and a look at the video) | (this commit) |
 | T2.6 | Done — 4 usable engines; the 5th (XTTS-v2) waits on M-03 | 6b94d3c, b55e538, f5d85bc |
 | T2.4 | Done | (this commit) |
-| T2.5 | Done (visual check of the video still in M-04) | (this commit) |
+| T2.5 | Done (visual check of the video still in M-04) | 13f696c |
+| T3.1 | Done | (this commit) |
+| T3.2 | Next | |
 
 ## Log
 
@@ -598,3 +600,26 @@ Verified, real servers and weights, CPU:
   ("Expected substring: openvoice-v2 / Received: Model Used—"); restored → passes.
 
 Not done: XTTS-v2 through the UI (M-03); someone watching the video (M-04).
+
+### 2026-10-08 — T3.1 background replacement
+
+Optional `background` on the frozen contract (D-36), `render_engine.apply_background`
+(selfie segmenter, composited once on the source photo), `shared_segmenter()`,
+URL resolver generalised so a background image obeys the same outputs/inputs
+rules as audio, `--background` on `render_avatar.py`, a colour picker in the
+avatar panel, `crossOrigin` on the video so the page can read its pixels.
+
+Verified:
+- `scripts/check.sh` → ruff clean, pyrefly 0 errors, 547 tests OK (12 new).
+- planted: preflight's segmenter check removed → `test_missing_segmenter_refuses…` fails; restored.
+- live, real segmenter + real speech, CPU: `render_avatar.py --face demo
+  --background "#0b3d91"` → 512×512, 61 frames, 2.6 s, `background = color #0b3d91`,
+  no warnings; `--background inputs/bg_test_gradient.png` (640×360, cover-fit) →
+  `image bg_test_gradient.png`, 0.8 s. A frame from each, looked at: clean
+  hair/ear/shoulder edge, no halo of the old background, subject unchanged.
+- E2E `background.spec.js` → passed (14.2 s): UI toggle + colour → render →
+  both top corners of the decoded `<video>` within 60 (sum of channel diffs) of #00c800.
+  Planted: spread removed from the payload → fails ("background: color #00c800" not found); restored.
+
+Not measured: segmenter quality on photos with busy backgrounds or hair against
+a similar colour — only the synthetic-looking `demo` portrait was tried.

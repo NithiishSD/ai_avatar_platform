@@ -17,7 +17,8 @@ import provenance
 import render_engine
 import video_io
 from avatar_store import AvatarConsentError, AvatarNotFound, AvatarStore
-from contracts import AvatarRenderJob, RenderQuality
+from contracts import AvatarRenderJob, BackgroundSpec, RenderQuality
+from face_engine import BackgroundSegmenter
 from render_engine import RenderError
 from vision_fixtures import FakeFaceEngine, gradient_image
 
@@ -285,6 +286,117 @@ class RenderJobTests(RenderCase):
         result = render_engine.render_job(job, store=self.store)
         info = video_io.probe(result.output_path)
         self.assertTrue(info.has_video and info.has_audio)
+
+
+class FakeSegmenter(BackgroundSegmenter):
+    """Real compositing code, with the model replaced by a centred rectangle."""
+
+    def __init__(self, person_fraction: float = 0.5, available: bool = True):
+        super().__init__(model_path=Path("/nonexistent.tflite"))
+        self.person_fraction = person_fraction
+        self._available = available
+        self.calls = 0
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    def foreground_mask(self, image):
+        self.calls += 1
+        h, w = image.shape[:2]
+        mask = np.zeros((h, w), dtype=np.float32)
+        mh, mw = int(h * self.person_fraction), int(w * self.person_fraction)
+        top, left = (h - mh) // 2, (w - mw) // 2
+        mask[top : top + mh, left : left + mw] = 1.0
+        return mask
+
+
+class BackgroundSpecTests(unittest.TestCase):
+    def test_needs_exactly_one_source(self):
+        for payload in ({}, {"color": "#112233", "imageUrl": "file:///x.png"}):
+            with self.assertRaises(ValueError):
+                BackgroundSpec.model_validate(payload)
+
+    def test_colour_must_be_six_digit_hex(self):
+        for bad in ("red", "#fff", "#12345g", "112233"):
+            with self.assertRaises(ValueError):
+                BackgroundSpec.model_validate({"color": bad})
+        self.assertEqual(BackgroundSpec.model_validate({"color": "#0a0B0c"}).color, "#0a0B0c")
+
+    def test_cover_fit_fills_without_stretching(self):
+        wide = np.zeros((100, 400, 3), dtype=np.uint8)
+        wide[:, 150:250] = 255  # a white band in the middle
+        fitted = render_engine._cover_fit(wide, 200, 200)
+        self.assertEqual(fitted.shape, (200, 200, 3))
+        # Scaled by 2, the middle 100 px of the source (the band) spans the
+        # whole 200 px crop; a stretch would have shown black either side.
+        self.assertGreater(fitted.mean(), 250)
+
+
+class BackgroundRenderTests(RenderCase):
+    def setUp(self):
+        super().setUp()
+        self.segmenter = FakeSegmenter()
+        patcher = mock.patch("render_engine.shared_segmenter", return_value=self.segmenter)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_colour_replaces_the_background_but_keeps_the_subject(self):
+        photo = self.store.load_image("demo")
+        out, warnings = render_engine.apply_background(photo, BackgroundSpec(color="#ff0000"))
+        self.assertEqual(warnings, [])
+        h, w = photo.shape[:2]
+        self.assertEqual(tuple(out[2, 2]), (255, 0, 0))               # corner: new colour
+        self.assertTrue(np.array_equal(out[h // 2, w // 2], photo[h // 2, w // 2]))  # centre: untouched
+
+    def test_image_background_is_read_from_outputs_only(self):
+        import cv2
+
+        cv2.imwrite(str(self.outputs / "bg.png"), np.full((64, 128, 3), (0, 0, 255), dtype=np.uint8))  # BGR red
+        spec = BackgroundSpec(imageUrl="http://localhost/outputs/bg.png")
+        out, _ = render_engine.apply_background(self.store.load_image("demo"), spec)
+        self.assertEqual(tuple(out[2, 2]), (255, 0, 0))
+        for url in ("file:///etc/passwd", "http://localhost/other/bg.png"):
+            with self.assertRaises(RenderError):
+                render_engine._check_background(BackgroundSpec(imageUrl=url))
+
+    def test_undecodable_background_image_is_an_error(self):
+        (self.outputs / "bg.png").write_bytes(b"not an image")
+        with self.assertRaises(RenderError) as ctx:
+            render_engine.apply_background(
+                self.store.load_image("demo"), BackgroundSpec(imageUrl="http://localhost/outputs/bg.png")
+            )
+        self.assertIn("decoded", str(ctx.exception))
+
+    def test_missing_segmenter_refuses_instead_of_keeping_the_old_background(self):
+        self.segmenter._available = False
+        self.wav(1.0)
+        with self.assertRaises(RenderError) as ctx:
+            render_engine.preflight(self.job(background={"color": "#101820"}), store=self.store)
+        self.assertIn("fetch_vision_models", str(ctx.exception))
+
+    def test_a_missed_subject_is_reported(self):
+        self.segmenter.person_fraction = 0.1  # 1% of the frame
+        _, warnings = render_engine.apply_background(self.store.load_image("demo"), BackgroundSpec(color="#000000"))
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("almost no person", warnings[0])
+
+    @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg / ffprobe not installed")
+    def test_rendered_video_carries_the_new_background_and_says_so(self):
+        self.wav(1.0)
+        result = render_engine.render_job(
+            self.job(background={"color": "#00c800"}), store=self.store, label=False
+        )
+        self.assertEqual(result.background, "color #00c800")
+        frame = next(video_io.read_frames(result.output_path)).astype(int)
+        self.assertLess(np.abs(frame[4, 4] - np.array([0, 200, 0])).max(), 30)  # H.264 is lossy
+
+    @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg / ffprobe not installed")
+    def test_job_without_background_never_touches_the_segmenter(self):
+        self.wav(1.0)
+        result = render_engine.render_job(self.job(), store=self.store, label=False)
+        self.assertIsNone(result.background)
+        self.assertEqual(self.segmenter.calls, 0)
 
 
 if __name__ == "__main__":

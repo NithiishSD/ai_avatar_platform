@@ -157,6 +157,29 @@ class EmotionVector(BaseModel):
     excitement: Optional[float] = Field(default=None, ge=0, le=1)
 
 
+class BackgroundSpec(BaseModel):
+    """
+    Optional render setting: replace the photo's background (R-16).
+
+    Exactly one of ``color`` (``#rrggbb``) or ``imageUrl`` (a file the worker is
+    allowed to read: this API's own ``/outputs/`` URL or a ``file://`` path
+    inside ``outputs/`` / ``inputs/``). It is an *optional field added to the
+    frozen contract*, which is the only way the contract may grow: a job
+    without it renders exactly as before.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    color: Optional[str] = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    image_url: Optional[str] = Field(default=None, alias="imageUrl", min_length=1)
+
+    @model_validator(mode="after")
+    def exactly_one_source(self):
+        if (self.color is None) == (self.image_url is None):
+            raise ValueError("background needs exactly one of 'color' or 'imageUrl'")
+        return self
+
+
 class AvatarRenderJob(BaseModel):
     """
     **The frozen contract.** Everything the renderer needs to make one video.
@@ -192,6 +215,8 @@ class AvatarRenderJob(BaseModel):
     emotion_vector: EmotionVector = Field(alias="emotionVector")
     render_quality: RenderQuality = Field(alias="renderQuality")
     target_fps: int = Field(alias="targetFps", ge=1, le=120)
+    # Optional extension (T3.1). Absent = keep the photo's own background.
+    background: Optional[BackgroundSpec] = None
 
     # A field_validator runs on one field. The @classmethod is required by
     # Pydantic v2 (the validator belongs to the class, not an instance - it runs

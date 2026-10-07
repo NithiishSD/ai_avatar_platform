@@ -33,6 +33,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 
 
+def background_spec(value: str) -> dict:
+    """``--background`` is a colour when it looks like one, otherwise a file."""
+    if value.startswith("#"):
+        return {"color": value}
+    return {"imageUrl": Path(value).resolve().as_uri()}
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -53,6 +60,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("--no-label", action="store_true", help="do not burn in the AI-generated label")
     parser.add_argument("--metric", action="store_true", help="score lip sync with SyncNet (LSE-C / LSE-D)")
+    parser.add_argument(
+        "--background", default=None, help="replace the photo's background: '#rrggbb' or an image under outputs/ or inputs/"
+    )
     parser.add_argument("--json", action="store_true", help="print the result as JSON")
     args = parser.parse_args(argv)
 
@@ -119,6 +129,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "emotionVector": emotion_vector,
                 "renderQuality": args.quality,
                 "targetFps": args.fps,
+                **({"background": background_spec(args.background)} if args.background else {}),
             }
         )
         result = render_engine.render_job(job, engine=args.engine, label=not args.no_label)

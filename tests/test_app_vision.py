@@ -308,6 +308,20 @@ class RenderRouteTests(VisionApiCase):
         self.assertIn("--accept-licence wav2lip", response.json()["detail"])
         self.assertEqual(self.ran, [])
 
+    def test_background_without_segmenter_is_refused_with_the_fetch_command(self):
+        with mock.patch("render_engine.shared_segmenter", return_value=mock.Mock(available=False)):
+            response = self.client.post(
+                "/api/v1/avatar/render-job", json=self.payload(background={"color": "#101820"})
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("fetch_vision_models", response.json()["detail"])
+        self.assertEqual(self.ran, [])
+
+    def test_malformed_background_is_422(self):
+        for bad in ({}, {"color": "blue"}, {"color": "#101820", "imageUrl": "file:///x.png"}):
+            response = self.client.post("/api/v1/avatar/render-job", json=self.payload(background=bad))
+            self.assertEqual(response.status_code, 422, bad)
+
     def test_failed_render_reports_its_error(self):
         def broken(job, engine, report):
             raise RuntimeError("ffmpeg was not found on PATH")

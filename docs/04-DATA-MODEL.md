@@ -13,6 +13,7 @@
 | `emotionVector` | `EmotionVector` | `happy`, `neutral` 0–1; `eyeblinkRate` 0–10; six optional emotions 0–1 |
 | `renderQuality` | enum | `PREVIEW` or `1080P_HQ` |
 | `targetFps` | int | 1–120 |
+| `background` (optional) | `{color: "#rrggbb"}` or `{imageUrl}` | exactly one; imageUrl follows the same rules as `audioUrl` (T3.1) |
 
 `PhonemeTimestamp`: `phoneme`, `viseme` (non-empty), `startMs` ≥ 0, `endMs` > `startMs`.
 Unknown keys are rejected (`extra="forbid"`). Extensions must be optional fields.

@@ -920,6 +920,18 @@ FACE_ENGINE_LOCK = threading.RLock()
 _shared_engine: Optional[FaceMeshEngine] = None
 
 
+_shared_segmenter: Optional["BackgroundSegmenter"] = None
+
+
+def shared_segmenter() -> "BackgroundSegmenter":
+    """The process-wide selfie segmenter. Hold ``FACE_ENGINE_LOCK`` to use it."""
+    global _shared_segmenter
+    with FACE_ENGINE_LOCK:
+        if _shared_segmenter is None:
+            _shared_segmenter = BackgroundSegmenter()
+        return _shared_segmenter
+
+
 def shared_face_engine() -> FaceMeshEngine:
     """The process-wide ``FaceMeshEngine``. Hold ``FACE_ENGINE_LOCK`` to use it."""
     global _shared_engine

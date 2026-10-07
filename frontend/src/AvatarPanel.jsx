@@ -99,6 +99,10 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
   const [showMesh, setShowMesh] = useState(true);
   const [engine, setEngine] = useState("blendshape");
   const [renderQuality, setRenderQuality] = useState("PREVIEW");
+  // Background replacement: off, or one flat colour (the API also accepts an
+  // image under outputs/ - used by scripts, not offered here).
+  const [replaceBackground, setReplaceBackground] = useState(false);
+  const [backgroundColor, setBackgroundColor] = useState("#0b3d91");
   const [job, setJob] = useState(null);
   const [score, setScore] = useState(null);
   const [scoring, setScoring] = useState(false);
@@ -194,6 +198,7 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
       emotionVector,
       renderQuality,
       targetFps: 25,
+      ...(replaceBackground ? { background: { color: backgroundColor } } : {}),
     };
     try {
       const res = await fetch(
@@ -354,6 +359,16 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
             </select>
           </label>
         </div>
+        <div style={{ marginTop: "10px", display: "flex", alignItems: "center", gap: "10px" }}>
+          <label style={small}>
+            <input id="background-toggle" type="checkbox" checked={replaceBackground}
+              onChange={(e) => setReplaceBackground(e.target.checked)} /> replace background
+          </label>
+          {replaceBackground && (
+            <input id="background-color" type="color" aria-label="background colour" value={backgroundColor}
+              onChange={(e) => setBackgroundColor(e.target.value)} />
+          )}
+        </div>
         <button type="button" id="render-video-btn" style={{ marginTop: "10px", width: "100%" }}
           disabled={!canRender || rendering} onClick={handleRender}>
           {rendering ? "Rendering…" : "Render Avatar Video"}
@@ -389,13 +404,14 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
             {job.status === "FAILED" && <div className="alert error" style={{ marginTop: "8px" }}>{job.error}</div>}
             {job.status === "COMPLETED" && job.videoUrl && (
               <>
-                <video id="avatar-video" controls src={`${apiBase}${job.videoUrl}?t=${job.jobId}`}
+                <video id="avatar-video" controls crossOrigin="anonymous" src={`${apiBase}${job.videoUrl}?t=${job.jobId}`}
                   style={{ width: "100%", borderRadius: "8px", marginTop: "8px", background: "#000" }} />
                 {result && (
                   <div style={{ ...small, marginTop: "6px" }}>
                     {result.frameCount} frames · {result.width}×{result.height} @ {result.fps} fps ·
                     rendered in {result.renderSeconds}s ({result.realtimeFactor}× real time)
                     {result.peakVramMb != null ? ` · peak VRAM ${result.peakVramMb} MiB` : ""}
+                    {result.background ? ` · background: ${result.background}` : ""}
                   </div>
                 )}
                 {result?.warnings?.map((w) => (

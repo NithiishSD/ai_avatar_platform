@@ -38,7 +38,7 @@ import numpy as np
 import gpu_utils
 import video_io
 from avatar_store import AvatarStore
-from contracts import AvatarRenderJob, RenderQuality
+from contracts import AvatarRenderJob, BackgroundSpec, RenderQuality
 from face_animation import (
     AnimationTrack,
     build_animation,
@@ -46,7 +46,7 @@ from face_animation import (
     seed_from_job_id,
     speech_energy_envelope,
 )
-from face_engine import FACE_ENGINE_LOCK, FaceAnalysis, shared_face_engine
+from face_engine import FACE_ENGINE_LOCK, FaceAnalysis, shared_face_engine, shared_segmenter
 from face_warp import PortraitAnimator
 
 logger = logging.getLogger(__name__)
@@ -94,8 +94,18 @@ def validate_engine(engine: Optional[str]) -> str:
 
 
 def resolve_audio_url(audio_url: str) -> Path:
+    """Map the job's ``audioUrl`` to a file inside ``outputs/`` or ``inputs/``."""
+    return _resolve_media_url(
+        audio_url,
+        field="audioUrl",
+        noun="audio",
+        hint="Use the /outputs/ URL returned by POST /api/v1/audio/synthesize",
+    )
+
+
+def _resolve_media_url(url: str, field: str, noun: str, hint: str) -> Path:
     """
-    Map the job's ``audioUrl`` to a file inside ``outputs/`` or ``inputs/``.
+    Map a job URL to a file inside ``outputs/`` or ``inputs/``.
 
     Accepted: ``file://`` URLs, and ``http(s)`` URLs whose path is under
     ``/outputs/`` -- which is how this API serves its own generated audio, so
@@ -103,7 +113,7 @@ def resolve_audio_url(audio_url: str) -> Path:
     (``s3://``, another host's path) is refused: the worker does not fetch
     remote media, and must not be talked into reading arbitrary local files.
     """
-    parsed = urlparse(audio_url)
+    parsed = urlparse(url)
     path = unquote(parsed.path or "")
     if parsed.scheme == "file":
         candidate = Path(path)
@@ -111,22 +121,18 @@ def resolve_audio_url(audio_url: str) -> Path:
         candidate = OUTPUTS_DIR / path[len("/outputs/"):]
     else:
         raise RenderError(
-            f"audioUrl {audio_url!r} is not renderable here. Use the /outputs/ URL "
-            "returned by POST /api/v1/audio/synthesize, or a file:// URL to a file "
+            f"{field} {url!r} is not renderable here. {hint}, or a file:// URL to a file "
             "in the project's outputs/ or inputs/ folder."
         )
     try:
         resolved = candidate.resolve()
     except (ValueError, OSError) as err:  # e.g. an embedded NUL byte
-        raise RenderError(f"audioUrl is not a usable path: {err}") from err
+        raise RenderError(f"{field} is not a usable path: {err}") from err
     roots = (OUTPUTS_DIR.resolve(), INPUTS_DIR.resolve())
     if not any(root in resolved.parents for root in roots):
-        raise RenderError("audioUrl must point inside the project's outputs/ or inputs/ folder")
+        raise RenderError(f"{field} must point inside the project's outputs/ or inputs/ folder")
     if not resolved.is_file():
-        raise RenderError(
-            f"audio file not found: {resolved.name}. Synthesize it first "
-            "(POST /api/v1/audio/synthesize) and pass the URL it returns."
-        )
+        raise RenderError(f"{noun} file not found: {resolved.name}. {hint} that exists.")
     return resolved
 
 
@@ -170,6 +176,7 @@ class RenderResult:
     blink_count: int = 0
     unknown_visemes: Dict[str, int] = field(default_factory=dict)
     peak_vram_mb: Optional[int] = None
+    background: Optional[str] = None
     warnings: List[str] = field(default_factory=list)
 
     @property
@@ -196,6 +203,7 @@ class RenderResult:
             "blinkCount": self.blink_count,
             "unknownVisemes": self.unknown_visemes,
             "peakVramMb": self.peak_vram_mb,
+            "background": self.background,
             "warnings": self.warnings,
         }
 
@@ -210,6 +218,8 @@ def preflight(job: AvatarRenderJob, engine: Optional[str] = None, store: Optiona
     name = validate_engine(engine)
     (store or AvatarStore()).require_usable(job.avatar_id)
     audio = resolve_audio_url(job.audio_url)
+    if job.background is not None:
+        _check_background(job.background)
     if name == ENGINE_WAV2LIP:
         from wav2lip_engine import shared_wav2lip_engine
 
@@ -222,6 +232,89 @@ def preflight(job: AvatarRenderJob, engine: Optional[str] = None, store: Optiona
                 "--only wav2lip --accept-licence wav2lip. Or render with engine 'blendshape'."
             )
     return audio
+
+
+def _check_background(spec: BackgroundSpec) -> None:
+    """Refuse a background request that cannot be honoured, before queueing."""
+    if not shared_segmenter().available:
+        from model_registry import VISION_FETCH_COMMAND
+
+        raise RenderError(
+            "a background was requested but the selfie segmenter model is missing, and the "
+            f"render would silently keep the old background. Fetch it with: {VISION_FETCH_COMMAND}"
+        )
+    if spec.image_url is not None:
+        _background_image_path(spec)
+
+
+def _background_image_path(spec: BackgroundSpec) -> Path:
+    return _resolve_media_url(
+        spec.image_url or "",
+        field="background.imageUrl",
+        noun="background image",
+        hint="Use the /outputs/ URL of an image",
+    )
+
+
+def _cover_fit(image: np.ndarray, width: int, height: int) -> np.ndarray:
+    """Scale ``image`` to fill width x height, cropping the overflow (no stretching)."""
+    import cv2
+
+    scale = max(width / image.shape[1], height / image.shape[0])
+    resized = cv2.resize(
+        image,
+        (max(width, round(image.shape[1] * scale)), max(height, round(image.shape[0] * scale))),
+        interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR,
+    )
+    top = (resized.shape[0] - height) // 2
+    left = (resized.shape[1] - width) // 2
+    return np.ascontiguousarray(resized[top : top + height, left : left + width])
+
+
+# A person who fills less than this fraction of the frame means the segmenter
+# probably missed them; the new background would then replace the subject too.
+MIN_FOREGROUND_FRACTION = 0.03
+
+
+def apply_background(image: np.ndarray, spec: BackgroundSpec) -> Tuple[np.ndarray, List[str]]:
+    """
+    Composite the photo's subject over the requested background.
+
+    Done once on the source photo, before the face is analysed and warped,
+    rather than on every frame: the warp moves pixels only near the eyes,
+    brows and mouth, so a background baked into the photo stays still, costs
+    nothing per frame, and no pixel of the old background can be dragged in.
+    """
+    background: Tuple[int, int, int] | np.ndarray
+    if spec.color is not None:
+        background = (int(spec.color[1:3], 16), int(spec.color[3:5], 16), int(spec.color[5:7], 16))
+    else:
+        import cv2
+
+        path = _background_image_path(spec)
+        loaded = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if loaded is None:
+            raise RenderError(f"background image {path.name} could not be decoded as an image")
+        background = _cover_fit(cv2.cvtColor(loaded, cv2.COLOR_BGR2RGB), image.shape[1], image.shape[0])
+
+    warnings: List[str] = []
+    with FACE_ENGINE_LOCK:
+        segmenter = shared_segmenter()
+        mask = segmenter.foreground_mask(image)
+        if float((mask > 0.5).mean()) < MIN_FOREGROUND_FRACTION:
+            warnings.append(
+                "the segmenter found almost no person in this photo, so the background "
+                "replacement may have covered the subject"
+            )
+        composited = segmenter.replace_background(image, background)
+    return composited, warnings
+
+
+def _describe_background(spec: Optional[BackgroundSpec]) -> Optional[str]:
+    """What the result reports about the background, so a replaced one is never silent."""
+    if spec is None:
+        return None
+    return f"color {spec.color}" if spec.color else f"image {Path(spec.image_url or '').name}"
 
 
 def _stamp_label(frame: np.ndarray) -> np.ndarray:
@@ -268,6 +361,10 @@ def render_job(
     width, height = output_size(image.shape[1], image.shape[0], job.render_quality)
     if (width, height) != (image.shape[1], image.shape[0]):
         image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
+
+    if job.background is not None:
+        image, background_warnings = apply_background(image, job.background)
+        warnings.extend(background_warnings)
 
     # Analysed at output size, so the rig's landmarks are in output pixels.
     with FACE_ENGINE_LOCK:
@@ -369,6 +466,7 @@ def render_job(
         blink_count=len(track.blink_times),
         unknown_visemes=track.unknown_visemes,
         peak_vram_mb=peak_vram,
+        background=_describe_background(job.background),
         warnings=warnings,
     )
     logger.info(
