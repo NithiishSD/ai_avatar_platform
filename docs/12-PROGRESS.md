@@ -29,6 +29,7 @@ records what was verified live, with the real command and result.
 | T2.5 | Done (visual check of the video still in M-04) | 13f696c |
 | T3.1 | Done | 63367d0 |
 | T3.2 | Done | (this commit) |
+| T3.5 | Done | (this commit) |
 | T3.3 | Next | |
 
 ## Log
@@ -647,3 +648,22 @@ Verified:
 
 Not done: the generated face `gen-live` is left in the local `inputs/faces/`
 (gitignored); delete with `scripts/make_avatar.py --delete gen-live` if unwanted.
+
+### 2026-10-08 — T3.5 temporal jitter metric
+
+`backend/jitter_metric.py` (D-38) and `render_avatar.py --jitter`.
+
+Verified:
+- `scripts/check.sh` → ruff clean, pyrefly 0 errors, 564 tests OK (8 new in `test_jitter_metric.py`). pyrefly first caught a real typing slip (tuple assigned to an array-typed variable), fixed.
+- live, real MediaPipe on a real render: `demo`, blendshape, 3 s → mean **0.278%**,
+  p95 0.758%, max 0.963% — **N-09 met** (< 2%), as an upper bound.
+- negative control through the real detector: the still `demo` photo → 0.0%;
+  the same photo shifted 5 px on alternate frames → **3.59%**, target missed. So the
+  metric does respond to shake.
+
+Not measured: Wav2Lip and the generated face (`gen-live`) — only the blendshape `demo`
+render. The Wav2Lip result matters more (it repaints the mouth region); run
+`render_avatar.py --engine wav2lip --jitter` to add it.
+
+Download check (asked 8 Oct): XTTS-v2 is still incomplete — `model.pth` 1.3 GB,
+no `config.json`, no writes since 30 Sep. It needs the owner's CPML acceptance (M-03).

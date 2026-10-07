@@ -63,6 +63,6 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | N-06 | T6.6 | gap |
 | N-07 | T4.4 | gap |
 | N-08 | T6.4 | gap |
-| N-09 | T3.5 | gap |
+| N-09 | 8 Oct, `jitter_metric.py` (static anchor landmarks per frame, % of inter-ocular distance): `demo` blendshape render mean **0.278%**, p95 0.758%, max 0.963% (target < 2%); negative control through the real detector: still photo 0.0%, 5 px shake 3.59%. Unit: `test_jitter_metric.py` | measured — met (upper bound, see method) |
 | N-10 | not measurable here (no CUDA in sandbox); host measurement requested (M-04) | gap |
 | N-11 | needs a deployment (Q-07) | gap |

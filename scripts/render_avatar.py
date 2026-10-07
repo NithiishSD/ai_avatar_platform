@@ -60,6 +60,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("--no-label", action="store_true", help="do not burn in the AI-generated label")
     parser.add_argument("--metric", action="store_true", help="score lip sync with SyncNet (LSE-C / LSE-D)")
+    parser.add_argument("--jitter", action="store_true", help="measure frame-to-frame landmark jitter (N-09)")
     parser.add_argument(
         "--background", default=None, help="replace the photo's background: '#rrggbb' or an image under outputs/ or inputs/"
     )
@@ -157,6 +158,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         except Exception as err:  # noqa: BLE001
             payload["lipSync"] = {"error": f"{type(err).__name__}: {err}"}
 
+    if args.jitter:
+        import jitter_metric
+
+        try:
+            payload["jitter"] = jitter_metric.score_video(result.output_path).to_dict()
+        except Exception as err:  # noqa: BLE001
+            payload["jitter"] = {"error": f"{type(err).__name__}: {err}"}
+
     if args.json:
         print(json.dumps(payload, indent=2), file=real_stdout)
         return 0
@@ -187,6 +196,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(
                 f"Lip sync      : LSE-C {sync['lseC']}  LSE-D {sync['lseD']}  "
                 f"offset {sync['offsetFrames']} frames ({sync['method']})"
+            )
+    jitter = payload.get("jitter")
+    if jitter:
+        if "error" in jitter:
+            print(f"Jitter        : not measured - {jitter['error']}")
+        else:
+            verdict = "meets" if jitter["meetsTarget"] else "MISSES"
+            print(
+                f"Jitter        : mean {jitter['meanPct']}%  p95 {jitter['p95Pct']}%  max {jitter['maxPct']}%  "
+                f"({verdict} the < {jitter['targetPct']}% target)"
             )
     print("=" * 60)
     return 0
