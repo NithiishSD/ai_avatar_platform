@@ -15,11 +15,20 @@ scipy>=1.11.0,<1.14.0
 numba>=0.58.0,<0.60.0
 
 # FastAPI & Web API Framework
-fastapi>=0.110.0,<0.116.0
+# FastAPI >=0.142 brings Starlette 1.x, which fixes the advisories pip-audit
+# lists against Starlette 0.46 (T7.3). The 122 tests and the E2E suite pass on it.
+fastapi>=0.142.0
+starlette>=1.3.1
 uvicorn[standard]>=0.28.0,<0.35.0
 pydantic>=2.6.0,<2.11.0
 python-multipart>=0.0.9
 httpx>=0.27.0
+# Transitive packages with advisories, raised past their fixed versions (T7.3).
+# multidict stays below 7 because aiohttp requires it.
+pyjwt>=2.15.0
+urllib3>=2.8.0
+werkzeug>=3.1.9
+multidict>=6.9.1,<7
 
 # Task Queue & Storage Infrastructure
 celery>=5.3.6,<5.5.0
@@ -93,7 +102,9 @@ speechbrain>=1.0.0
 # Milestone 2: Lip Sync & Computer Vision Pipeline
 opencv-python-headless>=4.8.0,<5.0.0
 mediapipe>=0.10.9
-pillow>=10.0.0,<11.0.0
+# Pillow decodes uploaded photos, so it is kept at a release with the decoder
+# fixes (33 advisories against 10.4). MediaPipe and OpenCV work with 12.x.
+pillow>=12.3.0
 tqdm>=4.66.0
 ffmpeg-python>=0.2.0
 

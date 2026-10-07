@@ -38,6 +38,7 @@ from contracts import (
 )
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -359,7 +360,9 @@ async def register_avatar_face(
     """
     data = await _read_upload(file)
     try:
-        record, report = faces.register(
+        # Quality-gating a photo runs landmark detection: off the event loop.
+        record, report = await run_in_threadpool(
+            faces.register,
             data,
             avatar_id=avatar_id,
             source=provenance.HUMAN,
@@ -516,16 +519,25 @@ async def analyze_face(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="send exactly one of: an image 'file', or an 'avatarId'",
         )
-    try:
-        if file is not None:
-            image, notices = avatar_store.decode_image(await _read_upload(file))
+    # Only the upload read is awaited here. Decoding and landmark detection are
+    # CPU-bound and take seconds on a cold model; run directly in this ``async
+    # def`` they froze the whole event loop, so every other request (even a
+    # trivial language lookup) waited behind them. They run on a worker thread.
+    data = await _read_upload(file) if file is not None else None
+
+    def analyse():
+        if data is not None:
+            image, notices = avatar_store.decode_image(data)
         else:
             # The exactly-one-of check above guarantees this; the assert states
             # it for the type checker, which cannot follow an XOR.
             assert avatar_id is not None
             image, notices = avatar_store.decode_image(_avatar_or_http(avatar_id).path)
         with FACE_ENGINE_LOCK:
-            report = shared_face_engine().check_quality(image)
+            return shared_face_engine().check_quality(image), notices
+
+    try:
+        report, notices = await run_in_threadpool(analyse)
     except avatar_store.AvatarError as err:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
     except FaceEngineUnavailable as err:

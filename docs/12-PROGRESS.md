@@ -31,6 +31,7 @@ records what was verified live, with the real command and result.
 | T3.2 | Done | (this commit) |
 | T3.5 | Done | ae92ce9 |
 | T6.2 | Done | (this commit) |
+| T7.3 | Done (4 documented exceptions, D-41) | (this commit) |
 | T7.5 | Done (two HTML `placeholder` attributes remain by decision D-40) | (this commit) |
 | T3.3 | Next | |
 
@@ -693,3 +694,29 @@ Verified:
 Not done: uvicorn's own access-log lines are not stamped (D-39). Side effect worth
 knowing: importing the app now installs a log handler on the root logger when none
 exists, so test output shows app log lines.
+
+### 2026-10-08 — T7.3 dependency audit, and two bugs it uncovered
+
+`pip-audit` found 10 vulnerable packages (about 120 advisories). `npm audit --omit=dev` → 0.
+Upgraded what the pins allow (D-41); 4 packages remain as documented exceptions,
+each about loading untrusted model repos, which this code never does (grep-checked).
+After the upgrade: ruff clean, pyrefly 0 errors, 574 tests OK.
+
+Then the E2E suite (the live check for new Starlette/Pillow) failed one spec in 9 of 10 runs,
+and chasing it found two real problems, neither caused by the upgrade:
+1. **Event loop blocked.** `analyze_face` and photo registration are `async def` but ran
+   landmark detection directly on the loop; measured on a real server, a trivial
+   `GET /languages/ace` took **2.2 s** whenever an analysis was running (it should take ms),
+   and on a cold model the stall was long enough to time out specs. Both now use
+   `run_in_threadpool`. New `tests/test_event_loop.py` (shared-loop, so the blocking is
+   visible); **my first version could not fail** (the plant passed) because its clock started
+   after the block, so I rebuilt it around an engine-entered signal; now both plants
+   (analysis and registration back on the loop) fail it, and the real code passes.
+2. **Rate limiter vs. the suite.** `smoke.spec.js` "clone mode loads references" failed only in
+   the full run: with `RATE_LIMIT_RPM=100000` all 10 pass (D-42). Playwright's backend now
+   sets it.
+
+Verified: `npx playwright test` → **10 passed** three times in a row (37 s, 37 s, 35 s)
+after being 9+1 failed three runs in a row before the fix.
+
+Not done: `diffusers`, `transformers`, `accelerate`, `nltk` advisories (D-41).

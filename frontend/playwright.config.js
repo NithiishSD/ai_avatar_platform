@@ -26,7 +26,11 @@ export default defineConfig({
   // still holding a port, the run fails instead of testing stale code.
   webServer: [
     {
-      command: "PYTHONPATH=. ./.conda/bin/python -m uvicorn app:app --port 8000",
+      // The rate limiter (120 requests/minute per client, tested in
+      // tests/test_security.py) is lifted for this run: every spec shares one
+      // client IP and the render/synthesis polling alone uses ~1 request a
+      // second, so a full run otherwise starved the later specs with 429s.
+      command: "RATE_LIMIT_RPM=100000 RATE_LIMIT_BURST=100000 PYTHONPATH=. ./.conda/bin/python -m uvicorn app:app --port 8000",
       cwd: "../backend",
       url: "http://localhost:8000/health",
       // The startup weight audit imports torch; give it time on a cold start.
