@@ -30,7 +30,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-07 | `test_emotion_engine.py` | pass |
 | R-08 | `test_quality_auditor.py` (incl. partial-SQUIM fallback) | pass |
 | R-09 | `test_voice_engine.py` prosody tests | pass |
-| R-10 | `test_face_engine.py`; E2E `smoke.spec.js` (478 landmarks drawn for `demo`); T1.3 pose signs | pass (signs unverified — gap) |
+| R-10 | `test_face_engine.py`; E2E `avatar.spec.js` (mesh drawn inside the face box, measured from canvas pixels); T1.3 pose signs | pass (signs unverified — gap) |
 | R-11 | `test_face_quality.py` | pass |
 | R-12 | `test_render_engine.py`, `test_app_vision.py` | pass |
 | R-13 | `test_render_engine.py` engine selection | pass |
@@ -44,7 +44,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-21 | T6.1 | gap |
 | R-22 | `test_security.py` | pass |
 | R-23 | `test_model_registry.py`, `test_app.py` health | pass |
-| R-24 | E2E `smoke.spec.js` (T0.6), `synthesis.spec.js` (T1.1). Still to come: T1.2, T2.5, T3.4, T4.3 | partial |
+| R-24 | E2E `smoke.spec.js` (T0.6), `synthesis.spec.js` (T1.1), `avatar.spec.js` (T1.2). Still to come: T2.5, T3.4, T4.3 | partial |
 | R-25 | T7.1 | gap |
 | R-26 | T7.2 | gap |
 | R-27 | T6.2 | gap |

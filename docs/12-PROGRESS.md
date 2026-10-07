@@ -16,8 +16,9 @@ records what was verified live, with the real command and result.
 | T0.6 | Done | d108e84 |
 | T0.7 | Done | ebddb99, 8b1a910 |
 | **M0 gate** | **Passed** | |
-| T1.1 | Done | (this commit) |
-| T1.2 | Next | |
+| T1.1 | Done | 94956b9 |
+| T1.2 | Done | (this commit) |
+| T1.3 | Next | |
 
 ## Log
 
@@ -212,3 +213,17 @@ First attempt failed on the selector, not the app: a textarea inside its
 `getByLabel("Text", {exact})` never matches; now by placeholder.
 Can fail: with `_mms_failed = True` planted in `ForcedAligner.__init__`, the
 test fails on `toHaveCount(0)` for the fallback warning (Received: 1); restored.
+
+### 2026-10-07 — T1.2 E2E landmark overlay
+
+`frontend/e2e/avatar.spec.js` reads the canvas pixels (the photo loads with
+`crossOrigin` and the API sends CORS, so the canvas is not tainted): counts mesh
+green `#6ee7b7` and iris pink `#f472b6`, checks the mesh centroid lies inside
+the face box the API reports, and that unchecking "show landmarks" removes it.
+
+Verified, real MediaPipe on `demo`: **1 passed (3.4 s)**. Numbers:
+"478 landmarks · yaw -0.58° · pitch 4.98° · roll 1.21° · 52 blendshapes"
+(30 Sep recorded -0.6 / +5.0 / +1.2 — consistent); 1117 mesh pixels on the
+512×512 canvas, centroid (360, 325); face box x 245–460, y 187–454 → inside.
+Can fail: drawing `ctx.arc(point.x, point.y, …)` without scaling by the image
+size (all dots in the corner) → "Expected > 500, Received 1"; restored.
