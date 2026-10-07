@@ -26,11 +26,11 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-03 | T2.1 live clone | gap |
 | R-04 | T3.3 | gap |
 | R-05 | `test_alignment_engine.py`, `test_alignment_method.py`, `test_alignment_accuracy.py` | pass |
-| R-06 | `test_mms_engine.py`, `test_language_registry.py` | pass |
+| R-06 | `test_mms_engine.py`, `test_language_registry.py`, `test_romanizer.py` | pass |
 | R-07 | `test_emotion_engine.py` | pass |
-| R-08 | `test_quality_auditor.py` | pass |
+| R-08 | `test_quality_auditor.py` (incl. partial-SQUIM fallback) | pass |
 | R-09 | `test_voice_engine.py` prosody tests | pass |
-| R-10 | `test_face_engine.py`; T1.3 pose signs | pass (signs unverified — gap) |
+| R-10 | `test_face_engine.py`; E2E `smoke.spec.js` (478 landmarks drawn for `demo`); T1.3 pose signs | pass (signs unverified — gap) |
 | R-11 | `test_face_quality.py` | pass |
 | R-12 | `test_render_engine.py`, `test_app_vision.py` | pass |
 | R-13 | `test_render_engine.py` engine selection | pass |
@@ -44,7 +44,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-21 | T6.1 | gap |
 | R-22 | `test_security.py` | pass |
 | R-23 | `test_model_registry.py`, `test_app.py` health | pass |
-| R-24 | E2E in T0.6, T1.1, T1.2, T2.5, T3.4, T4.3 | gap |
+| R-24 | E2E `smoke.spec.js`: studio + health, language catalogue, clone references, stale-lookup race, avatar landmarks (T0.6). Still to come: T1.1, T1.2, T2.5, T3.4, T4.3 | partial |
 | R-25 | T7.1 | gap |
 | R-26 | T7.2 | gap |
 | R-27 | T6.2 | gap |

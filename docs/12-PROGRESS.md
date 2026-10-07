@@ -13,8 +13,10 @@ records what was verified live, with the real command and result.
 | T0.3 | Done | 3a603c2 |
 | T0.4 | Done | 9c88e6d |
 | T0.5 | Done (browser-verified in T0.6) | 8b935b2 |
-| T0.6 | Done | (this commit) |
-| T0.7 | Next | |
+| T0.6 | Done | d108e84 |
+| T0.7 | Done | ebddb99, 8b1a910 |
+| **M0 gate** | **Passed** | |
+| T1.1 | Next | |
 
 ## Log
 
@@ -158,3 +160,40 @@ Verified:
   browser check for T0.5.
 - Seen in the backend log during the run: Higgs/Dia "will fall back to another
   model" at startup — that is T1.4's subject.
+
+### 2026-10-07 — T0.7 CI
+
+`.github/workflows/ci.yml`: backend job (CPU torch 2.5.1, pinned requirements,
+`TTS==0.22.0 --no-deps`, dev tools) runs `scripts/check.sh lint|types|test`;
+frontend job runs `npm ci` + `scripts/check.sh frontend`. E2E deliberately not
+in CI: it needs `inputs/` (consent-gated faces and voices). `check.sh` takes
+`PY`/`BIN` from the environment so CI runs the same script. Repo is public, so
+Actions minutes cost nothing.
+
+Run 1 (37631873390, ebddb99): frontend green; backend lint + typecheck green,
+**unit tests failed** — 5 errors, 1 failure:
+- MediaPipe's native lib needs `libEGL.so.1` (not on the runner) → apt
+  `libegl1 libgles2`.
+- `test_real_render_through_the_api` patched the API's avatar store but not
+  `avatar_store.FACES_DIR`, the default root render_engine's own
+  `AvatarStore()` reads. **Locally it had been rendering the real
+  `inputs/faces/demo.png`, not its fixture.** Reproduced by moving
+  `inputs/faces` aside (same AvatarNotFound), fixed by patching FACES_DIR, then
+  25/25 vision API tests pass without the real faces.
+
+My T0.7 "hermetic" pre-check had removed `.models/` and the caches but left
+`inputs/`, which is why it missed this. Re-ran it properly — no `.models/`, no
+`inputs/`, empty HF/torch/XDG, offline → 481 OK (1 skipped). Note: `app.py`
+creates an empty `inputs/` at import; that is the voice-sample folder,
+gitignored, not a data leak.
+
+Run 2 (37632834342, 8b1a910): **success** — backend 481 tests OK (skipped=1),
+frontend lint + build OK.
+
+### 2026-10-07 — M0 gate passed
+
+`scripts/check.sh all` (local, before run 2): ruff clean · pyrefly 0 errors ·
+481 unit tests OK · frontend lint (deny-warnings) + build · E2E 5 passed (10.8 s)
+· `hygiene main` ok. CI green on m1. The "Render job failed", "SQUIM inference
+failed (cuda oom)" and Redis "connection refused" lines in test output are
+tests exercising failure paths on purpose.
