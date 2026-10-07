@@ -42,7 +42,7 @@ is open source and runs locally.
 | numpy | `<2.0.0` | Coqui TTS / numba break on numpy 2 |
 | transformers | `<4.48` | Dia/Higgs load through it |
 | MediaPipe | 1.x Tasks API | `mp.solutions` is gone |
-| Licences | XTTS-v2 CPML and Wav2Lip are non-commercial; both already accepted by the owner | Do not fetch any *new* licence-gated weight without asking |
+| Licences | XTTS-v2 (Coqui CPML) and Wav2Lip are non-commercial. Wav2Lip's checkpoint is on disk; **XTTS-v2's download is incomplete and no CPML acceptance is recorded** (no `tos_agreed.txt`) | Never set `COQUI_TOS_AGREED` or answer a licence prompt for the owner; do not fetch any licence-gated weight without asking |
 
 ## 3. Golden rules
 

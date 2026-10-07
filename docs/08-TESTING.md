@@ -21,9 +21,9 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 
 | ID | Test / measurement | Status |
 |---|---|---|
-| R-01 | `test_voice_engine.py`, `test_mms_engine.py`; engine count in T2.6 | pass (3 engines with weights; target 5 — gap) |
+| R-01 | `test_voice_engine.py`, `test_mms_engine.py`; engine count in T2.6 | pass (**2** engines with usable weights: Kokoro, MMS-TTS. XTTS-v2 download incomplete — see T2.1; target 5 — gap) |
 | R-02 | `test_voice_engine.py` routing + `MissingWeightsTests`; `test_app.py` 503/400 before queueing | pass |
-| R-03 | T2.1 live clone | gap |
+| R-03 | T2.1 live clone | **blocked** — XTTS-v2 weights incomplete, needs the owner (M-03) |
 | R-04 | T3.3 | gap |
 | R-05 | `test_alignment_engine.py`, `test_alignment_method.py`, `test_alignment_accuracy.py`; E2E `synthesis.spec.js` (measured, not estimated) | pass |
 | R-06 | `test_mms_engine.py`, `test_language_registry.py`, `test_romanizer.py` | pass |

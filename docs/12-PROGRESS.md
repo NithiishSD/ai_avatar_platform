@@ -21,7 +21,8 @@ records what was verified live, with the real command and result.
 | T1.3 | Done | 0d68c57 |
 | T1.4 | Done | b02a741 |
 | **M1 gate** | **Passed** (= roadmap Gate 1) | |
-| T2.1 | Next | |
+| T2.1 | **Blocked** — XTTS-v2 download incomplete; CPML acceptance needed from owner (M-03) | (this commit: audit fix) |
+| T2.2 | Next | |
 
 ## Log
 
@@ -332,3 +333,35 @@ landmarks on reference photos") is met through the UI: `synthesis.spec.js`
 (real Kokoro speech, measured alignment) and `avatar.spec.js` (478 landmarks
 drawn inside the face box, measured from canvas pixels). Optional human look:
 M-02.
+
+### 2026-10-08 — T2.1 blocked: the XTTS-v2 weights were never complete
+
+Before loading XTTS-v2 I checked how Coqui gates its licence: without
+`tos_agreed.txt` it prompts on stdin, and `COQUI_TOS_AGREED=1` accepts on the
+user's behalf — not mine to set. The model folder then turned out to hold only
+`model.pth`, **1,299,857,408 bytes, not a valid zip**, against the published
+1,867,929,118; `config.json`, `vocab.json`, `speakers_xtts.pth`, `dvae.pth`,
+`hash.md5` absent. The 30 Sep download stopped at 70%.
+
+Correction to the record: on 3 Oct I marked G1-08 "Verified (weights
+present)" from `doctor.py`'s presence check, and this plan counted XTTS-v2 as
+an engine with weights. Neither was true; presence is not completeness.
+Consequence: T1.4's guard trusted that audit, so a clone request would have
+gone to Coqui, which would re-download and block on its licence prompt.
+
+Fixed `check_coqui_model` (D-29): `config.json` required and zip checkpoints
+must have their directory. Old test fixture *was* the broken case (model.pth
+alone, expected present) — rewritten as a real complete download, plus
+rejecting tests for "no config" and "truncated at 70%". Live: audit → present
+False, "config.json is missing, so the download did not finish"; doctor →
+`WARN xtts-v2 … fix: scripts/fetch_models.py --only xtts-v2`, 32 pass / 6 warn
+/ 0 fail. 492 tests OK.
+
+Integrity sweep of every other weight (HF tree sizes via the API, local files
+by format): Kokoro, MMS hin/spa/swh/tam, ECAPA, SD 1.5 — all sizes match;
+`wav2lip_gan.pth` loads in torch; SyncNet, SFace, MediaPipe ×3 well-formed.
+**XTTS-v2 is the only broken one.** Engines with usable weights: 2 (Kokoro,
+MMS-TTS).
+
+Unblocking needs the owner (M-03: accept the CPML and run the fetcher).
+Meanwhile: T2.2, T2.3 and T2.6 do not depend on it; T2.4/T2.5 do.

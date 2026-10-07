@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -201,15 +202,47 @@ def _coqui_roots() -> List[Path]:
     return unique
 
 
+def _coqui_incomplete(folder: Path) -> Optional[str]:
+    """
+    Why a Coqui download folder cannot be loaded, or None if it looks whole.
+
+    Size alone is not enough. On 30 Sep 2026 the XTTS-v2 download stopped at
+    70%: `model.pth` was 1.30 of 1.87 GB and every other file was missing,
+    yet the audit said "weights present" because the folder was not empty.
+
+    Two cheap checks, no torch:
+    * Coqui's loader needs `config.json`, the download's small companion file;
+    * a modern PyTorch checkpoint is a zip whose directory sits at the *end*
+      of the file, so a truncated one starts with the zip signature but has no
+      directory. `zipfile.is_zipfile` reads only the tail, so a 1.3 GB file
+      costs milliseconds. Legacy (non-zip) checkpoints are not judged.
+    """
+    if not (folder / "config.json").is_file():
+        return "config.json is missing, so the download did not finish"
+    for checkpoint in sorted(folder.glob("*.pth")):
+        with checkpoint.open("rb") as handle:
+            looks_like_zip = handle.read(2) == b"PK"
+        if looks_like_zip and not zipfile.is_zipfile(checkpoint):
+            return (
+                f"{checkpoint.name} is truncated ({checkpoint.stat().st_size:,} bytes, "
+                "no zip directory), so the download did not finish"
+            )
+    return None
+
+
 def check_coqui_model(key: str, name: str, model_name: str) -> ModelWeightStatus:
     """Audit a Coqui TTS model such as XTTS-v2 in its download directory."""
     folder = model_name.replace("/", "--")
     searched: List[str] = []
+    broken: Optional[ModelWeightStatus] = None
     for root in _coqui_roots():
         candidate = root / folder
         searched.append(str(candidate))
         size = _weight_bytes(candidate)
-        if size:
+        if not size:
+            continue
+        problem = _coqui_incomplete(candidate)
+        if problem is None:
             return ModelWeightStatus(
                 key=key,
                 name=name,
@@ -218,6 +251,18 @@ def check_coqui_model(key: str, name: str, model_name: str) -> ModelWeightStatus
                 size_bytes=size,
                 detail="weights present",
             )
+        # Keep looking: another root may hold a complete copy. Remember this
+        # one so the report says *why* it was not counted.
+        broken = broken or ModelWeightStatus(
+            key=key,
+            name=name,
+            source=str(candidate),
+            present=False,
+            size_bytes=size,
+            detail=f"incomplete download in {candidate}: {problem}",
+        )
+    if broken is not None:
+        return broken
     return ModelWeightStatus(
         key=key,
         name=name,

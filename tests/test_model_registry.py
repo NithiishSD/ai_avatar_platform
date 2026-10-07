@@ -136,17 +136,48 @@ class CoquiAuditTests(unittest.TestCase):
         self.assertFalse(status.present)
         self.assertIn(tmp, status.detail)
 
+    XTTS = "tts_models/multilingual/multi-dataset/xtts_v2"
+
+    def coqui_folder(self, tmp, *, config=True, checkpoint="complete"):
+        """A Coqui download folder: complete, or broken the way real ones break."""
+        import zipfile
+
+        folder = Path(tmp) / "tts_models--multilingual--multi-dataset--xtts_v2"
+        folder.mkdir(parents=True)
+        if config:
+            (folder / "config.json").write_text("{}")
+        path = folder / "model.pth"
+        with zipfile.ZipFile(path, "w") as archive:  # what torch.save writes
+            archive.writestr("archive/data.pkl", b"x" * MIN_CHECKPOINT_BYTES * 2)
+        if checkpoint == "truncated":
+            data = path.read_bytes()
+            path.write_bytes(data[: len(data) * 7 // 10])  # stopped at 70%
+        return folder
+
+    def audit(self, tmp):
+        with mock.patch("model_registry._coqui_roots", return_value=[Path(tmp)]):
+            return check_coqui_model("xtts-v2", "XTTS-v2", self.XTTS)
+
     def test_present_model_is_found_under_a_searched_root(self):
         with tempfile.TemporaryDirectory() as tmp:
-            folder = Path(tmp) / "tts_models--multilingual--multi-dataset--xtts_v2"
-            write(folder / "model.pth", MIN_CHECKPOINT_BYTES * 2)
-            with mock.patch(
-                "model_registry._coqui_roots", return_value=[Path(tmp)]
-            ):
-                status = check_coqui_model(
-                    "xtts-v2", "XTTS-v2", "tts_models/multilingual/multi-dataset/xtts_v2"
-                )
+            self.coqui_folder(tmp)
+            status = self.audit(tmp)
         self.assertTrue(status.present)
+
+    def test_a_checkpoint_without_its_config_is_an_unfinished_download(self):
+        # This fixture used to *be* the "present" case: model.pth alone.
+        with tempfile.TemporaryDirectory() as tmp:
+            self.coqui_folder(tmp, config=False)
+            status = self.audit(tmp)
+        self.assertFalse(status.present)
+        self.assertIn("config.json is missing", status.detail)
+
+    def test_a_truncated_checkpoint_is_not_counted_as_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.coqui_folder(tmp, checkpoint="truncated")
+            status = self.audit(tmp)
+        self.assertFalse(status.present)
+        self.assertIn("model.pth is truncated", status.detail)
 
 
 class SizeLabelTests(unittest.TestCase):
