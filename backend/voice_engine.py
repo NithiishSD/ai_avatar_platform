@@ -32,11 +32,32 @@ import numpy as np
 from audio_utils import validate_and_convert_for_cloning
 from alignment_engine import ForcedAligner
 import language_registry
+import model_registry
 from emotion_engine import EmotionProsodyEngine
 from mms_engine import MMSTTSEngine, MMSRomanizationRequired
 from quality_auditor import SpeechQualityAuditor
 
 logger = logging.getLogger(__name__)
+
+
+class ModelWeightsMissing(RuntimeError):
+    """
+    The engine a request needs has no weights on disk.
+
+    Raised *before* any loader runs. Without it, ``from_pretrained`` would
+    have started a multi-gigabyte download in the middle of a request - the
+    first time someone picked high quality or dialogue - while the startup log
+    claimed such requests "fall back to another model". The message names the
+    command that fixes it (golden rule 7).
+    """
+
+    def __init__(self, model_key: str, detail: str) -> None:
+        self.model_key = model_key
+        super().__init__(
+            f"{model_key} is not available: {detail}. "
+            f"Fetch it with: {model_registry.MODEL_FETCH_COMMAND} --only {model_key}"
+        )
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
@@ -219,6 +240,18 @@ class VoiceEngineRouter:
             f"Unsupported mode='{mode}'. Valid modes: 'fast', 'clone', "
             "'high_quality', 'dialogue', 'multilingual'."
         )
+
+    def require_weights(self, model_key: str) -> None:
+        """
+        Raise ModelWeightsMissing unless ``model_key``'s weights are on disk.
+
+        Audited fresh on every call (about 5 ms; filesystem checks only, no
+        torch), so weights fetched while the server runs are picked up without
+        a restart. A key the audit does not know is let through.
+        """
+        for status in model_registry.audit_model_weights():
+            if status.key == model_key and not status.present:
+                raise ModelWeightsMissing(model_key, status.detail)
 
     # ------------------------------------------------------------------
     # Model Loaders (lazy, cached)
@@ -535,6 +568,9 @@ class VoiceEngineRouter:
             style=style,
             text=text,
         )
+        # The one place every synthesis path passes through before a loader
+        # runs, so no request can trigger a download.
+        self.require_weights(model_key)
 
         start_time = time.time()
         output_path = OUTPUT_DIR / output_filename

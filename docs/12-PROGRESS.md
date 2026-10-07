@@ -18,8 +18,9 @@ records what was verified live, with the real command and result.
 | **M0 gate** | **Passed** | |
 | T1.1 | Done | 94956b9 |
 | T1.2 | Done | 0501aeb |
-| T1.3 | Done | (this commit) |
-| T1.4 | Next | |
+| T1.3 | Done | 0d68c57 |
+| T1.4 | Done | (this commit) |
+| M1 gate | Next | |
 
 ## Log
 
@@ -274,3 +275,41 @@ nose-right = positive yaw. On HEAD's `face_engine.py`, 3 of the 4 fail.
 Gates: ruff clean, pyrefly 0, 484 tests OK. Only the UI displays the signs;
 the quality gate uses absolute values, so no behaviour beyond that changes.
 Optional owner confirmation with a real turned head: Manual check M-01.
+
+### 2026-10-07 — T1.4 router honesty for engines without weights
+
+Found: `load_higgs` / `load_dia` call `from_pretrained` with no presence check
+and no `local_files_only`. With the network up, the first `high_quality`,
+`quality=high` (a UI option) or dialogue request would have **started a
+multi-GB download mid-request**, while the startup log claimed such requests
+"fall back to another model" (they only fell back after a failed download).
+
+Fix: `VoiceEngineRouter.require_weights(key)` raises `ModelWeightsMissing`
+(message names `python scripts/fetch_models.py --only <key>`), audited fresh
+per call (5.1 ms, filesystem only) so weights fetched while running are seen.
+Called in `synthesize()` right after `select_model` — the single point every
+synthesis path passes before a loader — and in the API route before queueing:
+503 for missing weights, 400 for unroutable requests (was: a queued job that
+failed later). Startup log now says requests "are refused until it is fetched".
+Runtime *load failures* (weights present, e.g. OOM) keep the existing visible
+fallback (D-26).
+
+Test isolation found on the way: `test_synthesis_task_*` patched the router
+class and left a FakeVoiceEngine as the process-wide `celery_app._router`
+singleton for every later test; harmless until the route used `get_router()`.
+Scoped with `patch.object(celery_app, "_router", None)`. Three tests depended
+on local weights — now use a fake audit (`weights_on_disk()`).
+
+Verified:
+- 490 tests OK; hermetic (no .models, no inputs, empty caches, offline) 490 OK.
+- Can fail: with the guard line in `synthesize()` removed, both
+  "never reaches the loader" tests fail; restored.
+- live server, network up: high_quality → **503** "Fetch it with: python
+  scripts/fetch_models.py --only higgs-tts-2"; dialogue → 503 (dia-1.6b);
+  fast + quality=high → 503; multilingual `zzz` → **400**; fast → **202**,
+  `kokoro`, audio produced. Higgs/Dia HF cache dirs 1188/1257 bytes before and
+  after — **no download**; 0 download lines in the server log. `/health`:
+  higgs-tts-2 and dia-1.6b present=false.
+Observed for T6.3: in `in_memory` mode the synthesis POST runs the task eagerly,
+so its 202 arrives after synthesis finishes — initiation time there is the full
+synthesis time, not queueing time.

@@ -22,7 +22,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | ID | Test / measurement | Status |
 |---|---|---|
 | R-01 | `test_voice_engine.py`, `test_mms_engine.py`; engine count in T2.6 | pass (3 engines with weights; target 5 — gap) |
-| R-02 | `test_voice_engine.py` routing tests | pass |
+| R-02 | `test_voice_engine.py` routing + `MissingWeightsTests`; `test_app.py` 503/400 before queueing | pass |
 | R-03 | T2.1 live clone | gap |
 | R-04 | T3.3 | gap |
 | R-05 | `test_alignment_engine.py`, `test_alignment_method.py`, `test_alignment_accuracy.py`; E2E `synthesis.spec.js` (measured, not estimated) | pass |
@@ -43,7 +43,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-20 | `test_job_queue.py`, `test_app.py` | pass |
 | R-21 | T6.1 | gap |
 | R-22 | `test_security.py` | pass |
-| R-23 | `test_model_registry.py`, `test_app.py` health | pass |
+| R-23 | `test_model_registry.py`, `test_app.py` health; live: /health lists higgs/dia unavailable (T1.4) | pass |
 | R-24 | E2E `smoke.spec.js` (T0.6), `synthesis.spec.js` (T1.1), `avatar.spec.js` (T1.2). Still to come: T2.5, T3.4, T4.3 | partial |
 | R-25 | T7.1 | gap |
 | R-26 | T7.2 | gap |

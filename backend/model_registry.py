@@ -67,6 +67,7 @@ AVATAR_DIFFUSION_REPO = os.getenv(
 )
 
 VISION_FETCH_COMMAND = "python scripts/fetch_vision_models.py"
+MODEL_FETCH_COMMAND = "python scripts/fetch_models.py"
 
 
 @dataclass(frozen=True)
@@ -411,9 +412,10 @@ def log_weight_audit(statuses: Optional[List[ModelWeightStatus]] = None) -> List
     """
     Log the audit at startup, warning per missing model.
 
-    A missing model is a warning rather than a fatal error because the router
-    degrades gracefully by design and Kokoro alone is enough to serve English.
-    The point is that the degradation is never again silent.
+    A missing model is a warning rather than a fatal error: Kokoro alone is
+    enough to serve English. Requests that need a missing model are refused
+    with the fetch command (VoiceEngineRouter.require_weights) rather than
+    downloading it mid-request or quietly substituting another engine.
     """
     statuses = statuses if statuses is not None else audit_model_weights()
     present = [s for s in statuses if s.present]
@@ -427,11 +429,13 @@ def log_weight_audit(statuses: Optional[List[ModelWeightStatus]] = None) -> List
     )
     for status in missing:
         logger.warning(
-            "MODEL WEIGHTS MISSING - %s [%s]: %s. Requests routed here will "
-            "fall back to another model.",
+            "MODEL WEIGHTS MISSING - %s [%s]: %s. Requests that need it are "
+            "refused until it is fetched: %s --only %s",
             status.name,
             status.key,
             status.detail,
+            MODEL_FETCH_COMMAND,
+            status.key,
         )
     return statuses
 

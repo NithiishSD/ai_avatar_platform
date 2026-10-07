@@ -8,7 +8,24 @@ import soundfile as sf
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from voice_engine import VoiceEngineRouter
+from voice_engine import ModelWeightsMissing, VoiceEngineRouter
+
+
+def weights_on_disk(*missing):
+    """
+    A fake on-disk weight audit: every routed model present except `missing`.
+
+    Tests must not depend on which weights the machine running them happens
+    to have - CI has none at all.
+    """
+    from model_registry import ModelWeightStatus
+
+    keys = ("kokoro", "xtts-v2", "higgs-tts-2", "dia-1.6b", "mms-tts")
+    return [
+        ModelWeightStatus(key, key, "test", key not in missing, 0 if key in missing else 1,
+                          "cached metadata only (no weight file)" if key in missing else "present")
+        for key in keys
+    ]
 
 
 class RouterSelectionTests(unittest.TestCase):
@@ -106,6 +123,11 @@ class KokoroSynthesisTests(unittest.TestCase):
 
     def setUp(self):
         self.router = VoiceEngineRouter(device="cpu")
+        # These tests are about synthesis with mocked models, not about which
+        # weights this machine has: report every model as on disk.
+        audit = patch("model_registry.audit_model_weights", return_value=weights_on_disk())
+        audit.start()
+        self.addCleanup(audit.stop)
         samples = np.zeros(2400, dtype=np.float32)
         self.router.kokoro_pipeline = lambda text, voice, speed: iter([(None, None, samples)])
         self.output_dir = Path(__file__).resolve().parents[1] / "outputs" / "test_phase1"
@@ -142,6 +164,41 @@ class KokoroSynthesisTests(unittest.TestCase):
         self.router._dia_failed = True
         result = self.router.synthesize("[S1] Hello there [S2] Good morning", mode="dialogue")
         self.assertEqual(result.model, "kokoro")
+
+
+class MissingWeightsTests(unittest.TestCase):
+    """An engine with no weights is refused before any loader can download it."""
+
+    def setUp(self):
+        self.router = VoiceEngineRouter(device="cpu")
+
+    def test_missing_weights_raise_with_the_fetch_command(self):
+        with patch("model_registry.audit_model_weights", return_value=weights_on_disk("higgs-tts-2")):
+            with self.assertRaises(ModelWeightsMissing) as caught:
+                self.router.require_weights("higgs-tts-2")
+        self.assertEqual(caught.exception.model_key, "higgs-tts-2")
+        self.assertIn("scripts/fetch_models.py --only higgs-tts-2", str(caught.exception))
+
+    def test_present_and_unknown_models_pass(self):
+        with patch("model_registry.audit_model_weights", return_value=weights_on_disk("dia-1.6b")):
+            self.router.require_weights("kokoro")
+            self.router.require_weights("some-future-engine")
+
+    def test_synthesis_never_reaches_the_loader_without_weights(self):
+        # The bug this guards: load_higgs/load_dia call from_pretrained, which
+        # would have downloaded gigabytes mid-request.
+        with patch("model_registry.audit_model_weights", return_value=weights_on_disk("higgs-tts-2")), \
+             patch.object(self.router, "load_higgs") as load_higgs:
+            with self.assertRaises(ModelWeightsMissing):
+                self.router.synthesize("Hello", mode="high_quality")
+        load_higgs.assert_not_called()
+
+    def test_dialogue_without_dia_weights_is_refused_not_downloaded(self):
+        with patch("model_registry.audit_model_weights", return_value=weights_on_disk("dia-1.6b")), \
+             patch.object(self.router, "load_dia") as load_dia:
+            with self.assertRaises(ModelWeightsMissing):
+                self.router.synthesize("[S1] Hi [S2] Hello", mode="dialogue")
+        load_dia.assert_not_called()
 
 
 class HiggsLoadingTests(unittest.TestCase):

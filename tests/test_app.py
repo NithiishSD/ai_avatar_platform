@@ -17,6 +17,7 @@ from job_queue import CeleryJobQueue, InMemoryJobQueue
 from celery_app import celery
 from contracts import AudioSynthesisRequest, AvatarRenderJob
 from test_contracts import VALID_JOB
+from test_voice_engine import weights_on_disk
 
 
 class FakeRedis:
@@ -114,9 +115,14 @@ class RenderJobApiTests(unittest.TestCase):
                 self.arguments = kwargs
                 return SimpleNamespace(**expected_result)
 
-        with patch("celery_app.VoiceEngineRouter", return_value=FakeVoiceEngine()):
-            from celery_app import synthesize_audio
-            result = synthesize_audio.run(request.model_dump(mode="json", by_alias=True))
+        import celery_app
+
+        # get_router() caches one router per process. Without resetting the
+        # cache for this test, the fake built here became *the* router for
+        # every later test in the run.
+        with patch("celery_app.VoiceEngineRouter", return_value=FakeVoiceEngine()), \
+             patch.object(celery_app, "_router", None):
+            result = celery_app.synthesize_audio.run(request.model_dump(mode="json", by_alias=True))
 
         self.assertEqual(result, expected_result)
 
@@ -124,7 +130,8 @@ class RenderJobApiTests(unittest.TestCase):
         fake_task = type("Task", (), {"id": "TASK-123"})()
         request = {"text": "Hello from the API", "mode": "fast", "language": "en"}
 
-        with patch("app.synthesize_audio.delay", return_value=fake_task) as delay:
+        with patch("app.synthesize_audio.delay", return_value=fake_task) as delay, \
+             patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
             response = self.client.post("/api/v1/audio/synthesize", json=request)
 
         self.assertEqual(response.status_code, 202)
@@ -134,6 +141,24 @@ class RenderJobApiTests(unittest.TestCase):
         # modelUsed is None when task is still in QUEUED state
         self.assertIsNone(body.get("modelUsed"))
         delay.assert_called_once()
+
+    def test_engine_without_weights_is_503_with_the_fix_and_nothing_queued(self):
+        request = {"text": "Hello", "mode": "high_quality", "language": "en"}
+        with patch("app.synthesize_audio.delay") as delay, \
+             patch("model_registry.audit_model_weights", return_value=weights_on_disk("higgs-tts-2")):
+            response = self.client.post("/api/v1/audio/synthesize", json=request)
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("scripts/fetch_models.py --only higgs-tts-2", response.json()["detail"])
+        delay.assert_not_called()
+
+    def test_unsupported_multilingual_language_is_400_before_queueing(self):
+        request = {"text": "Hello", "mode": "multilingual", "language": "zzz"}
+        with patch("app.synthesize_audio.delay") as delay, \
+             patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
+            response = self.client.post("/api/v1/audio/synthesize", json=request)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("requires an MMS-TTS checkpoint", response.json()["detail"])
+        delay.assert_not_called()
 
     def test_synthesis_status_reads_celery_state(self):
         pending_task = type("Task", (), {"state": "PENDING", "result": None})()

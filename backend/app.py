@@ -12,7 +12,7 @@ if dotenv_path.exists():
 else:
     load_dotenv()
 
-from celery_app import celery, run_render, synthesize_audio
+from celery_app import celery, get_router, run_render, synthesize_audio
 from contracts import (
     AudioSynthesisRequest,
     AvatarFaceEntry,
@@ -57,6 +57,7 @@ from model_registry import (
 )
 from quality_auditor import SpeechQualityAuditor
 from security import API_KEY_HEADER, SecurityGate
+from voice_engine import ModelWeightsMissing
 
 logger = logging.getLogger(__name__)
 
@@ -590,6 +591,23 @@ def _job_response(task_id: str, task_status: str, result: dict) -> SynthesisJobR
     status_code=status.HTTP_202_ACCEPTED,
 )
 def create_synthesis_job(request: AudioSynthesisRequest) -> SynthesisJobResponse:
+    # Route before queueing, so an engine with no weights is a 503 that names
+    # the fetch command now, not a queued job that fails (or downloads
+    # gigabytes) later, and an unsupported language is a 400 the caller can fix.
+    router = get_router()
+    try:
+        model_key = router.select_model(
+            mode=request.mode.value,
+            language=request.language,
+            quality=request.quality,
+            style=request.style,
+            text=request.text,
+        )
+        router.require_weights(model_key)
+    except ModelWeightsMissing as error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
     try:
         task = synthesize_audio.delay(request.model_dump(by_alias=True, mode="json"))
         task_status = getattr(task, "status", "QUEUED")
