@@ -19,8 +19,9 @@ records what was verified live, with the real command and result.
 | T1.1 | Done | 94956b9 |
 | T1.2 | Done | 0501aeb |
 | T1.3 | Done | 0d68c57 |
-| T1.4 | Done | (this commit) |
-| M1 gate | Next | |
+| T1.4 | Done | b02a741 |
+| **M1 gate** | **Passed** (= roadmap Gate 1) | |
+| T2.1 | Next | |
 
 ## Log
 
@@ -313,3 +314,21 @@ Verified:
 Observed for T6.3: in `in_memory` mode the synthesis POST runs the task eagerly,
 so its 202 arrives after synthesis finishes — initiation time there is the full
 synthesis time, not queueing time.
+
+### 2026-10-08 — resumed; scope confirmed; M1 gate passed
+
+The previous session ended mid M1-gate run. On resume: tree clean, m1 =
+origin/m1 = b02a741, CI run 37637081306 for b02a741 **success**, no stale
+servers on :8000/:5173.
+
+Owner asked whether the plan covers one developer's roadmap or both; answer:
+both (git history: the teammate has one commit, the Phase 0 mock renderer; all
+later work on both pillars came from this account). Owner chose **both** (D-28).
+
+`scripts/check.sh all` → exit 0: ruff clean · pyrefly 0 · 490 tests OK ·
+frontend build · **E2E 7 passed (27.1 s)** · hygiene main ok.
+Roadmap Gate 1 ("text input generates speech audio; face detector maps 468
+landmarks on reference photos") is met through the UI: `synthesis.spec.js`
+(real Kokoro speech, measured alignment) and `avatar.spec.js` (478 landmarks
+drawn inside the face box, measured from canvas pixels). Optional human look:
+M-02.
