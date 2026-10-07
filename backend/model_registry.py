@@ -25,7 +25,7 @@ import os
 import zipfile
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -363,19 +363,40 @@ def check_openvoice(key: str = "openvoice-v2", name: str = "OpenVoice V2 (tone-c
             key=key, name=name, source=OPENVOICE_REPO, present=False, size_bytes=0,
             detail="the openvoice package is not installed", fix=OPENVOICE_PIP,
         )
-    snapshots = _hf_repo_dir(OPENVOICE_REPO) / "snapshots"
+    return check_hf_files(key, name, OPENVOICE_REPO, CONVERTER_FILES)
+
+
+def check_hf_files(key: str, name: str, repo_id: str, required: Sequence[str]) -> ModelWeightStatus:
+    """
+    Present only if one cached snapshot holds *every* required file.
+
+    Stricter than `check_hf_repo`, which accepts any weight file: a snapshot
+    with the checkpoint but not its config would load no better than nothing.
+    """
+    snapshots = _hf_repo_dir(repo_id) / "snapshots"
     for snapshot in sorted(snapshots.glob("*")) if snapshots.is_dir() else []:
-        files = [snapshot / rel for rel in CONVERTER_FILES]
+        files = [snapshot / rel for rel in required]
         if all(f.is_file() for f in files):
-            size = sum(f.stat().st_size for f in files)
             return ModelWeightStatus(
                 key=key, name=name, source=str(snapshot), present=True,
-                size_bytes=size, detail="weights present",
+                size_bytes=sum(f.stat().st_size for f in files), detail="weights present",
             )
     return ModelWeightStatus(
-        key=key, name=name, source=OPENVOICE_REPO, present=False, size_bytes=0,
-        detail=f"converter files {', '.join(CONVERTER_FILES)} not in the HuggingFace cache",
+        key=key, name=name, source=repo_id, present=False, size_bytes=0,
+        detail=f"{', '.join(required)} not all in the HuggingFace cache",
     )
+
+
+def check_bark(key: str = "bark", name: str = "Bark small (dialogue)") -> ModelWeightStatus:
+    """Bark needs its model files and the presets for both dialogue speakers."""
+    from bark_engine import BARK_FILES, BARK_REPO, DIALOGUE_VOICES, PRESET_PARTS
+
+    presets = [
+        f"speaker_embeddings/{voice}_{part}.npy"
+        for voice in DIALOGUE_VOICES.values()
+        for part in PRESET_PARTS
+    ]
+    return check_hf_files(key, name, BARK_REPO, [*BARK_FILES, *presets])
 
 
 def audit_model_weights() -> List[ModelWeightStatus]:
@@ -391,6 +412,7 @@ def audit_model_weights() -> List[ModelWeightStatus]:
         _unrunnable("dia-1.6b", "Dia-1.6B (dialogue)", "nari-labs/Dia-1.6B"),
         check_mms(),
         check_openvoice(),
+        check_bark(),
     ]
     # Every other missing model is fixed by fetching it. `replace` builds a
     # new frozen instance with one field changed.

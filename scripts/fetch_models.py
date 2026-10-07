@@ -34,6 +34,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 
 from model_registry import UNRUNNABLE, audit_model_weights  # noqa: E402
 from openvoice_engine import OPENVOICE_REPO  # noqa: E402
+from bark_engine import BARK_REPO, DIALOGUE_VOICES  # noqa: E402
 
 # Refuse to fill the disk. A GPU box that runs out of room mid-download leaves
 # a half-written cache that reports as present but fails to load.
@@ -82,6 +83,12 @@ def _fetch_openvoice() -> None:
     _fetch_hf(OPENVOICE_REPO, allow_patterns=["converter/*"])
 
 
+def _fetch_bark() -> None:
+    # The model plus only the two English presets dialogue mode uses (of 784).
+    presets = [f"speaker_embeddings/{voice}_*" for voice in DIALOGUE_VOICES.values()]
+    _fetch_hf(BARK_REPO, allow_patterns=["*.json", "*.txt", "pytorch_model.bin", *presets])
+
+
 def _fetch_mms() -> None:
     """
     MMS-TTS is one checkpoint per language, fetched on demand at ~145 MB each.
@@ -126,6 +133,14 @@ SPECS: List[ModelSpec] = [
         default=True,
         note="MIT; clones over Kokoro / MMS-TTS. Needs the openvoice package, see requirements.txt",
         fetch=_fetch_openvoice,
+    ),
+    ModelSpec(
+        key="bark",
+        name="Bark small (two-speaker dialogue)",
+        approx_gb=1.7,
+        default=True,
+        note="MIT; speaks [S1]/[S2] dialogue, replacing Dia, which cannot run here",
+        fetch=_fetch_bark,
     ),
 ]
 

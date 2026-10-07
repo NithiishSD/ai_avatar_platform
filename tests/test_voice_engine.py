@@ -20,7 +20,7 @@ def weights_on_disk(*missing):
     """
     from model_registry import ModelWeightStatus
 
-    keys = ("kokoro", "xtts-v2", "higgs-tts-2", "dia-1.6b", "mms-tts", "openvoice-v2")
+    keys = ("kokoro", "xtts-v2", "higgs-tts-2", "dia-1.6b", "mms-tts", "openvoice-v2", "bark")
     return [
         ModelWeightStatus(key, key, "test", key not in missing, 0 if key in missing else 1,
                           "cached metadata only (no weight file)" if key in missing else "present")
@@ -76,16 +76,17 @@ class RouterSelectionTests(unittest.TestCase):
                 )
 
     # ------------------------------------------------------------------ Dia-1.6B
-    def test_dialogue_mode_routes_to_dia(self):
-        self.assertEqual(self.router.select_model(mode="dialogue"), "dia-1.6b")
+    # Dialogue routes to Bark: Dia cannot run on this stack (model_registry.UNRUNNABLE).
+    def test_dialogue_mode_routes_to_bark(self):
+        self.assertEqual(self.router.select_model(mode="dialogue"), "bark")
 
-    def test_style_dialogue_routes_to_dia(self):
-        self.assertEqual(self.router.select_model(mode="fast", language="en", style="dialogue"), "dia-1.6b")
+    def test_style_dialogue_routes_to_bark(self):
+        self.assertEqual(self.router.select_model(mode="fast", language="en", style="dialogue"), "bark")
 
-    def test_speaker_tags_route_to_dia(self):
+    def test_speaker_tags_route_to_bark(self):
         self.assertEqual(
             self.router.select_model(mode="fast", language="en", text="[S1] Hello [S2] Hi"),
-            "dia-1.6b",
+            "bark",
         )
 
     # ------------------------------------------------------------------ Fallbacks
@@ -108,8 +109,8 @@ class RouterSelectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.router.select_model(mode="fast", language="es")
 
-    def test_dia_failed_falls_back_to_kokoro_for_dialogue(self):
-        self.router._dia_failed = True
+    def test_bark_failed_falls_back_to_kokoro_for_dialogue(self):
+        self.router._bark_failed = True
         self.assertEqual(self.router.select_model(mode="dialogue"), "kokoro")
 
     # ------------------------------------------------------------------ Errors
@@ -159,11 +160,16 @@ class KokoroSynthesisTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must not be empty"):
             self.router.synthesize("   ")
 
-    def test_dialogue_with_dia_failed_falls_back_to_kokoro(self):
-        """Dia is unavailable; dialogue falls back to Kokoro (speaker tags stripped)."""
-        self.router._dia_failed = True
-        result = self.router.synthesize("[S1] Hello there [S2] Good morning", mode="dialogue")
-        self.assertEqual(result.model, "kokoro")
+    def test_dialogue_with_bark_failing_to_load_is_spoken_by_kokoro_and_says_so(self):
+        """Bark fails at load time; Kokoro speaks, tags stripped, and model names Kokoro."""
+        from bark_engine import BarkUnavailable
+
+        with patch.object(self.router._bark, "synthesize_dialogue", side_effect=BarkUnavailable("oom")), \
+             patch.object(self.router, "_synthesize_kokoro", wraps=self.router._synthesize_kokoro) as kokoro:
+            result = self.router.synthesize("[S1] Hello there [S2] Good morning", mode="dialogue")
+        self.assertEqual(result.model, "kokoro")  # not "bark": the fallback is visible
+        self.assertEqual(kokoro.call_args.args[0], "Hello there Good morning")
+        self.assertTrue(self.router._bark_failed)
 
 
 class MissingWeightsTests(unittest.TestCase):
@@ -193,12 +199,12 @@ class MissingWeightsTests(unittest.TestCase):
                 self.router.synthesize("Hello", mode="high_quality")
         load_higgs.assert_not_called()
 
-    def test_dialogue_without_dia_weights_is_refused_not_downloaded(self):
-        with patch("model_registry.audit_model_weights", return_value=weights_on_disk("dia-1.6b")), \
-             patch.object(self.router, "load_dia") as load_dia:
+    def test_dialogue_without_bark_weights_is_refused_not_downloaded(self):
+        with patch("model_registry.audit_model_weights", return_value=weights_on_disk("bark")), \
+             patch.object(self.router._bark, "_load") as load_bark:
             with self.assertRaises(ModelWeightsMissing):
                 self.router.synthesize("[S1] Hi [S2] Hello", mode="dialogue")
-        load_dia.assert_not_called()
+        load_bark.assert_not_called()
 
 
 def reference(folder, name, seconds=0.1, **provenance_fields):
@@ -352,16 +358,6 @@ class HiggsLoadingTests(unittest.TestCase):
             router._higgs_failed = True
             result = router.select_model(mode="high_quality")
             self.assertEqual(result, "xtts-v2")
-
-
-class DiaLoadingTests(unittest.TestCase):
-    """Tests for Dia model loading guard."""
-
-    def test_dia_load_failure_falls_back_to_kokoro_routing(self):
-        router = VoiceEngineRouter(device="cpu")
-        router._dia_failed = True
-        result = router.select_model(mode="dialogue")
-        self.assertEqual(result, "kokoro")
 
 
 if __name__ == "__main__":

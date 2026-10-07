@@ -20,6 +20,7 @@ forced alignment, then the optional MOS/PESQ quality audit.
 import os
 import time
 import math
+import re
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,7 @@ import provenance
 from emotion_engine import EmotionProsodyEngine
 from mms_engine import MMSTTSEngine, MMSRomanizationRequired
 from openvoice_engine import OpenVoiceEngine
+from bark_engine import BarkEngine, BarkUnavailable
 from quality_auditor import SpeechQualityAuditor
 
 logger = logging.getLogger(__name__)
@@ -127,6 +129,7 @@ _HIGGS_DEFAULT_VOICE = "default"
 # Dia speaker tag pattern — if text contains [S1] or [S2] triggers Dia
 # ---------------------------------------------------------------------------
 _DIA_SPEAKER_TAGS = {"[S1]", "[S2]", "[s1]", "[s2]"}
+_TAG_PATTERN = re.compile(r"\[(?:S|s)[12]\]")
 
 
 @dataclass(frozen=True)
@@ -166,18 +169,19 @@ class VoiceEngineRouter:
         self.kokoro_pipeline = None   # Kokoro-82M
         self.xtts_model = None        # XTTS-v2
         self._higgs_pipe = None       # Higgs TTS 2 (3B)
-        self._dia_model = None        # Dia-1.6B
-        self._dia_processor = None
 
         # Phase 3 engines. All three are cheap to construct and load lazily.
         self._mms = MMSTTSEngine(device=self.device)
         self._openvoice = OpenVoiceEngine(device=self.device)
+        self._bark = BarkEngine(device=self.device)
         self._emotion = EmotionProsodyEngine()
         self._auditor: Optional[SpeechQualityAuditor] = None
 
         # Track load failures to avoid retrying broken models
         self._higgs_failed = False
-        self._dia_failed = False
+        # Set when Bark's weights are present but it fails to load (e.g. out
+        # of memory): dialogue then degrades visibly to Kokoro (D-26).
+        self._bark_failed = False
         self._mms_failed = False
 
         # Lets the vision side make room on the 6 GB card before it loads a
@@ -191,9 +195,8 @@ class VoiceEngineRouter:
         self.kokoro_pipeline = None
         self.xtts_model = None
         self._higgs_pipe = None
-        self._dia_model = None
-        self._dia_processor = None
         self._openvoice.release()
+        self._bark.release()
 
     @property
     def auditor(self) -> SpeechQualityAuditor:
@@ -237,10 +240,11 @@ class VoiceEngineRouter:
         has_speaker_tags = any(tag in text for tag in _DIA_SPEAKER_TAGS)
 
         if is_dialogue_mode or is_dialogue_style or has_speaker_tags:
-            if self._dia_failed:
-                logger.warning("Dia unavailable — falling back to Kokoro for dialogue request")
+            # Bark, not Dia: Dia cannot run on this stack (model_registry.UNRUNNABLE).
+            if self._bark_failed:
+                logger.warning("Bark failed to load — falling back to Kokoro for dialogue request")
                 return "kokoro"
-            return "dia-1.6b"
+            return "bark"
 
         # 2. Voice cloning, with the engine the caller chose (XTTS-v2 by default)
         if mode == "clone":
@@ -396,39 +400,6 @@ class VoiceEngineRouter:
             print(f" -> [WARNING] Higgs TTS 2 load failed: {exc}")
             return False
 
-    def load_dia(self) -> bool:
-        """
-        Loads Dia-1.6B (nari-labs/Dia-1.6B) via transformers AutoModel API.
-        Returns True on success, False on failure.
-        Caches failure in self._dia_failed.
-        """
-        if self._dia_model is not None:
-            return True
-        if self._dia_failed:
-            return False
-
-        print(f"\n[Loading Model] Dia-1.6B on {self.device.upper()}...")
-        try:
-            from transformers import AutoProcessor, AutoModel
-
-            model_id = "nari-labs/Dia-1.6B"
-            self._dia_processor = AutoProcessor.from_pretrained(model_id)
-            # transformers types lazily imported classes as possibly None.
-            self._dia_model = AutoModel.from_pretrained(  # pyrefly: ignore[not-callable]
-                model_id,
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-                device_map=self.device if self.device == "cuda" else None,
-            )
-            if self.device == "cpu":
-                self._dia_model = self._dia_model.to("cpu")
-            print(" -> Dia-1.6B loaded.")
-            return True
-        except Exception as exc:  # noqa: BLE001 - cached failure, logged and reported
-            logger.error("Dia-1.6B failed to load: %s", exc)
-            self._dia_failed = True
-            print(f" -> [WARNING] Dia-1.6B load failed: {exc}")
-            return False
-
     # ------------------------------------------------------------------
     # Synthesis Backends
     # ------------------------------------------------------------------
@@ -521,43 +492,6 @@ class VoiceEngineRouter:
         duration = len(audio_array) / sample_rate
         return int(sample_rate), duration
 
-    def _synthesize_dia(
-        self,
-        text: str,
-        output_path: Path,
-    ) -> tuple[int, float]:
-        """
-        Run Dia-1.6B multi-speaker dialogue synthesis.
-        Text should use [S1] / [S2] speaker tags.
-        Falls back to Kokoro on load failure.
-        Returns (sample_rate, duration_seconds).
-        """
-        if not self.load_dia():
-            print("[WARN] Dia unavailable — falling back to Kokoro")
-            # Strip [S1]/[S2] tags before passing to Kokoro
-            clean_text = text
-            for tag in _DIA_SPEAKER_TAGS:
-                clean_text = clean_text.replace(tag, "")
-            clean_text = " ".join(clean_text.split())
-            return self._synthesize_kokoro(clean_text, output_path)
-
-        print(f"\n[Dia-1.6B] Dialogue synthesis: '{text[:80]}...'")
-        assert self._dia_model is not None
-        assert self._dia_processor is not None
-
-        # Tokenize using the Dia processor
-        inputs = self._dia_processor(text=text, return_tensors="pt")
-        inputs = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in inputs.items()}
-
-        with torch.no_grad():
-            output = self._dia_model.generate(**inputs)
-
-        audio_array = output.squeeze().cpu().numpy().astype(np.float32)
-        sample_rate = 44100  # Dia native output rate
-        sf.write(output_path, audio_array, sample_rate)
-        duration = len(audio_array) / sample_rate
-        return sample_rate, duration
-
     def _synthesize_mms(
         self,
         text: str,
@@ -599,6 +533,28 @@ class VoiceEngineRouter:
                 f"{str(exc).splitlines()[0]}. A language it has not cached needs network "
                 "on first use, or: python scripts/fetch_models.py --only mms-tts"
             ) from exc
+
+    def _synthesize_bark(self, text: str, output_path: Path) -> tuple[int, float, str]:
+        """
+        Two-speaker dialogue with Bark; Kokoro if Bark fails to load.
+
+        Returns (sample_rate, duration_seconds, engine_that_spoke).
+
+        A load failure with weights present (missing weights never get here:
+        preflight refuses them) degrades to Kokoro with the speaker tags
+        removed, and is cached so later requests route straight to Kokoro.
+        `model_used` then names Kokoro, so the fallback is never silent.
+        """
+        try:
+            sample_rate, duration, turns = self._bark.synthesize_dialogue(text, output_path)
+            print(f"[Bark] {turns} turn(s), {duration:.2f}s")
+            return sample_rate, duration, "bark"
+        except BarkUnavailable as exc:
+            logger.error("Bark unavailable (%s); dialogue falls back to Kokoro", exc)
+            self._bark_failed = True
+            clean = " ".join(_TAG_PATTERN.sub(" ", text).split())
+            sample_rate, duration = self._synthesize_kokoro(clean, output_path)
+            return sample_rate, duration, "kokoro"
 
     def _synthesize_openvoice(
         self,
@@ -716,8 +672,13 @@ class VoiceEngineRouter:
         elif model_key == "higgs-tts-2":
             sample_rate, duration = self._synthesize_higgs(text, output_path, speaker_wav)
 
-        elif model_key == "dia-1.6b":
-            sample_rate, duration = self._synthesize_dia(text, output_path)
+        elif model_key == "bark":
+            sample_rate, duration, spoke = self._synthesize_bark(text, output_path)
+            if spoke != "bark":
+                # Bark failed to load and Kokoro spoke instead: say so, so the
+                # response's model never names an engine that did not run.
+                model_key = spoke
+                language_info["backend"] = f"{spoke} (Bark unavailable)"
 
         elif model_key == "mms-tts":
             sample_rate, duration, language_info = self._synthesize_mms(

@@ -24,7 +24,7 @@ records what was verified live, with the real command and result.
 | T2.1 | **Blocked** — XTTS-v2 download incomplete; CPML acceptance needed from owner (M-03) | (this commit: audit fix) |
 | T2.2 | Done | 54686a2 |
 | T2.3 | Verified on CPU — waiting on M-04 (peak VRAM on the host GPU, and a look at the video) | (this commit) |
-| T2.6 | In progress — (a) Higgs/Dia honesty 6b94d3c; (b) OpenVoice V2 engine (this commit); (c) a 5th engine still to choose | |
+| T2.6 | In progress — (a) 6b94d3c; (b) OpenVoice V2 b55e538; (c) Bark built + unit-tested (this commit), **live check waiting on its download** | |
 
 ## Log
 
@@ -511,3 +511,27 @@ application files fully documented (contracts, job_queue, celery_app,
 security, gpu_utils, romanizer, openvoice_engine, audio_utils); 31 below 35%
 explanation density (~11,200 lines). Owner chose teaching-weighted, inline + a
 code guide, application code only, and to do it at the end (T7.4, D-34).
+
+### 2026-10-08 — T2.6 (c): Bark for dialogue (built; live check pending)
+
+Dialogue had nowhere to go: Dia cannot run here. Bark small: MIT, ungated,
+1.68 GB `pytorch_model.bin`, `BarkModel` native in transformers 4.47.1; full
+Bark (4.5 GB) would not fit beside other models on 6 GB. `bark_engine.py`:
+`split_dialogue` ([S1]/[S2] turns; untagged text = speaker 1), `chunk_turn`
+(≤220 chars at sentence ends, Bark's ~13 s limit), presets loaded as arrays
+from the snapshot, seeded with `fork_rng`, 0.3 s gaps, peak-normalised. Router:
+dialogue → `bark`; Dia's loader/synthesis removed as unreachable; a Bark load
+failure falls back to Kokoro **and `model_used` says kokoro** (my first
+version left it saying "bark" — a silent fallback, caught while updating the
+old Dia tests). Audit `check_bark` requires the model files and all six preset
+files (`check_hf_files`, shared with OpenVoice); fetcher spec `bark`.
+
+Tests: 10 new (`test_bark_engine.py`) + router updates; 7 old tests encoded
+"dialogue → Dia" and were rewritten to the new routing (D-35); the one Dia-only
+loader test was removed with the code it tested. 535 OK. Can fail: speaking every
+turn with speaker 1's preset → the dialogue test fails; restored.
+
+Download: network to huggingface.co was intermittent (DNS failures, 15 s
+responses); 1.6 GB arrived, one preset (`en_speaker_9_semantic_prompt.npy`)
+still incomplete — and the audit correctly reports Bark **not present** until
+it lands. Live verification (CPU timing, SQUIM MOS, two audible voices) is next.
