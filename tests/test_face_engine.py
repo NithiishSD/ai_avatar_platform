@@ -238,11 +238,46 @@ class PoseFallbackTests(unittest.TestCase):
         self.assertAlmostEqual(pose.roll, 0.0, places=6)
         self.assertEqual(pose.source, "landmark-geometry")
 
-    def test_tilted_eyes_produce_roll(self):
+    def test_tilted_eyes_produce_roll_signed_like_the_matrix(self):
+        # The image-right eye dropped = a clockwise tilt on screen. Real
+        # MediaPipe reports that as *negative* roll (+10 deg CCW -> +10.0), so
+        # the fallback must too. This test used to expect a positive value,
+        # which encoded the fallback's inverted sign.
         landmarks = mesh()
-        landmarks[263] = Landmark(0.60, 0.55)  # right eye dropped
+        landmarks[263] = Landmark(0.60, 0.55)
+        points = [(lm.x, lm.y, 0.0) for lm in landmarks]
+        self.assertLess(_pose_from_landmarks(points, 100, 100).roll, -10.0)
+
+    def test_counter_clockwise_tilt_is_positive_roll(self):
+        landmarks = mesh()
+        landmarks[263] = Landmark(0.60, 0.35)  # image-right eye raised
         points = [(lm.x, lm.y, 0.0) for lm in landmarks]
         self.assertGreater(_pose_from_landmarks(points, 100, 100).roll, 10.0)
+
+    def test_tilting_the_whole_face_changes_roll_not_yaw_or_pitch(self):
+        # Rotating every landmark rigidly is a pure tilt. Measured along the
+        # image axes, a 10 deg tilt used to read as 14 deg of yaw on a real
+        # photo; in the face's own frame yaw and pitch must not move.
+        points = [(lm.x, lm.y, 0.0) for lm in mesh()]
+        upright = _pose_from_landmarks(points, 100, 100)
+        angle = math.radians(-10.0)  # -10 in image coordinates = 10 deg CCW on screen
+        cx, cy = 0.5, 0.5
+
+        def turn(x, y):
+            dx, dy = x - cx, y - cy
+            return (cx + dx * math.cos(angle) - dy * math.sin(angle),
+                    cy + dx * math.sin(angle) + dy * math.cos(angle), 0.0)
+
+        tilted = _pose_from_landmarks([turn(x, y) for x, y, _ in points], 100, 100)
+        self.assertAlmostEqual(tilted.roll - upright.roll, 10.0, places=4)
+        self.assertAlmostEqual(tilted.yaw, upright.yaw, places=4)
+        self.assertAlmostEqual(tilted.pitch, upright.pitch, places=4)
+
+    def test_nose_toward_the_image_right_is_positive_yaw(self):
+        landmarks = mesh()
+        landmarks[1] = Landmark(landmarks[1].x + 0.05, landmarks[1].y)
+        points = [(lm.x, lm.y, 0.0) for lm in landmarks]
+        self.assertGreater(_pose_from_landmarks(points, 100, 100).yaw, 0.0)
 
     def test_pose_is_clamped_to_the_reliable_range(self):
         landmarks = mesh()

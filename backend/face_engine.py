@@ -132,7 +132,22 @@ class BoundingBox:
 
 @dataclass(frozen=True)
 class HeadPose:
-    """Head rotation in degrees. Yaw is left/right, pitch up/down, roll tilt."""
+    """
+    Head rotation in degrees, signed as a viewer of the image sees it.
+
+    Measured on real MediaPipe output (T1.3, 7 Oct 2026) with known-answer
+    edits of a photo - in-plane rotation, keystone warps that tilt the face
+    plane, and mirroring:
+
+    * ``yaw``   > 0 when the face turns toward the image's right edge
+                  (the subject's own left). Mirroring the image negates it.
+    * ``pitch`` > 0 when the face looks down. Mirroring leaves it unchanged.
+    * ``roll``  > 0 when the head tilts counter-clockwise on screen. Rotating
+                  the photo by +10 degrees CCW moved roll by +10.0.
+
+    Both estimators below (the transformation matrix and the landmark
+    geometry fallback) follow this convention; a test holds them to it.
+    """
 
     yaw: float
     pitch: float
@@ -246,10 +261,8 @@ def _euler_from_matrix(matrix: np.ndarray) -> Tuple[float, float, float]:
     The gimbal-lock branch keeps roll from going wild when a face looks
     sharply up or down and ``sy`` collapses.
 
-    Known limitation: the *sign* convention has not yet been validated against
-    a photo at a measured angle, so treat left-vs-right and up-vs-down as
-    unverified until Gate 1 is checked with a real reference. Magnitudes are
-    correct.
+    Signs follow ``HeadPose``'s viewer-frame convention, verified against
+    known-answer image edits rather than assumed from the axis names.
     """
     rotation = np.asarray(matrix, dtype=np.float64)[:3, :3]
     sy = math.sqrt(rotation[0, 0] ** 2 + rotation[1, 0] ** 2)
@@ -275,8 +288,14 @@ def _pose_from_landmarks(
 
     Yaw comes from how far the nose sits between the eye corners, pitch from
     the nose's height between forehead and chin, and roll from the tilt of the
-    eye line. Approximate, but it never disagrees wildly with the matrix, and
-    it keeps the pose field populated rather than absent.
+    eye line. Approximate, but it keeps the pose field populated rather than
+    absent.
+
+    Yaw and pitch are measured in the *face's* frame - along the eye line and
+    perpendicular to it - not along the image axes. Measured in image axes, a
+    head that was only tilted 10 degrees read 14 degrees of yaw, because
+    tilting moves the nose sideways on screen. For an upright face both frames
+    coincide, so frontal results are unchanged.
     """
     def point(index: int) -> Tuple[float, float]:
         x, y, _ = landmarks[index]
@@ -288,22 +307,38 @@ def _pose_from_landmarks(
     chin = point(LM_CHIN)
     forehead = point(LM_FOREHEAD)
 
+    # LM_LEFT_EYE_OUTER (33) is the eye on the image's left - MediaPipe names
+    # it the subject's right - so this vector points toward the image's right.
     eye_dx = right_eye[0] - left_eye[0]
     eye_dy = right_eye[1] - left_eye[1]
-    roll = math.degrees(math.atan2(eye_dy, eye_dx))
+    # Image y grows downward, so a counter-clockwise tilt on screen gives a
+    # negative eye_dy. Negating makes CCW positive, matching the matrix; the
+    # bare atan2 had the opposite sign (+10 deg CCW read as -10.2).
+    roll = -math.degrees(math.atan2(eye_dy, eye_dx))
 
-    eye_mid_x = (left_eye[0] + right_eye[0]) / 2
-    # -1 when the nose sits at the left eye, +1 at the right; scaled to the
-    # ~+-60 deg range the mesh stays reliable over.
+    eye_len = math.hypot(eye_dx, eye_dy)
     yaw = 0.0
-    if abs(eye_dx) > 1e-6:
-        yaw = ((nose[0] - eye_mid_x) / (eye_dx / 2)) * 60.0
-
-    vertical = chin[1] - forehead[1]
     pitch = 0.0
-    if abs(vertical) > 1e-6:
-        # 0.5 is a neutral nose height between forehead and chin.
-        pitch = (((nose[1] - forehead[1]) / vertical) - 0.5) * 120.0
+    if eye_len > 1e-6:
+        # Unit vectors of the face frame: `across` along the eye line toward
+        # the image's right, `down` perpendicular to it, toward the chin.
+        across = (eye_dx / eye_len, eye_dy / eye_len)
+        down = (-across[1], across[0])
+
+        def along(vector: Tuple[float, float], axis: Tuple[float, float]) -> float:
+            return vector[0] * axis[0] + vector[1] * axis[1]
+
+        eye_mid = ((left_eye[0] + right_eye[0]) / 2, (left_eye[1] + right_eye[1]) / 2)
+        # -1 when the nose sits at the left eye, +1 at the right; scaled to
+        # the ~+-60 deg range the mesh stays reliable over.
+        nose_offset = along((nose[0] - eye_mid[0], nose[1] - eye_mid[1]), across)
+        yaw = (nose_offset / (eye_len / 2)) * 60.0
+
+        vertical = along((chin[0] - forehead[0], chin[1] - forehead[1]), down)
+        if abs(vertical) > 1e-6:
+            nose_depth = along((nose[0] - forehead[0], nose[1] - forehead[1]), down)
+            # 0.5 is a neutral nose height between forehead and chin.
+            pitch = ((nose_depth / vertical) - 0.5) * 120.0
 
     return HeadPose(
         yaw=max(-90.0, min(90.0, yaw)),

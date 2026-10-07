@@ -22,3 +22,4 @@ open; independent tasks continue meanwhile.
 
 | ID | Task | Steps | Look for | Result |
 |---|---|---|---|---|
+| M-01 | T1.3 (optional) | Take a selfie with your head turned clearly toward **your own left** (~30°). Register it: `PYTHONPATH=backend backend/.conda/bin/python scripts/make_avatar.py --human FILE --avatar-id me --subject "<your name>" --consent subject-provided`, open the studio, pick `me` | The pose line should show **yaw positive**. It is also the consented human face Q-05 asks for | pending |

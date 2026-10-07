@@ -17,8 +17,9 @@ records what was verified live, with the real command and result.
 | T0.7 | Done | ebddb99, 8b1a910 |
 | **M0 gate** | **Passed** | |
 | T1.1 | Done | 94956b9 |
-| T1.2 | Done | (this commit) |
-| T1.3 | Next | |
+| T1.2 | Done | 0501aeb |
+| T1.3 | Done | (this commit) |
+| T1.4 | Next | |
 
 ## Log
 
@@ -227,3 +228,49 @@ Verified, real MediaPipe on `demo`: **1 passed (3.4 s)**. Numbers:
 512×512 canvas, centroid (360, 325); face box x 245–460, y 187–454 → inside.
 Can fail: drawing `ctx.arc(point.x, point.y, …)` without scaling by the image
 size (all dots in the corner) → "Expected > 500, Received 1"; restored.
+
+### 2026-10-07 — T1.3 head-pose sign convention
+
+No photo at a measured angle exists, so the convention was established on real
+MediaPipe output of `demo` with known-answer edits: in-plane rotation (truth:
+the angle), keystone warps (the 2D projection of tilting the face plane about
+one axis — shrink the right edge = face turned toward image-right; shrink the
+bottom = looking down), and mirroring (must negate yaw and roll, keep pitch).
+
+Matrix pose, measured:
+
+| edit | yaw | pitch | roll |
+|---|---|---|---|
+| frontal | -0.58 | 4.98 | 1.21 |
+| face toward image-right | **+2.02** | 5.26 | 1.78 |
+| ... mirrored | **-2.19** | 5.72 | -1.83 |
+| face toward image-left | **-2.33** | 5.99 | 0.78 |
+| looking down | 0.43 | **6.13** | -0.33 |
+| looking up | -0.58 | **3.06** | 2.45 |
+| rotated +10° CCW | -0.48 | 4.62 | **11.22** |
+| ... mirrored | 0.10 | 5.16 | **-11.43** |
+| rotated -10° CW | -0.48 | 4.68 | **-8.89** |
+
+Convention (now in `HeadPose`'s docstring): **+yaw = facing image-right (the
+subject's own left); +pitch = looking down; +roll = counter-clockwise on
+screen.** Roll is unambiguous (Δ ≈ ±10 for ±10°). Yaw and pitch shifts are
+small (a flat warp is a weak 3D cue, ~2°) but consistent in both directions
+and under mirroring.
+
+**Bug found in the landmark-geometry fallback** (used when no matrix):
+1. roll had the opposite sign: +10° CCW → matrix 11.22, geometry **-10.18**;
+2. yaw/pitch were measured along image axes, so a pure 10° tilt read
+   **14.12° of yaw** (matrix: -0.48).
+Fixed by measuring in the face's frame (along the eye line and perpendicular to
+it) and negating roll for image-y-down. After: CCW 11.22 / **10.18**, CW
+-8.89 / **-10.04**; tilted-frontal geometry yaw 3.39 and 4.03 vs frontal 4.37.
+Geometry keeps a constant bias (+3–5°), expected for the approximation.
+
+Tests: `test_tilted_eyes_produce_roll` expected **positive** roll for a
+clockwise tilt — it encoded the inverted sign; changed to expect negative
+because the measured convention says so (D-25). New: CCW = positive roll,
+rigid tilt moves roll by exactly +10 and leaves yaw/pitch unchanged,
+nose-right = positive yaw. On HEAD's `face_engine.py`, 3 of the 4 fail.
+Gates: ruff clean, pyrefly 0, 484 tests OK. Only the UI displays the signs;
+the quality gate uses absolute values, so no behaviour beyond that changes.
+Optional owner confirmation with a real turned head: Manual check M-01.
