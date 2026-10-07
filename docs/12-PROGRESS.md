@@ -16,7 +16,8 @@ records what was verified live, with the real command and result.
 | T0.6 | Done | d108e84 |
 | T0.7 | Done | ebddb99, 8b1a910 |
 | **M0 gate** | **Passed** | |
-| T1.1 | Next | |
+| T1.1 | Done | (this commit) |
+| T1.2 | Next | |
 
 ## Log
 
@@ -197,3 +198,17 @@ frontend lint + build OK.
 · `hygiene main` ok. CI green on m1. The "Render job failed", "SQUIM inference
 failed (cuda oom)" and Redis "connection refused" lines in test output are
 tests exercising failure paths on purpose.
+
+### 2026-10-07 — T1.1 E2E synthesis
+
+`frontend/e2e/synthesis.spec.js`: type text → Generate Speech → audio element
+gets `/outputs/speech.wav?t=…` → badge says `kokoro` → "Aligned Phonemes (N)",
+N > 5 → no "estimated, not measured" warning → the WAV behind the player is a
+real RIFF file > 24 000 bytes.
+
+Verified: **1 passed (22.0 s)**, real Kokoro on CPU through the real API.
+First attempt failed on the selector, not the app: a textarea inside its
+`<label>` gets the textarea's *value* folded into its accessible name, so
+`getByLabel("Text", {exact})` never matches; now by placeholder.
+Can fail: with `_mms_failed = True` planted in `ForcedAligner.__init__`, the
+test fails on `toHaveCount(0)` for the fallback warning (Received: 1); restored.

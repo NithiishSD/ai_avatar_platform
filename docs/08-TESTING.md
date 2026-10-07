@@ -25,7 +25,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-02 | `test_voice_engine.py` routing tests | pass |
 | R-03 | T2.1 live clone | gap |
 | R-04 | T3.3 | gap |
-| R-05 | `test_alignment_engine.py`, `test_alignment_method.py`, `test_alignment_accuracy.py` | pass |
+| R-05 | `test_alignment_engine.py`, `test_alignment_method.py`, `test_alignment_accuracy.py`; E2E `synthesis.spec.js` (measured, not estimated) | pass |
 | R-06 | `test_mms_engine.py`, `test_language_registry.py`, `test_romanizer.py` | pass |
 | R-07 | `test_emotion_engine.py` | pass |
 | R-08 | `test_quality_auditor.py` (incl. partial-SQUIM fallback) | pass |
@@ -44,7 +44,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-21 | T6.1 | gap |
 | R-22 | `test_security.py` | pass |
 | R-23 | `test_model_registry.py`, `test_app.py` health | pass |
-| R-24 | E2E `smoke.spec.js`: studio + health, language catalogue, clone references, stale-lookup race, avatar landmarks (T0.6). Still to come: T1.1, T1.2, T2.5, T3.4, T4.3 | partial |
+| R-24 | E2E `smoke.spec.js` (T0.6), `synthesis.spec.js` (T1.1). Still to come: T1.2, T2.5, T3.4, T4.3 | partial |
 | R-25 | T7.1 | gap |
 | R-26 | T7.2 | gap |
 | R-27 | T6.2 | gap |
