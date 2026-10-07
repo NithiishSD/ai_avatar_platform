@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import app as app_module
+import avatar_store
 import provenance
 import render_engine
 from app import app
@@ -48,6 +49,11 @@ class VisionApiCase(unittest.TestCase):
             # These tests poll job status; the rate limiter has its own tests.
             mock.patch.object(app_module.security_gate, "inspect", return_value=(True, 0, {})),
             mock.patch.object(app_module, "faces", self.store),
+            # render_engine builds its own AvatarStore() from this default
+            # root. Without the patch it silently read the developer's real
+            # inputs/faces, so the "real render" test passed locally on a real
+            # face and failed anywhere that face did not exist (CI).
+            mock.patch.object(avatar_store, "FACES_DIR", self.tmp / "inputs" / "faces"),
             mock.patch.object(render_engine, "OUTPUTS_DIR", self.outputs),
             mock.patch.object(render_engine, "INPUTS_DIR", self.tmp / "inputs"),
             mock.patch.object(render_engine, "RENDERS_DIR", self.outputs / "renders"),

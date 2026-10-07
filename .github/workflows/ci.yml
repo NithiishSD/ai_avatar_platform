@@ -32,8 +32,12 @@ jobs:
             backend/requirements.txt
             backend/requirements-dev.txt
 
+      # ffmpeg for the video tests; libEGL/GLES because MediaPipe's native
+      # library links them even when it runs on the CPU.
       - name: System libraries
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        run: >
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends
+          ffmpeg libegl1 libgles2
 
       # CPU wheels first. requirements.txt allows torch>=2.2, so pip keeps
       # these instead of fetching the 2 GB CUDA builds a GPU-less runner
