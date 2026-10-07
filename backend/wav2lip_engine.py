@@ -26,6 +26,7 @@ decision and shows up in the render result by name.
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Iterable, Iterator, List, Optional, Sequence, Tuple, Union
 
@@ -40,6 +41,21 @@ IMG_SIZE = 96
 MEL_STEP = 16
 MEL_SAMPLE_RATE = 16000
 MELS_PER_SECOND = 80.0
+
+# How far each frame's audio window is moved earlier, in seconds.
+#
+# Measured, not derived (T2.3, 8 Oct 2026). With windows starting exactly at
+# each frame - the reference inference convention - SyncNet put the best
+# audio-video offset at -3 frames (the mouth ~120 ms ahead of the sound) on
+# every clip tried: 3.0 s and 6.4 s of Kokoro English and 5.0 s of MMS Hindi.
+# Sweeping the shift moved the offset by exactly one frame per frame of shift,
+# and 3 frames earlier gave offset 0 with the best or equal LSE-C/LSE-D on all
+# three (e.g. 9.01 -> 10.20 LSE-C). The blendshape engine reads offset 0 on
+# the same clips, so the lead is in this path, not in the metric; its cause
+# (window convention, STFT centring) was not isolated. A calibration knob on
+# purpose: re-measure with scripts or the lipsync-score endpoint if the audio
+# front end changes.
+AUDIO_LEAD_SECONDS = 0.12
 REQUIRED_VRAM_MB = 1200
 
 # Audio front end, fixed by how the checkpoints were trained.
@@ -206,13 +222,19 @@ def melspectrogram(wav: np.ndarray) -> np.ndarray:
     return np.clip(normalised, -_MAX_ABS, _MAX_ABS).astype(np.float32)
 
 
-def mel_chunks(mel: np.ndarray, fps: float, frame_count: int) -> np.ndarray:
+def mel_chunks(
+    mel: np.ndarray,
+    fps: float,
+    frame_count: int,
+    lead_seconds: float = AUDIO_LEAD_SECONDS,
+) -> np.ndarray:
     """
     One ``(80, 16)`` mel window per video frame.
 
-    Frame ``i`` starts at mel column ``i * 80 / fps``. Windows that would run
-    off the end reuse the final 16 columns, as the reference implementation
-    does, so every frame gets a full window.
+    Frame ``i`` starts at mel column ``(i / fps - lead_seconds) * 80``; with
+    ``lead_seconds=0`` that is the reference implementation's ``i * 80 / fps``.
+    Windows clamp to the clip: early frames reuse the first 16 columns and
+    late ones the last 16, so every frame gets a full window.
     """
     total = mel.shape[1]
     if total < MEL_STEP:
@@ -220,10 +242,11 @@ def mel_chunks(mel: np.ndarray, fps: float, frame_count: int) -> np.ndarray:
         total = MEL_STEP
     step = MELS_PER_SECOND / float(fps)
     chunks = np.empty((frame_count, _N_MELS, MEL_STEP), dtype=np.float32)
+    lead_columns = lead_seconds * MELS_PER_SECOND
     for index in range(frame_count):
-        start = int(index * step)
-        if start + MEL_STEP > total:
-            start = total - MEL_STEP
+        # Floor, like the reference, then clamp into the clip at both ends.
+        start = int(math.floor(index * step - lead_columns))
+        start = min(max(start, 0), total - MEL_STEP)
         chunks[index] = mel[:, start : start + MEL_STEP]
     return chunks
 

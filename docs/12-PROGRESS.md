@@ -22,8 +22,9 @@ records what was verified live, with the real command and result.
 | T1.4 | Done | b02a741 |
 | **M1 gate** | **Passed** (= roadmap Gate 1) | |
 | T2.1 | **Blocked** — XTTS-v2 download incomplete; CPML acceptance needed from owner (M-03) | (this commit: audit fix) |
-| T2.2 | Done | (this commit) |
-| T2.3 | Next | |
+| T2.2 | Done | 54686a2 |
+| T2.3 | Verified on CPU — waiting on M-04 (peak VRAM on the host GPU, and a look at the video) | (this commit) |
+| T2.6 | Next (T2.4/T2.5 need XTTS-v2, M-03) | |
 
 ## Log
 
@@ -392,3 +393,47 @@ Verified:
   | missing file | **400** "Reference audio not found" |
   Temporary test WAVs removed from `inputs/`.
 The successful clone itself is exercised in T2.4, once XTTS-v2 is complete (M-03).
+
+### 2026-10-08 — T2.3 Wav2Lip live, and a 120 ms lip lead found and calibrated out
+
+`wav2lip_gan.pth` on real weights, CPU (no GPU here). Same aligned 3.0 s job
+rendered with both engines: blendshape LSE-C 3.85 / LSE-D 10.71 / offset 0;
+Wav2Lip LSE-C 8.84 / LSE-D 6.79 / **offset −3 frames (−120 ms)**, with SyncNet
+warning the streams may be misaligned. By the 30 Sep controls (audio delayed
+200 ms → −5), −3 means the mouth moves ~120 ms *before* the sound.
+
+Cause hunted by measurement rather than by reading the reference code: the mel
+window starts at each frame (reference inference convention). Sweeping it k
+frames earlier moved the offset by exactly +1 per frame on three clips (two TTS
+engines, two languages):
+
+| clip | k=0 | k=2 | k=3 | k=4 |
+|---|---|---|---|---|
+| en 3.0 s Kokoro | −3, 9.01 | −1, 10.05 | **0, 10.20** | — |
+| en 6.4 s Kokoro | −3, 10.62 | −1, 10.93 | **0, 10.99** | +1, 10.83 |
+| hi 5.0 s MMS | −3, 11.52 | −1, 11.75 | **0, 11.71** | +1, 11.80 |
+(offset frames, LSE-C)
+
+Blendshape reads offset 0 on the same clips, so the lead is in the Wav2Lip
+path, not the metric. Root cause not isolated (window convention vs STFT
+centring); fixed as a named calibration constant `AUDIO_LEAD_SECONDS = 0.12`
+(time-based, so fps-independent) with the evidence in its comment (D-31).
+Tests: reference indexing kept as the explicit `lead_seconds=0` case; new test
+for the default (frame 10 → column 22; early frames clamp).
+
+Final, committed code, no patching — `render_job` + `score_video`:
+
+| clip | engine | frames | render (CPU) | offset | LSE-C | LSE-D |
+|---|---|---|---|---|---|---|
+| en 3.0 s | blendshape | 75 | 3.27 s | 0 | 3.98 | 10.55 |
+| en 3.0 s | **wav2lip** | 75 | 5.02 s | **0** | **9.84** | **6.61** |
+| en 6.4 s | blendshape | 160 | 1.02 s | 0 | 4.23 | 11.56 |
+| en 6.4 s | **wav2lip** | 160 | 4.97 s | **0** | **10.51** | **5.97** |
+| hi 5.0 s | blendshape | 126 | 0.95 s | 0 | 5.55 | 10.20 |
+| hi 5.0 s | **wav2lip** | 126 | 4.01 s | **0** | **11.18** | **5.48** |
+
+Real talking-head video scores LSE-C ≈ 6–8; Wav2Lip exceeds it, as expected of
+a model trained against a SyncNet discriminator (so LSE-C alone flatters it —
+which is why the visual check M-04 matters). Gates: 504 tests OK, lint, types.
+
+Not measurable here: peak VRAM (acceptance says < 6 GB) — M-04.

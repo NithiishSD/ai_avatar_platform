@@ -33,7 +33,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-10 | `test_face_engine.py`; E2E `avatar.spec.js` (mesh drawn inside the face box, measured from canvas pixels); pose signs measured on real MediaPipe (T1.3) + `PoseFallbackTests` | pass |
 | R-11 | `test_face_quality.py` | pass |
 | R-12 | `test_render_engine.py`, `test_app_vision.py` | pass |
-| R-13 | `test_render_engine.py` engine selection | pass |
+| R-13 | `test_render_engine.py` engine selection; live: blendshape and Wav2Lip on the same 3 jobs (T2.3) | pass |
 | R-14 | `test_viseme_blendshapes.py`, `test_face_animation.py` | pass |
 | R-15 | `test_avatar_generator.py`; API in T3.2 | partial (CLI only) |
 | R-16 | T3.1 | gap |
@@ -59,10 +59,10 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | N-02 | T2.1 | gap |
 | N-03 | in-process 13 ms (17 Sep); real server in T6.3 | partial |
 | N-04 | in-process only; real server in T6.3 | gap |
-| N-05 | blendshape LSE-C EN 2.8 / HI 4.7 / TA 6.8, offset 0 (30 Sep) | measured — mapping in D-12 |
+| N-05 | 8 Oct, SyncNet v2, 25 fps: **Wav2Lip** offset 0 on 3/3 clips, LSE-C 9.84 / 10.51 / 11.18, LSE-D 6.61 / 5.97 / 5.48; blendshape offset 0, LSE-C 3.98 / 4.23 / 5.55 (T2.3). The D-12 window percentage not yet computed (T6.6) | measured — % figure pending |
 | N-06 | T6.6 | gap |
 | N-07 | T4.4 | gap |
 | N-08 | T6.4 | gap |
 | N-09 | T3.5 | gap |
-| N-10 | not measurable here (no CUDA in sandbox) | gap |
+| N-10 | not measurable here (no CUDA in sandbox); host measurement requested (M-04) | gap |
 | N-11 | needs a deployment (Q-07) | gap |
