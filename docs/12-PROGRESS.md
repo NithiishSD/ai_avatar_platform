@@ -29,7 +29,9 @@ records what was verified live, with the real command and result.
 | T2.5 | Done (visual check of the video still in M-04) | 13f696c |
 | T3.1 | Done | 63367d0 |
 | T3.2 | Done | (this commit) |
-| T3.5 | Done | (this commit) |
+| T3.5 | Done | ae92ce9 |
+| T6.2 | Done | (this commit) |
+| T7.5 | Done (two HTML `placeholder` attributes remain by decision D-40) | (this commit) |
 | T3.3 | Next | |
 
 ## Log
@@ -667,3 +669,27 @@ render. The Wav2Lip result matters more (it repaints the mouth region); run
 
 Download check (asked 8 Oct): XTTS-v2 is still incomplete — `model.pth` 1.3 GB,
 no `config.json`, no writes since 30 Sep. It needs the owner's CPML acceptance (M-03).
+
+### 2026-10-08 — T6.2 request ids + structured logs, T7.5 placeholder sweep
+
+`backend/request_context.py` (D-39); `app.py` registers the middleware last
+(outermost) and exposes the header to browsers via CORS; both job runners
+(`job_queue.py`, `generation_jobs.py`) carry the context into their worker thread.
+
+Verified:
+- `scripts/check.sh` → ruff clean, pyrefly 0 errors, 572 tests OK (8 new).
+- **the tests found a real gap:** an unhandled exception returned a 500 with no
+  id (Starlette builds that response outside the middleware). Fixed by catching
+  in the middleware; the test now asserts the id is in the body and the header.
+- live, real server: `GET /health` with `X-Request-ID: my-trace-1` → echoed;
+  none → fresh `692aaae9efee49e2`; `bad id` (space) → replaced. Synthesis +
+  `POST /avatar/render-job` with `X-Request-ID: trace-render-7` → response header
+  `trace-render-7`; the server log shows the render *worker thread's* lines
+  `[trace-render-7] face_engine: Loaded MediaPipe FaceLandmarker…` and
+  `[trace-render-7] render_engine: Rendered t62-trace… 64 frames in 2.64s`.
+- T7.5: `git grep -nE "TODO|FIXME|XXX|placeholder"` outside docs → 2 hits left, the
+  HTML attribute (D-40). Owner may overrule.
+
+Not done: uvicorn's own access-log lines are not stamped (D-39). Side effect worth
+knowing: importing the app now installs a log handler on the root logger when none
+exists, so test output shows app log lines.

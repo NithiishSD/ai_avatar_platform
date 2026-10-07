@@ -25,6 +25,7 @@ from dataclasses import dataclass, replace
 from typing import Callable, Dict, Optional
 
 from contracts import AvatarRenderJob, JobStatus
+from request_context import run_in_context
 from redis import Redis
 
 # __name__ gives this logger the module's dotted path ("job_queue"), so log
@@ -114,7 +115,8 @@ class InMemoryJobQueue:
             # submit() returns immediately; the thread pool runs _run later.
             # We deliberately drop the Future - progress is tracked in _jobs,
             # and nothing here awaits the result.
-            self._executor.submit(self._run, job.job_id)
+            # run_in_context: the worker thread logs under the id of the request that queued the job.
+            self._executor.submit(run_in_context(self._run), job.job_id)
         return queued_job
 
     def get(self, job_id: str) -> Optional[QueuedJob]:

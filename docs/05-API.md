@@ -40,6 +40,14 @@ Auth: `X-API-Key` header when `AUTH_ENABLED=true`. Rate limit: 429 with
 | POST | `/api/v1/provenance/verify` | does a file carry our watermark / manifest | M5 |
 | GET | `/api/v1/audit` | consent audit trail | M5 |
 
+## Request ids
+
+Every response carries `X-Request-ID` (also on 401/429/500). Send your own
+(`A-Za-z0-9._-`, up to 64 characters) to trace a call; anything else is
+replaced. Every log line written for the request, including the render or
+generation worker it queued, shows it as `[id]`. An unhandled error answers
+500 with `{"detail": ..., "requestId": ...}`.
+
 ## Status codes used
 
 400 bad input the schema cannot express (unsupported engine, unreadable URL) ·

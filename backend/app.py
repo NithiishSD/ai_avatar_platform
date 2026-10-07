@@ -61,9 +61,11 @@ from model_registry import (
     vision_audit_summary,
 )
 from quality_auditor import SpeechQualityAuditor
+from request_context import REQUEST_ID_HEADER, install_logging, request_id_middleware
 from security import API_KEY_HEADER, SecurityGate
 from voice_engine import CLONE_ENGINES, ModelWeightsMissing, VoiceConsentRequired
 
+install_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -122,6 +124,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Without this a browser page cannot read the id off the response.
+    expose_headers=[REQUEST_ID_HEADER],
 )
 
 # API-key auth + per-identity rate limiting. Both are configured from .env and
@@ -148,6 +152,10 @@ async def enforce_security(request: Request, call_next):
             headers=detail.get("headers", {}),
         )
     return await call_next(request)
+
+# Registered last, so it is the outermost layer: even a 401 or 429 from the
+# security gate carries a request id.
+app.middleware("http")(request_id_middleware)
 
 inputs_dir = project_root / "inputs"
 inputs_dir.mkdir(parents=True, exist_ok=True)

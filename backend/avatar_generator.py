@@ -145,7 +145,7 @@ class AvatarGenerator:
 
             half = device == "cuda"
             # Any: diffusers' stubs type from_pretrained as a union including a
-            # dummy placeholder class, which hides every real pipeline method.
+            # dummy stand-in class, which hides every real pipeline method.
             pipe: Any = StableDiffusionPipeline.from_pretrained(
                 self.repo_id,
                 torch_dtype=torch.float16 if half else torch.float32,

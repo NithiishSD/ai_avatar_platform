@@ -4,7 +4,7 @@ import { expect, test } from "@playwright/test";
 
 test("text becomes speech with measured phoneme timing", async ({ page }) => {
   await page.goto("/");
-  // By placeholder, not label: the textarea sits inside its <label>, and the
+  // By the input hint text, not the label: the textarea sits inside its <label>, and the
   // accessible-name rules fold an embedded text box's current value into the
   // label's name, so "Text" alone never matches exactly.
   await page.getByPlaceholder(/^Enter text/).fill("Hello from the end to end test.");

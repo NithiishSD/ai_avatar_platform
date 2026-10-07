@@ -19,6 +19,8 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Optional
 
+from request_context import run_in_context
+
 logger = logging.getLogger(__name__)
 
 # Finished jobs kept for polling; the oldest are dropped past this many.
@@ -38,7 +40,8 @@ class GenerationJobs:
             self._jobs[task_id] = {"taskId": task_id, "status": "QUEUED"}
             while len(self._jobs) > MAX_KEPT:  # dicts keep insertion order
                 self._jobs.pop(next(iter(self._jobs)))
-        self._executor.submit(self._run, task_id, work)
+        # The worker thread logs under the id of the request that queued the job.
+        self._executor.submit(run_in_context(self._run), task_id, work)
         return task_id
 
     def get(self, task_id: str) -> Optional[Dict[str, Any]]:
