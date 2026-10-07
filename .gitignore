@@ -76,8 +76,6 @@ inputs/
 
 # Local working notes and planning files. The repository publishes code and a
 # single README.md; design notes, task lists and progress logs stay local.
-CLAUDE.md
-.claude/
 docs/
 *.md
 !/README.md
