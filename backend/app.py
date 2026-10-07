@@ -57,7 +57,7 @@ from model_registry import (
 )
 from quality_auditor import SpeechQualityAuditor
 from security import API_KEY_HEADER, SecurityGate
-from voice_engine import ModelWeightsMissing
+from voice_engine import ModelWeightsMissing, VoiceConsentRequired
 
 logger = logging.getLogger(__name__)
 
@@ -603,10 +603,12 @@ def create_synthesis_job(request: AudioSynthesisRequest) -> SynthesisJobResponse
             style=request.style,
             text=request.text,
         )
-        router.require_weights(model_key)
+        router.preflight(model_key, request.speaker_wav)
+    except VoiceConsentRequired as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
     except ModelWeightsMissing as error:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
-    except ValueError as error:
+    except (ValueError, FileNotFoundError) as error:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
     try:
         task = synthesize_audio.delay(request.model_dump(by_alias=True, mode="json"))

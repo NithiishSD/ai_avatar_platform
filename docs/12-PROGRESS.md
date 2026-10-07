@@ -22,7 +22,8 @@ records what was verified live, with the real command and result.
 | T1.4 | Done | b02a741 |
 | **M1 gate** | **Passed** (= roadmap Gate 1) | |
 | T2.1 | **Blocked** — XTTS-v2 download incomplete; CPML acceptance needed from owner (M-03) | (this commit: audit fix) |
-| T2.2 | Next | |
+| T2.2 | Done | (this commit) |
+| T2.3 | Next | |
 
 ## Log
 
@@ -365,3 +366,29 @@ MMS-TTS).
 
 Unblocking needs the owner (M-03: accept the CPML and run the fetcher).
 Meanwhile: T2.2, T2.3 and T2.6 do not depend on it; T2.4/T2.5 do.
+
+### 2026-10-08 — T2.2 consent before cloning
+
+Found: nothing on the cloning path checked provenance. `provenance.usability`
+existed and the avatar store used it for faces, but any WAV could be cloned.
+
+`require_voice_consent(path)` (missing file → FileNotFoundError; no sidecar →
+VoiceConsentRequired naming `scripts/make_reference.py`; human without a consent
+basis → refused with the reason; synthetic or consented human → ok).
+`VoiceEngineRouter.preflight(model_key, speaker_wav)` runs consent then weights,
+consent only for engines that read the reference (XTTS-v2, Higgs). Called by
+`synthesize()` and by the API route before queueing: 403 / 503 / 400 (D-30).
+
+Verified:
+- 11 new tests (8 `VoiceConsentTests`, 3 API); 503 OK. With the
+  `require_voice_consent` call removed from `preflight`, 7 of them fail; restored.
+- live server, clone requests:
+  | reference | result |
+  |---|---|
+  | wav with no sidecar | **403** "has no provenance record … make_reference.py" |
+  | human sidecar, no basis | **403** "consent basis '' is not one of [...]" |
+  | `ljspeech_reference.wav` (human, open-licence) | consent passes → **503** XTTS-v2 incomplete |
+  | `smoke_reference_kokoro.wav` (synthetic) | consent passes → **503** |
+  | missing file | **400** "Reference audio not found" |
+  Temporary test WAVs removed from `inputs/`.
+The successful clone itself is exercised in T2.4, once XTTS-v2 is complete (M-03).

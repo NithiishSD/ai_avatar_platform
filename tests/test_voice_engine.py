@@ -8,7 +8,7 @@ import soundfile as sf
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from voice_engine import ModelWeightsMissing, VoiceEngineRouter
+from voice_engine import ModelWeightsMissing, VoiceConsentRequired, VoiceEngineRouter
 
 
 def weights_on_disk(*missing):
@@ -199,6 +199,75 @@ class MissingWeightsTests(unittest.TestCase):
             with self.assertRaises(ModelWeightsMissing):
                 self.router.synthesize("[S1] Hi [S2] Hello", mode="dialogue")
         load_dia.assert_not_called()
+
+
+def reference(folder, name, **provenance_fields):
+    """A short WAV, with a provenance sidecar unless no fields are given."""
+    import provenance
+
+    path = Path(folder) / name
+    sf.write(path, np.zeros(2400, dtype=np.float32), 24000)
+    if provenance_fields:
+        provenance.write(path, **provenance_fields)
+    return str(path)
+
+
+class VoiceConsentTests(unittest.TestCase):
+    """Cloning refuses a recording whose provenance does not permit it."""
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.router = VoiceEngineRouter(device="cpu")
+        audit = patch("model_registry.audit_model_weights", return_value=weights_on_disk())
+        audit.start()
+        self.addCleanup(audit.stop)
+
+    def test_a_recording_with_no_record_is_refused_with_the_fix(self):
+        wav = reference(self.tmp.name, "unknown.wav")
+        with self.assertRaises(VoiceConsentRequired) as caught:
+            self.router.preflight("xtts-v2", wav)
+        self.assertIn("no provenance record", str(caught.exception))
+        self.assertIn("scripts/make_reference.py", str(caught.exception))
+
+    def test_a_human_recording_without_a_consent_basis_is_refused(self):
+        wav = reference(self.tmp.name, "someone.wav", source="human", speaker="Someone")
+        with self.assertRaises(VoiceConsentRequired) as caught:
+            self.router.preflight("xtts-v2", wav)
+        self.assertIn("consent basis", str(caught.exception))
+
+    def test_a_consented_human_recording_may_be_cloned(self):
+        wav = reference(self.tmp.name, "lj.wav", source="human", speaker="LJ",
+                        licence="public domain", consent_basis="open-licence")
+        self.router.preflight("xtts-v2", wav)
+
+    def test_synthetic_speech_may_be_cloned(self):
+        wav = reference(self.tmp.name, "smoke.wav", source="synthetic", speaker="kokoro")
+        self.router.preflight("xtts-v2", wav)
+
+    def test_a_reference_the_engine_ignores_is_not_checked(self):
+        # Kokoro never reads speaker_wav, so an unconsented file left selected
+        # must not block plain fast synthesis.
+        self.router.preflight("kokoro", reference(self.tmp.name, "unknown.wav"))
+
+    def test_a_missing_file_is_reported_as_missing_not_unconsented(self):
+        with self.assertRaises(FileNotFoundError):
+            self.router.preflight("xtts-v2", str(Path(self.tmp.name) / "nope.wav"))
+
+    def test_consent_is_checked_before_weights(self):
+        wav = reference(self.tmp.name, "unknown.wav")
+        with patch("model_registry.audit_model_weights", return_value=weights_on_disk("xtts-v2")):
+            with self.assertRaises(VoiceConsentRequired):
+                self.router.preflight("xtts-v2", wav)
+
+    def test_synthesis_refuses_before_any_loader_runs(self):
+        wav = reference(self.tmp.name, "unknown.wav")
+        with patch.object(self.router, "load_xtts_cloning") as load:
+            with self.assertRaises(VoiceConsentRequired):
+                self.router.synthesize("Hello", mode="clone", speaker_wav=wav)
+        load.assert_not_called()
 
 
 class HiggsLoadingTests(unittest.TestCase):

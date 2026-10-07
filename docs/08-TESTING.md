@@ -48,8 +48,8 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-25 | T7.1 | gap |
 | R-26 | T7.2 | gap |
 | R-27 | T6.2 | gap |
-| R-30 | `test_provenance.py`, `test_avatar_store.py` | pass |
-| R-31 | T2.2 | gap |
+| R-30 | `test_provenance.py`, `test_avatar_store.py`, `VoiceConsentTests` (voices now checked too) | pass |
+| R-31 | `VoiceConsentTests` (8), `test_app.py` 403/400/202; live on a real server (T2.2) | pass |
 | R-32 | T5.1 | gap |
 | R-33 | T5.2 | gap |
 | R-34 | `test_render_engine.py` label | pass |

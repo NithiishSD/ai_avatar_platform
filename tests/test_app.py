@@ -17,7 +17,7 @@ from job_queue import CeleryJobQueue, InMemoryJobQueue
 from celery_app import celery
 from contracts import AudioSynthesisRequest, AvatarRenderJob
 from test_contracts import VALID_JOB
-from test_voice_engine import weights_on_disk
+from test_voice_engine import reference, weights_on_disk
 
 
 class FakeRedis:
@@ -149,6 +149,40 @@ class RenderJobApiTests(unittest.TestCase):
             response = self.client.post("/api/v1/audio/synthesize", json=request)
         self.assertEqual(response.status_code, 503)
         self.assertIn("scripts/fetch_models.py --only higgs-tts-2", response.json()["detail"])
+        delay.assert_not_called()
+
+    def test_cloning_an_unconsented_voice_is_403_and_nothing_queued(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            request = {"text": "Hello", "mode": "clone", "speakerWav": reference(tmp, "unknown.wav")}
+            with patch("app.synthesize_audio.delay") as delay, \
+                 patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
+                response = self.client.post("/api/v1/audio/synthesize", json=request)
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("no provenance record", response.json()["detail"])
+        delay.assert_not_called()
+
+    def test_a_consented_voice_is_queued(self):
+        import tempfile
+
+        fake_task = type("Task", (), {"id": "TASK-CLONE"})()
+        with tempfile.TemporaryDirectory() as tmp:
+            wav = reference(tmp, "lj.wav", source="human", speaker="LJ",
+                            licence="public domain", consent_basis="open-licence")
+            request = {"text": "Hello", "mode": "clone", "speakerWav": wav}
+            with patch("app.synthesize_audio.delay", return_value=fake_task) as delay, \
+                 patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
+                response = self.client.post("/api/v1/audio/synthesize", json=request)
+        self.assertEqual(response.status_code, 202)
+        delay.assert_called_once()
+
+    def test_a_missing_reference_file_is_400(self):
+        request = {"text": "Hello", "mode": "clone", "speakerWav": "/nonexistent/voice.wav"}
+        with patch("app.synthesize_audio.delay") as delay, \
+             patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
+            response = self.client.post("/api/v1/audio/synthesize", json=request)
+        self.assertEqual(response.status_code, 400)
         delay.assert_not_called()
 
     def test_unsupported_multilingual_language_is_400_before_queueing(self):

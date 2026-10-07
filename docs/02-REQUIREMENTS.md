@@ -61,7 +61,7 @@ transcribed, see Q-04), **RM** = roadmap PDF, **G** = golden rules.
 | ID | Requirement | Source |
 |---|---|---|
 | R-30 | No voice or face is used without a provenance / consent record | G3, RM P5 |
-| R-31 | A clone request whose reference is not admissible is refused with the reason | RM P5 |
+| R-31 | A clone request whose reference may not be used (no provenance record, or a human voice without a consent basis) is refused with the reason. Synthetic voices are usable but never *admissible* as evidence (see D-30) | RM P5 |
 | R-32 | Inaudible watermark embedded in generated audio, with a detector | RM P5 |
 | R-33 | Invisible watermark and a signed provenance manifest on rendered video, with a verifier | RM P5 |
 | R-34 | Visible "AI-generated" label on rendered video by default | RM P5 |

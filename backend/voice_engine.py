@@ -33,6 +33,7 @@ from audio_utils import validate_and_convert_for_cloning
 from alignment_engine import ForcedAligner
 import language_registry
 import model_registry
+import provenance
 from emotion_engine import EmotionProsodyEngine
 from mms_engine import MMSTTSEngine, MMSRomanizationRequired
 from quality_auditor import SpeechQualityAuditor
@@ -57,6 +58,49 @@ class ModelWeightsMissing(RuntimeError):
             f"{model_key} is not available: {detail}. "
             f"Fetch it with: {model_registry.MODEL_FETCH_COMMAND} --only {model_key}"
         )
+
+
+# Engines that condition on a reference recording - that is, clone a voice.
+# Only for these does a supplied speaker_wav actually get used.
+REFERENCE_ENGINES = frozenset({"xtts-v2", "higgs-tts-2"})
+
+
+class VoiceConsentRequired(PermissionError):
+    """
+    The reference voice has no consent on record, so it may not be cloned.
+
+    A PermissionError because it is exactly that: the request is well formed,
+    but this recording is not ours to use. The API turns it into a 403.
+    """
+
+
+def require_voice_consent(speaker_wav: str) -> None:
+    """
+    Refuse to clone a recording unless its provenance permits it.
+
+    Same rule as faces (`provenance.usability`): synthetic speech depicts no
+    real person and is always usable; a human recording needs a recorded
+    consent basis; a recording with no sidecar is refused - silence is not
+    consent. Before this check nothing on the cloning path asked at all.
+    """
+    path = Path(speaker_wav)
+    if not path.is_file():
+        # Checked first so a typo is reported as a missing file, not as a
+        # missing consent record for a file that does not exist.
+        raise FileNotFoundError(
+            f"Reference audio not found: '{speaker_wav}'. "
+            "Pick one from GET /api/v1/audio/samples."
+        )
+    record = provenance.load(path)
+    if record is None:
+        raise VoiceConsentRequired(
+            f"'{path.name}' has no provenance record, so it may not be cloned. "
+            "Register it with scripts/make_reference.py --human FILE --speaker NAME "
+            "--licence LICENCE --consent <basis>, or use --smoke for a synthetic test voice."
+        )
+    usable, reason = record.usability()
+    if not usable:
+        raise VoiceConsentRequired(f"'{path.name}' may not be cloned: {reason}.")
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -240,6 +284,18 @@ class VoiceEngineRouter:
             f"Unsupported mode='{mode}'. Valid modes: 'fast', 'clone', "
             "'high_quality', 'dialogue', 'multilingual'."
         )
+
+    def preflight(self, model_key: str, speaker_wav: Optional[str] = None) -> None:
+        """
+        Everything that must hold before a loader runs, cheapest first.
+
+        Consent before weights: a recording we may not use is refused whatever
+        is installed. Shared by the API route (so the refusal happens before
+        anything is queued) and synthesize() (so no other caller skips it).
+        """
+        if speaker_wav and model_key in REFERENCE_ENGINES:
+            require_voice_consent(speaker_wav)
+        self.require_weights(model_key)
 
     def require_weights(self, model_key: str) -> None:
         """
@@ -569,8 +625,8 @@ class VoiceEngineRouter:
             text=text,
         )
         # The one place every synthesis path passes through before a loader
-        # runs, so no request can trigger a download.
-        self.require_weights(model_key)
+        # runs: no request can trigger a download or clone an unconsented voice.
+        self.preflight(model_key, speaker_wav)
 
         start_time = time.time()
         output_path = OUTPUT_DIR / output_filename
