@@ -1,0 +1,25 @@
+# 11 — Decisions
+
+Low-impact judgement calls made without stopping. Newest last. Each: what,
+why, the alternative, and how to reverse it.
+
+| ID | Date | Decision | Why | Alternative / reversal |
+|---|---|---|---|---|
+| D-01 | 2026-10-07 | ~~Docs local and gitignored~~ **Revised same day by the owner:** `CLAUDE.md` and `docs/` are tracked on `m1` (development). `main` (production) carries code and `README.md` only | Owner's rule | — |
+| D-02 | 2026-10-07 | "No AI-related wording" means no AI-*assistant* attribution (tool names, co-author lines, "generated with"). The product's own domain ("AI avatar", the burned-in "AI-generated" label) stays | The product is an AI avatar platform; R-34 *requires* the label | — |
+| D-03 | 2026-10-07 | Performance targets benchmarked on RTX 4090/A100 are measured here and reported met / **not met**; never redefined as met. DoD item 10 requires a recorded measurement, not a passing number | Honest status (golden rule 8) without making DoD unreachable on this hardware | Owner supplies target hardware (Q-01) |
+| D-04 | 2026-10-07 | Live verification runs on CPU: this sandbox has no CUDA. GPU-only numbers (peak VRAM) are marked "not measured here" | Hardware reality | Run the same scripts on the host GPU |
+| D-05 | 2026-10-07 | Lint = ruff; typecheck = pyrefly (already configured in `pyrefly.toml`); frontend lint = oxlint; no frontend typecheck (plain JSX, no TS) | Reuse what the repo already configures | Add `tsc --checkJs` if the frontend grows |
+| D-06 | 2026-10-07 | Untrack `.models/`: the ECAPA "checkpoints" were 150-byte symlinks into one user's HF cache (broken anywhere else) and weights belong to the fetch scripts | Repo hygiene; reproducibility | — |
+| D-07 | 2026-10-07 | Remove `frontend/README.md` (Vite boilerplate) and unused `frontend/src/App.new.jsx` | Only README.md may be markdown; dead code | — |
+| D-08 | 2026-10-07 | **Revised by the owner:** develop and push on `m1`; `main` is production and is not touched except for an owner-requested release. Pushed history is never rewritten | Owner's rule | — |
+| D-09 | 2026-10-07 | Kubernetes / cloud GPU autoscaling not built; Docker Compose is the deployment target | Costs money; no measured need on a single machine | Q-08 |
+| D-10 | 2026-10-07 | LatentSync not integrated: its inference needs well over 6 GB VRAM. Wav2Lip and the blendshape engine are the lip-sync engines; MuseTalk stays optional | Hardware | Revisit with a larger GPU |
+| D-11 | 2026-10-07 | E2E runs Playwright against the real backend and the Vite dev server, Chromium only (already cached locally) | Real flows, no mocks | Add Firefox/WebKit for cross-browser |
+| D-12 | 2026-10-07 | Lip sync "> 95%" has no direct SyncNet equivalent. Report: best audio-video offset (target 0 frames), LSE-C and LSE-D, plus the % of 1-second windows whose best offset is within ±1 frame — that last figure is compared against 95% | The roadmap names LSE-C/LSE-D as the method but gives a percentage | Q-02 |
+| D-13 | 2026-10-07 | Commit-message rules and the production wording scan live in local git hooks (`.git/hooks/pre-commit`, `commit-msg`), branch-aware: on every branch no co-author / "generated with" / `type:` prefix; on `main` also no assistant names and no docs | A tracked script naming those words would itself publish them to main. Hooks are never pushed | Re-create from `docs/10-DEPLOYMENT.md` |
+| D-14 | 2026-10-07 | `origin` repointed to `github.com/NithiishSD/ai_avatar_platform.git` | GitHub reported the repo was renamed; avoids the redirect | `git remote set-url origin <old>` |
+| D-15 | 2026-10-07 | Dev tools pinned exactly in `backend/requirements-dev.txt` (ruff 0.16.10, pyrefly 1.3.2, pip-audit 2.10.1) | A self-upgrading linter changes what "green" means | Bump deliberately |
+| D-16 | 2026-10-07 | Deleted `docs/MILESTONES.md` and `docs/implementation_plan_phase1_2.md` on `m1` | Superseded by 07-TASKS / 12-PROGRESS; two task trackers drift and contradict each other (golden rule 8). Both remain in git history | `git show a4ca1b5:docs/MILESTONES.md` |
+| D-17 | 2026-10-07 | `main` keeps the two commits pushed before the branch rule changed (`1ea9d51` cleanup, `ab1b917` gate script) | They only remove docs/weights and add tooling, which matches what production should hold; reverting would add churn to prod | Owner can ask for a revert |
+| D-18 | 2026-10-07 | `scripts/check.sh hygiene [branch]` inspects a branch's committed tree (default `main`) | On `m1` docs are tracked on purpose, so checking the index would always fail there | — |

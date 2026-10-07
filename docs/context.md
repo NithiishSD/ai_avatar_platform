@@ -1,10 +1,11 @@
 # AI Avatar Platform Development Context
 
-**This file is the append-only session log.** Rules, commands and the module map
-are in `CLAUDE.md`; the task tracker is `docs/MILESTONES.md`; known failures are
-in `docs/DEBUGGING.md`. Add a new entry at the top of the log for every work
-session using the template below. Older sections further down predate this
-structure and some of their claims were corrected in later entries.
+**This file is the history up to 7 Oct 2026 and is now frozen.** From that date
+the task list is `docs/07-TASKS.md` and the dated log is `docs/12-PROGRESS.md`;
+rules are in `CLAUDE.md`, known failures in `docs/DEBUGGING.md`. References
+below to `docs/MILESTONES.md` are historical: that file was folded into the
+numbered docs (D-16). Older sections predate this structure and some of their
+claims were corrected in later entries.
 
 Last updated: 2026-09-30 (Session 5)
 Roadmap source: `AI_Avatar_Platform_2_Developer_Roadmap.pdf`
