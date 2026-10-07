@@ -53,6 +53,9 @@ jobs:
           # Coqui TTS pins an ancient numpy; installed without its pins, as
           # documented in requirements.txt.
           pip install --no-deps TTS==0.22.0
+          # OpenVoice V2, pinned to a reviewed commit and without its pins
+          # (numpy==1.22, librosa==0.9.1), as requirements.txt explains.
+          pip install --no-deps "git+https://github.com/myshell-ai/OpenVoice.git@74a1d147b17a8c3092dd5430504bd83ef6c7eb23"
           pip install -r backend/requirements-dev.txt
 
       # check.sh defaults to the local conda env; point it at this runner's

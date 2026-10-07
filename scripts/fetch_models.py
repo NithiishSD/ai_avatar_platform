@@ -33,6 +33,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 
 from model_registry import UNRUNNABLE, audit_model_weights  # noqa: E402
+from openvoice_engine import OPENVOICE_REPO  # noqa: E402
 
 # Refuse to fill the disk. A GPU box that runs out of room mid-download leaves
 # a half-written cache that reports as present but fails to load.
@@ -76,6 +77,11 @@ def _fetch_xtts() -> None:
     TTS(model_name="tts_models/multilingual/multi-dataset/xtts_v2")
 
 
+def _fetch_openvoice() -> None:
+    # The converter only (131 MB); the base speakers are MeloTTS's, unused here.
+    _fetch_hf(OPENVOICE_REPO, allow_patterns=["converter/*"])
+
+
 def _fetch_mms() -> None:
     """
     MMS-TTS is one checkpoint per language, fetched on demand at ~145 MB each.
@@ -112,6 +118,14 @@ SPECS: List[ModelSpec] = [
         default=True,
         note="the four languages the Phase 3 benchmark reports",
         fetch=_fetch_mms,
+    ),
+    ModelSpec(
+        key="openvoice-v2",
+        name="OpenVoice V2 converter (tone-colour cloning)",
+        approx_gb=0.13,
+        default=True,
+        note="MIT; clones over Kokoro / MMS-TTS. Needs the openvoice package, see requirements.txt",
+        fetch=_fetch_openvoice,
     ),
 ]
 

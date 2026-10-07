@@ -20,7 +20,7 @@ def weights_on_disk(*missing):
     """
     from model_registry import ModelWeightStatus
 
-    keys = ("kokoro", "xtts-v2", "higgs-tts-2", "dia-1.6b", "mms-tts")
+    keys = ("kokoro", "xtts-v2", "higgs-tts-2", "dia-1.6b", "mms-tts", "openvoice-v2")
     return [
         ModelWeightStatus(key, key, "test", key not in missing, 0 if key in missing else 1,
                           "cached metadata only (no weight file)" if key in missing else "present")
@@ -201,12 +201,12 @@ class MissingWeightsTests(unittest.TestCase):
         load_dia.assert_not_called()
 
 
-def reference(folder, name, **provenance_fields):
-    """A short WAV, with a provenance sidecar unless no fields are given."""
+def reference(folder, name, seconds=0.1, **provenance_fields):
+    """A WAV (0.1 s unless told), with a provenance sidecar unless no fields are given."""
     import provenance
 
     path = Path(folder) / name
-    sf.write(path, np.zeros(2400, dtype=np.float32), 24000)
+    sf.write(path, np.zeros(int(24000 * seconds), dtype=np.float32), 24000)
     if provenance_fields:
         provenance.write(path, **provenance_fields)
     return str(path)
@@ -268,6 +268,78 @@ class VoiceConsentTests(unittest.TestCase):
             with self.assertRaises(VoiceConsentRequired):
                 self.router.synthesize("Hello", mode="clone", speaker_wav=wav)
         load.assert_not_called()
+
+
+class OpenVoiceRoutingTests(unittest.TestCase):
+    """mode='clone' uses the engine the caller names; OpenVoice needs its base voice."""
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.router = VoiceEngineRouter(device="cpu")
+
+    def test_xtts_stays_the_default_cloner(self):
+        self.assertEqual(self.router.select_model(mode="clone"), "xtts-v2")
+
+    def test_openvoice_is_used_only_when_asked_for(self):
+        self.assertEqual(self.router.select_model(mode="clone", clone_engine="openvoice-v2"), "openvoice-v2")
+
+    def test_an_unknown_cloner_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.router.select_model(mode="clone", clone_engine="bark")
+
+    def test_the_base_voice_follows_the_language(self):
+        self.assertEqual(self.router.openvoice_base("en"), "kokoro")
+        self.assertEqual(self.router.openvoice_base("hin"), "mms-tts")
+        with self.assertRaises(ValueError):
+            self.router.openvoice_base("zzz")
+
+    def test_preflight_needs_the_base_voice_weights_too(self):
+        wav = reference(self.tmp.name, "lj.wav", source="human", speaker="LJ",
+                        licence="public domain", consent_basis="open-licence")
+        with patch("model_registry.audit_model_weights", return_value=weights_on_disk("kokoro")):
+            with self.assertRaises(ModelWeightsMissing) as caught:
+                self.router.preflight("openvoice-v2", wav, "en")
+        self.assertEqual(caught.exception.model_key, "kokoro")
+
+    def test_openvoice_refuses_an_unconsented_voice(self):
+        wav = reference(self.tmp.name, "unknown.wav")
+        with patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
+            with self.assertRaises(VoiceConsentRequired):
+                self.router.preflight("openvoice-v2", wav, "en")
+
+    def test_synthesis_speaks_with_the_base_then_converts(self):
+        # 4 s: real reference validation refuses anything under 3 s.
+        wav = reference(self.tmp.name, "lj.wav", seconds=4.0, source="human", speaker="LJ",
+                        licence="public domain", consent_basis="open-licence")
+        out_dir = Path(self.tmp.name)
+        with patch("model_registry.audit_model_weights", return_value=weights_on_disk()), \
+             patch("voice_engine.OUTPUT_DIR", out_dir), \
+             patch.object(self.router, "_synthesize_kokoro") as kokoro, \
+             patch.object(self.router._openvoice, "convert", side_effect=lambda b, r, o: (sf.write(o, np.zeros(24000, np.float32), 24000), (24000, 1.0))[1]) as convert:
+            result = self.router.synthesize("Hello", mode="clone", clone_engine="openvoice-v2",
+                                            speaker_wav=wav, output_filename="ov.wav")
+        kokoro.assert_called_once()
+        convert.assert_called_once()
+        self.assertEqual(result.model, "openvoice-v2")
+        self.assertEqual(result.language["baseEngine"], "kokoro")
+
+
+class MMSFailureTests(unittest.TestCase):
+    """An MMS failure is that request's error; it never reaches for Higgs."""
+
+    def test_failure_raises_with_the_language_and_does_not_load_higgs(self):
+        router = VoiceEngineRouter(device="cpu")
+        with patch.object(router._mms, "synthesize", side_effect=OSError("not cached")), \
+             patch.object(router, "load_higgs") as load_higgs:
+            with self.assertRaises(RuntimeError) as caught:
+                router._synthesize_mms("namaste", Path("/tmp/x.wav"), "hin")
+        load_higgs.assert_not_called()
+        self.assertIn("hin", str(caught.exception))
+        # One language failing must not switch MMS off for every other one.
+        self.assertFalse(router._mms_failed)
 
 
 class HiggsLoadingTests(unittest.TestCase):

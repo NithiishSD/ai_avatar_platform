@@ -318,6 +318,15 @@ class AudioSynthesisRequest(BaseModel):
         description="Run the MOS/PESQ speech quality auditor on the generated audio",
     )
     speaker_wav: Optional[str] = Field(default=None, alias="speakerWav")
+    # Which engine clones in mode="clone". Optional, defaulting to XTTS-v2, so
+    # existing callers are unchanged; the pattern rejects anything else at the
+    # edge. Explicit on purpose: the router never switches cloners on its own.
+    clone_engine: Optional[str] = Field(
+        default=None,
+        alias="cloneEngine",
+        pattern="^(xtts-v2|openvoice-v2)$",
+        description="Cloning engine for mode='clone': 'xtts-v2' (default) or 'openvoice-v2'",
+    )
     output_filename: str = Field(default="speech.wav", alias="outputFilename", min_length=1)
 
     @field_validator("text")

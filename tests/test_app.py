@@ -177,6 +177,27 @@ class RenderJobApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         delay.assert_called_once()
 
+    def test_clone_engine_is_passed_to_the_task(self):
+        import tempfile
+
+        fake_task = type("Task", (), {"id": "TASK-OV"})()
+        with tempfile.TemporaryDirectory() as tmp:
+            wav = reference(tmp, "lj.wav", source="human", speaker="LJ",
+                            licence="public domain", consent_basis="open-licence")
+            request = {"text": "Hello", "mode": "clone", "speakerWav": wav, "cloneEngine": "openvoice-v2"}
+            with patch("app.synthesize_audio.delay", return_value=fake_task) as delay, \
+                 patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
+                response = self.client.post("/api/v1/audio/synthesize", json=request)
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(delay.call_args.args[0]["cloneEngine"], "openvoice-v2")
+
+    def test_an_unknown_clone_engine_is_rejected_at_the_edge(self):
+        request = {"text": "Hello", "mode": "clone", "speakerWav": "x.wav", "cloneEngine": "bark"}
+        with patch("app.synthesize_audio.delay") as delay:
+            response = self.client.post("/api/v1/audio/synthesize", json=request)
+        self.assertEqual(response.status_code, 422)
+        delay.assert_not_called()
+
     def test_a_missing_reference_file_is_400(self):
         request = {"text": "Hello", "mode": "clone", "speakerWav": "/nonexistent/voice.wav"}
         with patch("app.synthesize_audio.delay") as delay, \

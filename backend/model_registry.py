@@ -347,6 +347,37 @@ def _unrunnable(key: str, name: str, repo_id: str) -> ModelWeightStatus:
     )
 
 
+def check_openvoice(key: str = "openvoice-v2", name: str = "OpenVoice V2 (tone-colour cloning)") -> ModelWeightStatus:
+    """
+    OpenVoice needs both its package and its converter files.
+
+    `find_spec` locates the package without importing it, so this stays a
+    cheap filesystem check like the rest of the audit.
+    """
+    import importlib.util
+
+    from openvoice_engine import CONVERTER_FILES, OPENVOICE_PIP, OPENVOICE_REPO
+
+    if importlib.util.find_spec("openvoice") is None:
+        return ModelWeightStatus(
+            key=key, name=name, source=OPENVOICE_REPO, present=False, size_bytes=0,
+            detail="the openvoice package is not installed", fix=OPENVOICE_PIP,
+        )
+    snapshots = _hf_repo_dir(OPENVOICE_REPO) / "snapshots"
+    for snapshot in sorted(snapshots.glob("*")) if snapshots.is_dir() else []:
+        files = [snapshot / rel for rel in CONVERTER_FILES]
+        if all(f.is_file() for f in files):
+            size = sum(f.stat().st_size for f in files)
+            return ModelWeightStatus(
+                key=key, name=name, source=str(snapshot), present=True,
+                size_bytes=size, detail="weights present",
+            )
+    return ModelWeightStatus(
+        key=key, name=name, source=OPENVOICE_REPO, present=False, size_bytes=0,
+        detail=f"converter files {', '.join(CONVERTER_FILES)} not in the HuggingFace cache",
+    )
+
+
 def audit_model_weights() -> List[ModelWeightStatus]:
     """Audit every model ``VoiceEngineRouter.select_model`` can return."""
     statuses = [
@@ -359,6 +390,7 @@ def audit_model_weights() -> List[ModelWeightStatus]:
         _unrunnable("higgs-tts-2", "Higgs TTS 2 (3B)", "bosonai/higgs-tts-2-3b-base"),
         _unrunnable("dia-1.6b", "Dia-1.6B (dialogue)", "nari-labs/Dia-1.6B"),
         check_mms(),
+        check_openvoice(),
     ]
     # Every other missing model is fixed by fetching it. `replace` builds a
     # new frozen instance with one field changed.

@@ -24,7 +24,7 @@ records what was verified live, with the real command and result.
 | T2.1 | **Blocked** — XTTS-v2 download incomplete; CPML acceptance needed from owner (M-03) | (this commit: audit fix) |
 | T2.2 | Done | 54686a2 |
 | T2.3 | Verified on CPU — waiting on M-04 (peak VRAM on the host GPU, and a look at the video) | (this commit) |
-| T2.6 | In progress — (a) Higgs/Dia honesty done (this commit); (b) OpenVoice V2 next | |
+| T2.6 | In progress — (a) Higgs/Dia honesty 6b94d3c; (b) OpenVoice V2 engine (this commit); (c) a 5th engine still to choose | |
 
 ## Log
 
@@ -466,3 +466,40 @@ this stack … fix: none on this stack`; `fetch_models.py --only dia-1.6b` → t
 reason, exit 1, nothing downloaded; real server: startup log "MODEL UNAVAILABLE",
 `high_quality` and `dialogue` → 503 "… Downloading it would not help. Fix: none
 on this stack (see detail); use another engine".
+
+### 2026-10-08 — T2.6 (b): OpenVoice V2 as a working cloner
+
+Installed without its stale pins (`--no-deps`, commit 74a1d14, code read first)
+plus `eng_to_ipa` and `cn2an`; numpy/transformers/librosa/torch pins verified
+unchanged. Converter weights (131 MB, MIT, ungated) sizes match published.
+Upstream bug worked around: `ToneColorConverter(enable_watermark=False)`
+raises TypeError (the kwarg is forwarded to a base class that rejects it).
+
+`backend/openvoice_engine.py`: lazy load (local files only, cached failure
+naming the fetch), per-reference embedding cache keyed on (path, mtime, size),
+seeded conversion scoped with `torch.random.fork_rng`, output resampled to
+24 kHz. Router: `cloneEngine` request field (`xtts-v2` default | `openvoice-v2`,
+explicit — never switched silently); base voice Kokoro for English, MMS-TTS for
+its 1077 languages (so cross-lingual cloning); preflight checks consent, the
+converter and the base voice. Audit/doctor/fetcher know `openvoice-v2`.
+
+Also fixed: when MMS-TTS failed, `_synthesize_mms` fell back to Higgs — after
+the preflight, so it bypassed T1.4's guard and would have started an 11.6 GB
+download of an unrunnable model — and set `_mms_failed`, disabling MMS for every
+language. Now it raises that request's error naming the language.
+
+Verified:
+- 526 tests OK (18 new: engine, routing, preflight, consent, MMS failure, audit,
+  API). Planted regressions caught: base-voice check removed → fails; old MMS
+  fallback restored → fails.
+- live, real server: clone EN → 202 SUCCESS, `openvoice-v2 (base: kokoro)`,
+  4.92 s, alignment mms_fa, 58 phonemes, 30.6 s on CPU (cold); clone **Hindi**
+  → 202 SUCCESS, `openvoice-v2 (base: mms-tts)`, 4.88 s, mms_fa, 63 phonemes.
+- **Similarity (ECAPA-TDNN, admissible human reference, CPU), 6 sentences,
+  cloned from the first 30 s of the LJSpeech reference, scored against the
+  held-out last 20 s:** unconverted Kokoro base mean 26.9% → converted
+  **34.2%** (+7.3, sd 3.1), improved on 6/6. Same speaker's real speech: 91.7%.
+  **N-02 target (85%) not met by OpenVoice V2.**
+- Open finding: via the API, cloned from *and* scored against the full 50 s
+  reference, the EN clip scored 21.3% (base 24.7%) — lower than unconverted. Not
+  explained yet; to investigate in T6.6 before any number is published.

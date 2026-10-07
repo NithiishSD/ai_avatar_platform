@@ -108,3 +108,12 @@ python_speech_features>=0.6
 # Audio/Video Metric & Text Utilities
 requests>=2.31.0
 pyyaml>=6.0.1
+
+# OpenVoice V2 tone-colour cloning (MIT). The package itself is installed
+# separately WITHOUT its own requirements, which pin numpy==1.22 and
+# librosa==0.9.1 and would break this stack; its converter only needs torch,
+# librosa, numpy and soundfile, plus the two small text-frontend modules below
+# that its package imports at load time.
+#   pip install --no-deps "git+https://github.com/myshell-ai/OpenVoice.git@74a1d147b17a8c3092dd5430504bd83ef6c7eb23"
+eng_to_ipa==0.0.2
+cn2an==0.5.24

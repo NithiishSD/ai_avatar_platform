@@ -21,10 +21,10 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 
 | ID | Test / measurement | Status |
 |---|---|---|
-| R-01 | `test_voice_engine.py`, `test_mms_engine.py`, `UnrunnableEngineTests`; engine count in T2.6 | pass (**2** usable: Kokoro, MMS-TTS. XTTS-v2 incomplete (M-03); Higgs and Dia **cannot run on this stack** (D-32); target 5 — gap) |
+| R-01 | `test_voice_engine.py`, `test_mms_engine.py`, `test_openvoice_engine.py`, `UnrunnableEngineTests` | pass (**3** usable: Kokoro, MMS-TTS, OpenVoice V2. XTTS-v2 incomplete (M-03); Higgs and Dia **cannot run on this stack** (D-32); target 5 — gap) |
 | R-02 | `test_voice_engine.py` routing + `MissingWeightsTests`; `test_app.py` 503/400 before queueing | pass |
-| R-03 | T2.1 live clone | **blocked** — XTTS-v2 weights incomplete, needs the owner (M-03) |
-| R-04 | T3.3 | gap |
+| R-03 | OpenVoice V2 live clone through the API (T2.6b); XTTS-v2 **blocked** (M-03) | pass (OpenVoice); XTTS gap |
+| R-04 | OpenVoice V2 clone in Hindi over MMS-TTS, live (T2.6b); XTTS cross-lingual in T3.3 | partial |
 | R-05 | `test_alignment_engine.py`, `test_alignment_method.py`, `test_alignment_accuracy.py`; E2E `synthesis.spec.js` (measured, not estimated) | pass |
 | R-06 | `test_mms_engine.py`, `test_language_registry.py`, `test_romanizer.py` | pass |
 | R-07 | `test_emotion_engine.py` | pass |
@@ -56,7 +56,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-35 | T5.4 | gap |
 | R-36 | T5.3 | gap |
 | N-01 | benchmark 17 Sep 2026: MOS 4.33 (SQUIM, Kokoro) | measured — met (re-run in T6.6) |
-| N-02 | T2.1 | gap |
+| N-02 | 8 Oct, ECAPA-TDNN vs held-out LJSpeech (admissible), 6 sentences: **OpenVoice V2 34.2%** (base 26.9%, real speech 91.7%). XTTS-v2 not measurable (M-03) | **not met** (OpenVoice) |
 | N-03 | in-process 13 ms (17 Sep); real server in T6.3 | partial |
 | N-04 | in-process only; real server in T6.3 | gap |
 | N-05 | 8 Oct, SyncNet v2, 25 fps: **Wav2Lip** offset 0 on 3/3 clips, LSE-C 9.84 / 10.51 / 11.18, LSE-D 6.61 / 5.97 / 5.48; blendshape offset 0, LSE-C 3.98 / 4.23 / 5.55 (T2.3). The D-12 window percentage not yet computed (T6.6) | measured — % figure pending |

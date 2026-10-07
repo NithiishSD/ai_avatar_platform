@@ -280,3 +280,25 @@ class UnrunnableEngineTests(unittest.TestCase):
             self.assertEqual(fetcher.main(), 1)
         download.assert_not_called()
         self.assertIn("Downloading it would not help", err.getvalue())
+
+
+class OpenVoiceAuditTests(unittest.TestCase):
+    def test_a_missing_package_is_reported_with_the_install_command(self):
+        from model_registry import check_openvoice
+
+        with mock.patch("importlib.util.find_spec", return_value=None):
+            status = check_openvoice()
+        self.assertFalse(status.present)
+        self.assertIn("pip install --no-deps", status.fix)
+
+    def test_present_only_with_both_converter_files(self):
+        from model_registry import check_openvoice
+
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = Path(tmp) / "snapshots" / "abc" / "converter"
+            snapshot.mkdir(parents=True)
+            (snapshot / "config.json").write_text("{}")
+            with mock.patch("model_registry._hf_repo_dir", return_value=Path(tmp)):
+                self.assertFalse(check_openvoice().present)  # checkpoint missing
+                (snapshot / "checkpoint.pth").write_bytes(b"x" * 10)
+                self.assertTrue(check_openvoice().present)

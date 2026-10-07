@@ -602,8 +602,9 @@ def create_synthesis_job(request: AudioSynthesisRequest) -> SynthesisJobResponse
             quality=request.quality,
             style=request.style,
             text=request.text,
+            clone_engine=request.clone_engine,
         )
-        router.preflight(model_key, request.speaker_wav)
+        router.preflight(model_key, request.speaker_wav, request.language)
     except VoiceConsentRequired as error:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
     except ModelWeightsMissing as error:

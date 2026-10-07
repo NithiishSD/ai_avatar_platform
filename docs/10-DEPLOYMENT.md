@@ -4,6 +4,9 @@
 
 ```bash
 ./backend/.conda/bin/python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+# Installed without their own pins, which would break numpy<2 (see requirements.txt):
+./backend/.conda/bin/python -m pip install --no-deps TTS==0.22.0
+./backend/.conda/bin/python -m pip install --no-deps "git+https://github.com/myshell-ai/OpenVoice.git@74a1d147b17a8c3092dd5430504bd83ef6c7eb23"
 cd backend && PYTHONPATH=. ./.conda/bin/python -m uvicorn app:app --port 8000
 cd frontend && npm ci && npm run dev -- --port 5173
 ```

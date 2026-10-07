@@ -36,6 +36,7 @@ import model_registry
 import provenance
 from emotion_engine import EmotionProsodyEngine
 from mms_engine import MMSTTSEngine, MMSRomanizationRequired
+from openvoice_engine import OpenVoiceEngine
 from quality_auditor import SpeechQualityAuditor
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,9 @@ class ModelWeightsMissing(RuntimeError):
 
 # Engines that condition on a reference recording - that is, clone a voice.
 # Only for these does a supplied speaker_wav actually get used.
-REFERENCE_ENGINES = frozenset({"xtts-v2", "higgs-tts-2"})
+REFERENCE_ENGINES = frozenset({"xtts-v2", "higgs-tts-2", "openvoice-v2"})
+# Engines a caller may ask for in mode="clone"; the first is the default.
+CLONE_ENGINES = ("xtts-v2", "openvoice-v2")
 
 
 class VoiceConsentRequired(PermissionError):
@@ -168,6 +171,7 @@ class VoiceEngineRouter:
 
         # Phase 3 engines. All three are cheap to construct and load lazily.
         self._mms = MMSTTSEngine(device=self.device)
+        self._openvoice = OpenVoiceEngine(device=self.device)
         self._emotion = EmotionProsodyEngine()
         self._auditor: Optional[SpeechQualityAuditor] = None
 
@@ -189,6 +193,7 @@ class VoiceEngineRouter:
         self._higgs_pipe = None
         self._dia_model = None
         self._dia_processor = None
+        self._openvoice.release()
 
     @property
     def auditor(self) -> SpeechQualityAuditor:
@@ -208,6 +213,7 @@ class VoiceEngineRouter:
         quality: str = "balanced",
         style: Optional[str] = None,
         text: str = "",
+        clone_engine: Optional[str] = None,
     ) -> str:
         """
         Returns the canonical model key for the given request parameters.
@@ -236,9 +242,12 @@ class VoiceEngineRouter:
                 return "kokoro"
             return "dia-1.6b"
 
-        # 2. Voice cloning
+        # 2. Voice cloning, with the engine the caller chose (XTTS-v2 by default)
         if mode == "clone":
-            return "xtts-v2"
+            engine = clone_engine or CLONE_ENGINES[0]
+            if engine not in CLONE_ENGINES:
+                raise ValueError(f"cloneEngine must be one of {list(CLONE_ENGINES)}, got {engine!r}")
+            return engine
 
         # 3. Explicit high quality mode
         if mode == "high_quality" or quality == "high":
@@ -286,7 +295,25 @@ class VoiceEngineRouter:
             "'high_quality', 'dialogue', 'multilingual'."
         )
 
-    def preflight(self, model_key: str, speaker_wav: Optional[str] = None) -> None:
+    def openvoice_base(self, language: str) -> str:
+        """
+        The engine that speaks the words OpenVoice then re-timbres.
+
+        Kokoro for English, MMS-TTS for any language it has a checkpoint for -
+        which is what makes OpenVoice a cross-lingual cloner here.
+        """
+        if language.lower().replace("_", "-") in _KOKORO_ENGLISH_CODES:
+            return "kokoro"
+        if language_registry.resolve(language).mms_supported:
+            return "mms-tts"
+        raise ValueError(
+            f"OpenVoice clones over a base voice, and no base engine speaks '{language}': "
+            "Kokoro covers English and MMS-TTS its 1077 languages. Use cloneEngine='xtts-v2'."
+        )
+
+    def preflight(
+        self, model_key: str, speaker_wav: Optional[str] = None, language: str = "en"
+    ) -> None:
         """
         Everything that must hold before a loader runs, cheapest first.
 
@@ -297,6 +324,9 @@ class VoiceEngineRouter:
         if speaker_wav and model_key in REFERENCE_ENGINES:
             require_voice_consent(speaker_wav)
         self.require_weights(model_key)
+        if model_key == "openvoice-v2":
+            # Its base voice must be installed too, or the job would fail late.
+            self.require_weights(self.openvoice_base(language))
 
     def require_weights(self, model_key: str) -> None:
         """
@@ -556,22 +586,54 @@ class VoiceEngineRouter:
             # failure; surface it instead of silently degrading quality.
             raise
 
-        except Exception as exc:  # noqa: BLE001 - any load failure degrades gracefully
-            logger.warning("MMS-TTS failed for %s (%s) — falling back", language, exc)
-            self._mms_failed = True
-            payload = info.to_dict()
-            payload["fallbackReason"] = str(exc)
+        except Exception as exc:  # noqa: BLE001 - re-raised with the language named
+            # This used to fall back to Higgs, then XTTS-v2. That path ran
+            # *after* preflight, so it bypassed the weights check: Higgs's
+            # loader would have started an 11.6 GB download of a model this
+            # stack cannot run. One language failing (say, its checkpoint not
+            # cached while offline) also set _mms_failed and disabled MMS for
+            # every other language. Now the failure is this request's alone.
+            logger.error("MMS-TTS failed for %s (%s)", language, exc)
+            raise RuntimeError(
+                f"MMS-TTS could not synthesise {info.name} ({info.iso3}): "
+                f"{str(exc).splitlines()[0]}. A language it has not cached needs network "
+                "on first use, or: python scripts/fetch_models.py --only mms-tts"
+            ) from exc
 
-            if not self._higgs_failed:
-                sample_rate, duration = self._synthesize_higgs(text, output_path, speaker_wav)
-                payload["backend"] = "higgs-tts-2 (MMS fallback)"
-                return sample_rate, duration, payload
+    def _synthesize_openvoice(
+        self,
+        text: str,
+        output_path: Path,
+        speaker_wav: Optional[str],
+        language: str,
+    ) -> tuple[int, float, str]:
+        """
+        Speak with the base engine, then re-timbre it as the reference speaker.
 
-            sample_rate, duration = self._synthesize_xtts(
-                text, output_path, speaker_wav, language
+        Returns (sample_rate, duration_seconds, base_engine_key).
+        """
+        import tempfile
+
+        if not speaker_wav:
+            raise FileNotFoundError(
+                "Voice cloning requires a reference recording (30-60 s). "
+                "Pick one from GET /api/v1/audio/samples."
             )
-            payload["backend"] = "xtts-v2 (MMS fallback)"
-            return sample_rate, duration, payload
+        speaker_path = Path(speaker_wav)
+        # Same reference preparation as XTTS-v2: validated, 24 kHz mono.
+        ready = validate_and_convert_for_cloning(speaker_path, converted_dir=speaker_path.parent / ".converted")
+        base_key = self.openvoice_base(language)
+        # The base clip is an intermediate, not an output: a temporary file
+        # that is removed whatever happens.
+        with tempfile.TemporaryDirectory() as scratch:
+            base_wav = Path(scratch) / "base.wav"
+            if base_key == "kokoro":
+                self._synthesize_kokoro(text, base_wav)
+            else:
+                self._mms.synthesize(text=text, language=language, output_path=base_wav)
+            print(f"\n[OpenVoice V2] Re-timbring {base_key} speech as '{ready.name}'")
+            sample_rate, duration = self._openvoice.convert(base_wav, ready, output_path)
+        return sample_rate, duration, base_key
 
     # ------------------------------------------------------------------
     # Main Public Interface
@@ -593,6 +655,7 @@ class VoiceEngineRouter:
         emotion_intensity: float = 1.0,
         emotion_vector: Optional[dict] = None,
         audit_quality: bool = False,
+        clone_engine: Optional[str] = None,
     ) -> SynthesisResult:
         """
         Synthesize speech using the automatically selected model.
@@ -624,10 +687,11 @@ class VoiceEngineRouter:
             quality=quality,
             style=style,
             text=text,
+            clone_engine=clone_engine,
         )
         # The one place every synthesis path passes through before a loader
         # runs: no request can trigger a download or clone an unconsented voice.
-        self.preflight(model_key, speaker_wav)
+        self.preflight(model_key, speaker_wav, language)
 
         start_time = time.time()
         output_path = OUTPUT_DIR / output_filename
@@ -659,6 +723,14 @@ class VoiceEngineRouter:
             sample_rate, duration, language_info = self._synthesize_mms(
                 text, output_path, language, speaker_wav
             )
+
+        elif model_key == "openvoice-v2":
+            sample_rate, duration, base_key = self._synthesize_openvoice(
+                text, output_path, speaker_wav, language
+            )
+            # Two engines made this clip; both are named (golden rule 1).
+            language_info["backend"] = f"openvoice-v2 (base: {base_key})"
+            language_info["baseEngine"] = base_key
 
         else:
             raise ValueError(f"Internal error: unknown model key '{model_key}'")
