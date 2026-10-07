@@ -116,7 +116,7 @@ class Diagram:
               color: str = LINE, dashed: bool = False) -> None:
         pts: List[Point] = list(points)
         style = (0, (4, 3)) if dashed else "solid"
-        for a, b in zip(pts[:-2], pts[1:-1]):
+        for a, b in zip(pts[:-2], pts[1:-1], strict=True):
             self.ax.plot([a[0], b[0]], [a[1], b[1]], color=color, linewidth=1.4, linestyle=style,
                          solid_capstyle="round", zorder=1)
         self.ax.annotate(
@@ -150,7 +150,8 @@ def row(d: Diagram, y: float, x0: float, w: float, h: float, gap: float, items, 
         title, sub, kind = (list(item) + ["", "normal"])[:3] if not isinstance(item, str) else (item, "", "normal")
         boxes.append(d.box(x0 + index * (w + gap), y, w, h, title, sub, kind or "normal"))
     if connect:
-        for a, b in zip(boxes, boxes[1:]):
+        # Consecutive pairs: the second list is one shorter by design.
+        for a, b in zip(boxes, boxes[1:], strict=False):
             d.arrow([a.r, b.l])
     return boxes
 

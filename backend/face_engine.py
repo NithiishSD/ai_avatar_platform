@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
@@ -38,9 +37,7 @@ logger = logging.getLogger(__name__)
 
 from model_registry import (  # noqa: E402  (paths shared with the weight audit)
     FACE_LANDMARKER_TASK,
-    MEDIAPIPE_DIR as MODEL_DIR,
     MULTICLASS_SEGMENTER_TFLITE,
-    PROJECT_ROOT,
     SELFIE_SEGMENTER_TFLITE,
 )
 
@@ -638,8 +635,8 @@ class FaceMeshEngine:
         if self._landmarker is not None:
             try:
                 self._landmarker.close()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+                logger.debug("Landmarker close failed: %s", exc)
             self._landmarker = None
 
 
@@ -757,8 +754,9 @@ class BackgroundSegmenter:
         if self._segmenter is not None:
             try:
                 self._segmenter.close()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+                # Never fatal: the handle is dropped below either way.
+                logger.debug("Segmenter close failed: %s", exc)
             self._segmenter = None
 
 
@@ -841,7 +839,8 @@ class MulticlassSegmenter:
             )
 
         out: Dict[str, np.ndarray] = {}
-        for name, mask in zip(MULTICLASS_CATEGORIES, masks):
+        # Lengths were checked just above, so strict=True only documents it.
+        for name, mask in zip(MULTICLASS_CATEGORIES, masks, strict=True):
             data = np.asarray(mask.numpy_view(), dtype=np.float32)
             if data.ndim == 3 and data.shape[2] == 1:
                 data = data[:, :, 0]
@@ -858,8 +857,9 @@ class MulticlassSegmenter:
         if self._segmenter is not None:
             try:
                 self._segmenter.close()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+                # Never fatal: the handle is dropped below either way.
+                logger.debug("Segmenter close failed: %s", exc)
             self._segmenter = None
 
 

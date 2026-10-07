@@ -9,8 +9,9 @@ records what was verified live, with the real command and result.
 |---|---|---|
 | T0.1 | Done (on main, before the branch rule) | 1ea9d51 |
 | T0.2 | Done (on main, before the branch rule) | ab1b917 |
-| T0.1–T0.2 on m1 | Done | (this commit) |
-| T0.3 | Next | |
+| T0.1–T0.2 on m1 | Done | 1065342 |
+| T0.3 | Done | (this commit) |
+| T0.4 | Next | |
 
 ## Log
 
@@ -55,3 +56,26 @@ Ported T0.1/T0.2 to `m1`: `.models/` untracked, template README and
 deleted as superseded (D-16). Hooks made branch-aware (D-13). Verified:
 `check.sh hygiene main` → 0, `hygiene m1` → 1 (docs tracked, expected);
 commit-msg hook: filename mention on m1 → 0, trailer → 1, `fix:` → 1.
+
+### 2026-10-07 — T0.3 Python lint clean
+
+`pyproject.toml` with the rule set in D-19. 70 findings → 0. Real defects fixed:
+- `app.py`: two startup loops used `status` as the loop variable, making it
+  local to the function and shadowing FastAPI's `status` module (F402).
+- `app.py`: synthesis polling swallowed any exception and returned UNKNOWN with
+  no log; `app.py` had **no logger at all**. Added one; the failure is now logged.
+- 5 `except: pass` sites (native close, soundfile probe, optional Coqui import)
+  now log at debug instead of vanishing.
+- 6 `zip()` calls that must be length-matched get `strict=True` (silent
+  truncation would drop words from the alignment or columns from a frame).
+- `test_invalid_payload_is_rejected` asserted bare `Exception`; now
+  `ValidationError`.
+- 14 unused imports removed (none patched by tests); 5 scripts made executable.
+
+Verified:
+- `ruff check backend scripts tests` → "All checks passed!"
+- unit suite → 475 OK.
+- live: `render_avatar.py --text "Checking the lint changes on a real render."
+  --face demo --device cpu --json` → exit 0, speech `kokoro`,
+  `alignmentMethod = mms_fa` (strict zip did not trigger the fallback on real
+  tokenizer output), engine `blendshape`, 75 frames / 3.0 s rendered in 3.35 s.

@@ -5,6 +5,8 @@ import threading
 import unittest
 from unittest import mock
 
+from pydantic import ValidationError
+
 import celery_app
 from contracts import AvatarRenderJob, JobStatus
 from job_queue import CeleryJobQueue, InMemoryJobQueue
@@ -187,7 +189,9 @@ class RenderTaskTests(unittest.TestCase):
         self.assertTrue(any("redis down" in line for line in logs.output))
 
     def test_invalid_payload_is_rejected(self):
-        with self.assertRaises(Exception):
+        # ValidationError specifically: assertRaises(Exception) would also
+        # pass on a typo that raised AttributeError, proving nothing.
+        with self.assertRaises(ValidationError):
             celery_app.process_render_job.run({**self.payload, "targetFps": 0})
 
 

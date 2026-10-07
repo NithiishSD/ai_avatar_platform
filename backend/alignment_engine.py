@@ -284,7 +284,7 @@ class ForcedAligner:
             self._mms_tokenizer = tokenizer
             logger.info("Loaded torchaudio MMS_FA forced aligner on %s", self.device)
             return self._mms_aligner, self._mms_tokenizer
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - recorded as the fallback reason, never silent
             self.last_fallback_reason = f"MMS_FA could not be loaded: {str(exc).splitlines()[0]}"
             logger.warning("Could not load MMS_FA pipeline (%s). Using acoustic fallback.", exc)
             self._mms_failed = True
@@ -477,7 +477,11 @@ class ForcedAligner:
             return self._acoustic_align(transcript, duration_ms)
 
         token_lists = tokenizer(words)
-        pairs = [(w, t) for w, t in zip(words, token_lists) if t and len(t) == len(w)]
+        # strict=True: the tokenizer returns one list per word. If it ever
+        # returned fewer, zip would silently drop the trailing words and the
+        # mouth would drift out of sync; raising here makes it a recorded
+        # fallback instead.
+        pairs = [(w, t) for w, t in zip(words, token_lists, strict=True) if t and len(t) == len(w)]
         if not pairs:
             raise RuntimeError("no transcript words survived MMS_FA tokenization")
         words = [w for w, _ in pairs]
@@ -611,7 +615,7 @@ class ForcedAligner:
         raw_timestamps: List[PhonemeTimestamp] = []
         curr_ms = 0
 
-        for p, w in zip(phoneme_units, weights):
+        for p, w in zip(phoneme_units, weights, strict=True):
             unit_duration = int(math.floor((w / total_weight) * duration_ms))
             unit_duration = max(unit_duration, 25)  # At least 25ms per phoneme
             end_ms = curr_ms + unit_duration

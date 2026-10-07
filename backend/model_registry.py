@@ -185,8 +185,10 @@ def _coqui_roots() -> List[Path]:
         from TTS.utils.manage import ModelManager
 
         roots.append(Path(ModelManager().output_prefix))
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 - Coqui TTS is optional here
+        # Without TTS installed there is no Coqui root to report; the XDG
+        # fallbacks below still cover where it would have downloaded to.
+        logger.debug("Coqui ModelManager unavailable (%s); using XDG paths only", exc)
     xdg = os.getenv("XDG_DATA_HOME")
     if xdg:
         roots.append(Path(xdg) / "tts")

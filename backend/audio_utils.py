@@ -18,7 +18,6 @@ XTTS-v2 requirements:
 """
 
 import logging
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -100,7 +99,7 @@ def list_voice_samples(input_dir: Path) -> List[AudioInfo]:
         try:
             info = probe_audio(path)
             results.append(info)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - one unreadable file must not hide the rest
             logger.warning("Skipping %s — could not probe: %s", path.name, exc)
 
     return results
@@ -124,8 +123,9 @@ def probe_audio(path: Path) -> AudioInfo:
             format=suffix,
             size_bytes=path.stat().st_size,
         )
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - any soundfile failure means "try librosa"
+        # Not an error: soundfile cannot read MP3/M4A, and librosa below can.
+        logger.debug("soundfile could not probe %s (%s); trying librosa", path.name, exc)
 
     # Fallback: use librosa to probe (handles MP3, M4A, etc.)
     try:

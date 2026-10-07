@@ -1,8 +1,5 @@
 """API tests for the Phase 3 endpoints and the security middleware."""
 
-import importlib
-import os
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock

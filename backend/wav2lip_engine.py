@@ -393,7 +393,7 @@ class Wav2LipEngine:
             with torch.no_grad():
                 predicted = model(mel_tensor, face_tensor)
             predicted = (predicted.cpu().numpy().transpose(0, 2, 3, 1) * 255.0)[:, :, :, ::-1]
-            for frame, mouth in zip(items, predicted):
+            for frame, mouth in zip(items, predicted, strict=True):
                 patch = cv2.resize(
                     mouth.astype(np.uint8), (x1 - x0, y1 - y0), interpolation=cv2.INTER_CUBIC
                 ).astype(np.float32)

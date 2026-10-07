@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 from unittest import mock
 
 import numpy as np
@@ -58,7 +59,7 @@ class CommandTests(unittest.TestCase):
 
 
 class ProbeParsingTests(unittest.TestCase):
-    PAYLOAD = {
+    PAYLOAD: ClassVar[dict] = {
         "format": {"duration": "2.000"},
         "streams": [
             {"codec_type": "video", "codec_name": "h264", "width": 64, "height": 48,

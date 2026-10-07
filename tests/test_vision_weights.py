@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from typing import ClassVar
 from unittest import mock
 
 import model_registry
@@ -137,7 +138,7 @@ class FetchScriptTests(unittest.TestCase):
 
     def test_download_is_atomic_and_size_checked(self):
         class Response(io.BytesIO):
-            headers = {}
+            headers: ClassVar[dict] = {}
 
             def __enter__(self):
                 return self

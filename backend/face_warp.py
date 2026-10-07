@@ -604,7 +604,10 @@ class PortraitAnimator:
             box = np.array([bx0, by0])
             shape = (by1 - by0, bx1 - bx0)
 
-            def fixed(pts: np.ndarray) -> np.ndarray:
+            # `box=box` binds this iteration's value at definition time.
+            # Closures look loop variables up when *called*, so without it a
+            # call after the loop moved on would use the wrong eye's box.
+            def fixed(pts: np.ndarray, box: np.ndarray = box) -> np.ndarray:
                 return np.round((pts - box) * 16.0).astype(np.int32)
 
             # The lid starts a little above the lash line so its top edge

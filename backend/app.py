@@ -1,3 +1,4 @@
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -57,6 +58,7 @@ from model_registry import (
 from quality_auditor import SpeechQualityAuditor
 from security import API_KEY_HEADER, SecurityGate
 
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -71,9 +73,12 @@ async def lifespan(_: FastAPI):
     missing = [s for s in statuses if not s.present]
     print("=" * 60)
     print(f"[Model Weights] {len(statuses) - len(missing)}/{len(statuses)} available")
-    for status in statuses:
-        mark = "OK  " if status.present else "MISS"
-        print(f"  {mark}  {status.key:<13} {status.size_label:>8}  {status.detail}")
+    # `entry`, not `status`: assigning a name anywhere in a function makes it
+    # local to the whole function, which would shadow FastAPI's `status`
+    # module imported above.
+    for entry in statuses:
+        mark = "OK  " if entry.present else "MISS"
+        print(f"  {mark}  {entry.key:<13} {entry.size_label:>8}  {entry.detail}")
     if missing:
         print(
             f"[Model Weights] {len(missing)} model(s) will fall back: "
@@ -83,9 +88,9 @@ async def lifespan(_: FastAPI):
     vision = log_vision_audit()
     vision_missing = [s for s in vision if not s.present]
     print(f"[Vision Weights] {len(vision) - len(vision_missing)}/{len(vision)} available")
-    for status in vision:
-        mark = "OK  " if status.present else "MISS"
-        print(f"  {mark}  {status.key:<21} {status.size_label:>8}  {status.detail}")
+    for entry in vision:
+        mark = "OK  " if entry.present else "MISS"
+        print(f"  {mark}  {entry.key:<21} {entry.size_label:>8}  {entry.detail}")
     print("=" * 60)
     yield
 
@@ -615,7 +620,11 @@ def get_synthesis_job(task_id: str) -> SynthesisJobResponse:
         if task.state == "SUCCESS" and isinstance(task.result, dict):
             return _job_response(task_id, task_status, task.result)
         return SynthesisJobResponse(taskId=task_id, status=task_status)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - a broken result backend must not 500 the poll
+        # Reported as UNKNOWN so the client keeps a stable shape, but logged:
+        # a status store that cannot be read is exactly the failure that would
+        # otherwise leave a job looking stuck with no trace of why.
+        logger.warning("Could not read status of synthesis task %s: %s", task_id, error)
         return SynthesisJobResponse(taskId=task_id, status="UNKNOWN")
 
 # ---------------------------------------------------------------------------

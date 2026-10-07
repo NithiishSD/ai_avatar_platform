@@ -2,7 +2,6 @@
 Unit tests for ForcedAligner, PhonemeToVisemeMapper, and Alignment API routes (Phase 2).
 """
 
-import os
 import sys
 import unittest
 from pathlib import Path
@@ -13,11 +12,9 @@ from fastapi.testclient import TestClient
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from alignment_engine import ForcedAligner, PhonemeToVisemeMapper, PHONEME_TO_VISEME
+from alignment_engine import ForcedAligner, PhonemeToVisemeMapper
 from app import app
 from contracts import (
-    AlignmentRequest,
-    AlignmentResponse,
     AudioSynthesisRequest,
     PhonemeTimestamp,
     RenderQuality,

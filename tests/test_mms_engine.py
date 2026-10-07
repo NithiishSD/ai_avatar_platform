@@ -197,7 +197,7 @@ class CacheTests(unittest.TestCase):
     def test_checkpoints_are_cached_and_reused(self):
         engine = MMSTTSEngine(device="cpu", cache_size=3)
         model = FakeModel()
-        with patched_engine(engine, model=model) as patched:
+        with patched_engine(engine, model=model):
             engine.synthesize("a", "hi", self.out)
             engine.synthesize("b", "hi", self.out)
             vits = __import__("sys").modules["transformers"].VitsModel

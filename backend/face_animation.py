@@ -143,7 +143,7 @@ class AnimationTrack:
         row = self.weights[index]
         return {
             name: float(value)
-            for name, value in zip(self.names, row)
+            for name, value in zip(self.names, row, strict=True)
             if value > 1e-4
         }
 

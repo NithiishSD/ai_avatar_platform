@@ -23,13 +23,13 @@ import math
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 
 import torch
 import soundfile as sf
 import numpy as np
 
-from audio_utils import validate_and_convert_for_cloning, AudioValidationError
+from audio_utils import validate_and_convert_for_cloning
 from alignment_engine import ForcedAligner
 import language_registry
 from emotion_engine import EmotionProsodyEngine
@@ -270,7 +270,7 @@ class VoiceEngineRouter:
             )
             print(" -> Higgs TTS 2 (3B) loaded.")
             return True
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - cached failure, logged and reported
             logger.error("Higgs TTS 2 failed to load: %s", exc)
             self._higgs_failed = True
             print(f" -> [WARNING] Higgs TTS 2 load failed: {exc}")
@@ -302,7 +302,7 @@ class VoiceEngineRouter:
                 self._dia_model = self._dia_model.to("cpu")
             print(" -> Dia-1.6B loaded.")
             return True
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - cached failure, logged and reported
             logger.error("Dia-1.6B failed to load: %s", exc)
             self._dia_failed = True
             print(f" -> [WARNING] Dia-1.6B load failed: {exc}")
@@ -617,7 +617,9 @@ class VoiceEngineRouter:
                 )
                 if alignment_method == "acoustic-fallback":
                     print(f"[Aligner] WARNING: timing is estimated, not measured: {aligner.last_fallback_reason}")
-            except Exception as align_err:
+            except Exception as align_err:  # noqa: BLE001 - speech is still returned
+                # The audio is good without timestamps; the response simply
+                # carries none, which callers can see.
                 logger.warning("Forced alignment failed: %s", align_err)
 
         # ---- Phase 3: automated speech quality audit ------------------------
