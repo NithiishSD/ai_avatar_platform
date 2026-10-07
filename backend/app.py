@@ -54,6 +54,7 @@ from audio_utils import list_voice_samples, SUPPORTED_EXTENSIONS
 from alignment_engine import ForcedAligner, PhonemeToVisemeMapper
 from emotion_engine import preset_catalogue
 from job_queue import CeleryJobQueue, InMemoryJobQueue
+from job_store import JobStore
 from model_registry import (
     audit_summary,
     audit_vision_weights,
@@ -168,11 +169,15 @@ app.mount("/outputs", StaticFiles(directory=str(outputs_dir)), name="outputs")
 
 queue_backend = os.getenv("QUEUE_BACKEND", "in_memory").lower()
 job_queue = (
-    CeleryJobQueue() if queue_backend == "celery" else InMemoryJobQueue(runner=run_render)
+    CeleryJobQueue()
+    if queue_backend == "celery"
+    # Celery keeps its state in Redis; the in-process queue keeps it in SQLite
+    # (outputs/jobs.sqlite, or JOBS_DB) so a restart does not forget jobs.
+    else InMemoryJobQueue(runner=run_render, store=JobStore())
 )
 faces = avatar_store.AvatarStore()
 # Avatar generation runs in this process on one worker thread (generation_jobs).
-generation_jobs = GenerationJobs()
+generation_jobs = GenerationJobs(JobStore())
 
 # One auditor for the process: SQUIM weights load once, on first audit.
 quality_auditor = SpeechQualityAuditor()

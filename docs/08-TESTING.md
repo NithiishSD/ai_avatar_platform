@@ -41,7 +41,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-18 | T4.1 | gap |
 | R-19 | T4.2 | gap |
 | R-20 | `test_job_queue.py`, `test_app.py` | pass |
-| R-21 | T6.1 | gap |
+| R-21 | `test_job_store.py` (store round trip; finished job and result survive; mid-render job becomes FAILED with the restart reason; never-started job re-runs; ids stay unique; generation jobs likewise); live two-process restart (T6.1) | pass |
 | R-22 | `test_security.py` | pass |
 | R-23 | `test_model_registry.py`, `test_app.py` health; live: /health lists higgs/dia unavailable (T1.4) | pass |
 | R-24 | E2E `smoke.spec.js` (T0.6), `synthesis.spec.js` (T1.1), `avatar.spec.js` (T1.2), `clone.spec.js` (T2.5: clone → render → video decodes). Still to come: T3.4, T4.3 | partial |

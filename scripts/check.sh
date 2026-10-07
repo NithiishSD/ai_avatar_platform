@@ -41,7 +41,8 @@ test_() {
   echo "== unit tests"
   # unittest through discover, the only way the imports resolve: tests import
   # backend modules by bare name, so backend/ and tests/ go on PYTHONPATH.
-  PYTHONPATH=backend:tests "$PY" -m unittest discover -s tests -p 'test_*.py'
+  # JOBS_DB=:memory: keeps importing the app from touching the real job file.
+  JOBS_DB=:memory: PYTHONPATH=backend:tests "$PY" -m unittest discover -s tests -p 'test_*.py'
 }
 
 frontend() {

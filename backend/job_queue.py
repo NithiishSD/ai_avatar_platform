@@ -25,6 +25,7 @@ from dataclasses import dataclass, replace
 from typing import Callable, Dict, Optional
 
 from contracts import AvatarRenderJob, JobStatus
+from job_store import JobStore
 from request_context import run_in_context
 from redis import Redis
 
@@ -72,10 +73,11 @@ class InMemoryJobQueue:
     is what the contract tests need.
     """
 
-    def __init__(self, runner: Optional[RenderRunner] = None):
-        # job_id -> QueuedJob. Lost on restart; acceptable for development,
-        # and the reason "no database persistence" is a known gap.
+    def __init__(self, runner: Optional[RenderRunner] = None, store: Optional[JobStore] = None):
+        # job_id -> QueuedJob. With a ``store`` every change is also written to
+        # SQLite and read back below, so a restart does not forget jobs (R-21).
         self._jobs: Dict[str, QueuedJob] = {}
+        self._store = store
         # A mutex. FastAPI serves requests on multiple threads, so two
         # requests can touch _jobs at once; without this, a dict write could
         # interleave with a read. Python's GIL does not save you here: it
@@ -91,6 +93,58 @@ class InMemoryJobQueue:
             if runner is not None
             else None
         )
+        if store is not None:
+            self._recover()
+
+    KIND = "render"
+
+    def _save(self, job_id: str) -> None:
+        queued = self._jobs.get(job_id)
+        if self._store is None or queued is None:
+            return
+        self._store.put(self.KIND, job_id, {
+            "job": queued.job.model_dump(by_alias=True, mode="json"),
+            "status": queued.status.value,
+            "engine": queued.engine,
+            "progress": queued.progress,
+            "result": queued.result,
+            "error": queued.error,
+        })
+
+    def _recover(self) -> None:
+        """
+        Load jobs left by an earlier process.
+
+        Finished ones come back as they were. A job that was QUEUED never
+        started, so it is run now. A job that was PROCESSING died with the old
+        process; it becomes FAILED with a reason the client can act on, rather
+        than staying "PROCESSING" forever.
+        """
+        assert self._store is not None
+        rerun = []
+        for job_id, record in self._store.all(self.KIND):
+            status = JobStatus(record["status"])
+            error = record.get("error")
+            if status == JobStatus.PROCESSING:
+                status, error = JobStatus.FAILED, "interrupted by a server restart; submit the job again"
+            elif status == JobStatus.QUEUED and self._executor is None:
+                pass  # nothing here can run it; leave it queued for a worker
+            elif status == JobStatus.QUEUED:
+                rerun.append(job_id)
+            self._jobs[job_id] = QueuedJob(
+                job=AvatarRenderJob.model_validate(record["job"]),
+                status=status,
+                engine=record.get("engine"),
+                progress=float(record.get("progress") or 0.0),
+                result=record.get("result"),
+                error=error,
+            )
+            if error != record.get("error"):
+                self._save(job_id)
+        for job_id in rerun:
+            logger.info("Re-running render job %s that was queued before the restart", job_id)
+            assert self._executor is not None
+            self._executor.submit(self._run, job_id)
 
     # @property exposes a computed value as an attribute (`queue.executes`,
     # no parentheses). CeleryJobQueue sets `executes = True` as a plain class
@@ -109,6 +163,7 @@ class InMemoryJobQueue:
                 raise ValueError(f"jobId already exists: {job.job_id}")
             queued_job = QueuedJob(job=job, engine=engine)
             self._jobs[job.job_id] = queued_job
+            self._save(job.job_id)
         # Submitted *outside* the lock: the render takes seconds, and holding
         # the mutex across it would block every status poll in the meantime.
         if self._executor is not None:
@@ -134,6 +189,7 @@ class InMemoryJobQueue:
                 # overridden. Since QueuedJob is immutable, this is the only
                 # way to "change" it - and it is atomic from a reader's view.
                 self._jobs[job_id] = replace(current, **changes)
+                self._save(job_id)
 
     def _run(self, job_id: str) -> None:
         """

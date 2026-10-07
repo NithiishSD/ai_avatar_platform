@@ -31,6 +31,7 @@ records what was verified live, with the real command and result.
 | T3.2 | Done | (this commit) |
 | T3.5 | Done | ae92ce9 |
 | T6.2 | Done | (this commit) |
+| T6.1 | Done | (this commit) |
 | T7.1 | Done | (this commit) |
 | T7.3 | Done (4 documented exceptions, D-41) | (this commit) |
 | T7.5 | Done (two HTML `placeholder` attributes remain by decision D-40) | (this commit) |
@@ -744,3 +745,22 @@ Verified:
 T2.3 measured offset 0 on 3/3 clips. Differences: a different (short) sentence and a blue
 background. SyncNet crops the face from the first frame, so the background or clip length
 may matter. No claim is made either way until it is re-measured.
+
+### 2026-10-08 — T6.1 job persistence
+
+`backend/job_store.py` (SQLite, WAL), used by `InMemoryJobQueue` (render jobs) and
+`GenerationJobs` (D-43). `check.sh` runs the unit tests with `JOBS_DB=:memory:`.
+
+Verified:
+- `scripts/check.sh` → ruff clean, pyrefly 0 errors, 593 tests OK (9 new).
+- planted: the save inside `update()` removed → 3 persistence tests fail; restored.
+- live, two real server processes: A (pid 221130) rendered `t61-persist` → COMPLETED;
+  A stopped (health unreachable, GET → HTTP 000); B (pid 226048) started → `GET
+  /render-job/t61-persist` → COMPLETED, `/outputs/renders/t61-persist.mp4`, blendshape,
+  61 frames; re-submitting the same jobId → **409 "jobId already exists"**.
+  (My first attempt at this was invalid: the kill missed, so server B never bound the
+  port and server A answered. Caught by the "STILL UP" line and redone with the server
+  found by its listening port.)
+
+Not done: synthesis task records are not persisted (D-43); a render interrupted by a restart
+is failed, not resumed.
