@@ -45,7 +45,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-22 | `test_security.py` | pass |
 | R-23 | `test_model_registry.py`, `test_app.py` health; live: /health lists higgs/dia unavailable (T1.4) | pass |
 | R-24 | E2E `smoke.spec.js` (T0.6), `synthesis.spec.js` (T1.1), `avatar.spec.js` (T1.2), `clone.spec.js` (T2.5: clone → render → video decodes). Still to come: T3.4, T4.3 | partial |
-| R-25 | T7.1 | gap |
+| R-25 | `test_sdk.py` (10: polling, eager answer, failure and missing-timing errors, job validated against the real `AvatarRenderJob`, error detail + request id, 429 retry and give-up, headers); live against a real server (T7.1) | pass |
 | R-26 | T7.2 | gap |
 | R-27 | `test_request_context.py` (id on every response, safe caller id kept, unsafe one replaced, log lines stamped, no leak past the request, worker thread inherits the id, 500 names the id); live on a real server (T6.2) | pass |
 | R-30 | `test_provenance.py`, `test_avatar_store.py`, `VoiceConsentTests` (voices now checked too) | pass |

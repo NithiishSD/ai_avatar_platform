@@ -31,6 +31,7 @@ records what was verified live, with the real command and result.
 | T3.2 | Done | (this commit) |
 | T3.5 | Done | ae92ce9 |
 | T6.2 | Done | (this commit) |
+| T7.1 | Done | (this commit) |
 | T7.3 | Done (4 documented exceptions, D-41) | (this commit) |
 | T7.5 | Done (two HTML `placeholder` attributes remain by decision D-40) | (this commit) |
 | T3.3 | Next | |
@@ -720,3 +721,26 @@ Verified: `npx playwright test` → **10 passed** three times in a row (37 s, 37
 after being 9+1 failed three runs in a row before the fix.
 
 Not done: `diffusers`, `transformers`, `accelerate`, `nltk` advisories (D-41).
+
+### 2026-10-08 — T7.1 Python SDK
+
+`sdk/avatar_platform/` (installable: `sdk/pyproject.toml`, httpx only): `AvatarClient`
+with `synthesize`, `render`, `score_lipsync`, `voice_similarity`, `faces`, `generate_face`,
+`health`; `ApiError` (status, server detail, request id), `JobFailed`. Polls hide the
+async jobs; a 429 is retried after `Retry-After`, three times, then raised. ruff and pyrefly
+now cover `sdk/`. Log-handler install moved from import to server start so importing the
+app in tests prints nothing.
+
+Verified:
+- `scripts/check.sh` → ruff clean, pyrefly 0 errors, 584 tests OK (10 new).
+- planted: the SDK's `targetFps` renamed → the contract test fails (the job it builds is
+  validated by the real `AvatarRenderJob`); restored.
+- live, real server, CPU: `AvatarClient` → health ok, faces `[demo, gen-live]`, synthesise
+  (kokoro, 2.5 s, 22 phonemes, `mms_fa`), render `demo` with `background={"color": "#0b3d91"}`
+  (blendshape, 63 frames, result reports the background), score: offset **-4** frames,
+  LSE-C 2.743, LSE-D 12.073.
+
+**Observation to chase in T6.6, not explained:** that blendshape lip-sync offset is -4, but
+T2.3 measured offset 0 on 3/3 clips. Differences: a different (short) sentence and a blue
+background. SyncNet crops the face from the first frame, so the background or clip length
+may matter. No claim is made either way until it is re-measured.

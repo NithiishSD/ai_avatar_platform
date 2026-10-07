@@ -62,7 +62,7 @@ from model_registry import (
     vision_audit_summary,
 )
 from quality_auditor import SpeechQualityAuditor
-from request_context import REQUEST_ID_HEADER, install_logging, request_id_middleware
+from request_context import REQUEST_ID_HEADER, configure_log_output, install_logging, request_id_middleware
 from security import API_KEY_HEADER, SecurityGate
 from voice_engine import CLONE_ENGINES, ModelWeightsMissing, VoiceConsentRequired
 
@@ -78,6 +78,7 @@ async def lifespan(_: FastAPI):
     Printed as well as logged: the router's fallbacks are silent by design, so
     a missing checkpoint has to be impossible to miss in the server output.
     """
+    configure_log_output()
     statuses = log_weight_audit()
     missing = [s for s in statuses if not s.present]
     print("=" * 60)

@@ -61,7 +61,7 @@ _installed = False
 
 
 def install_logging() -> None:
-    """Stamp ``request_id`` on every log record, and format app logs with it. Idempotent."""
+    """Stamp ``request_id`` on every log record (import time, so tests see it too). Idempotent."""
     global _installed
     if _installed:
         return
@@ -74,6 +74,11 @@ def install_logging() -> None:
         return record
 
     logging.setLogRecordFactory(factory)
+
+
+def configure_log_output() -> None:
+    """Print app logs with the id. Called when the server starts, never on import:
+    importing the app in a test must not make the test run noisy."""
     root = logging.getLogger()
     if not root.handlers:  # leave a host application's own logging alone
         handler = logging.StreamHandler()

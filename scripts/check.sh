@@ -27,7 +27,7 @@ BIN=${BIN:-./backend/.conda/bin}
 
 lint() {
   echo "== lint (ruff)"
-  "$BIN/ruff" check backend scripts tests
+  "$BIN/ruff" check backend scripts tests sdk
 }
 
 types() {

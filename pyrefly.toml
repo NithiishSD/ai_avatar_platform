@@ -1,13 +1,13 @@
 # Type checker configuration. Run through `scripts/check.sh types`.
 
-project-includes = ["backend/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
+project-includes = ["backend/**/*.py", "scripts/**/*.py", "tests/**/*.py", "sdk/**/*.py"]
 # The conda environment holds tens of thousands of third-party files. pyrefly
 # also honours .gitignore, but the exclude should not depend on that.
 project-excludes = ["backend/.conda/**", "frontend/**", "outputs/**", "inputs/**"]
 python-interpreter-path = "backend/.conda/bin/python"
 # Modules import each other by bare name (`import face_engine`), the way the
 # test runner and uvicorn put these directories on sys.path.
-search-path = ["backend", "tests", "scripts"]
+search-path = ["backend", "tests", "scripts", "sdk"]
 
 # Production code (backend/, scripts/) is checked with every error enabled.
 #
