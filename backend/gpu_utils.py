@@ -1,0 +1,221 @@
+"""
+GPU memory helpers for a 6 GB card.
+
+The pipeline is sequential on purpose: speech model, then lip sync, then (in
+the studio) a diffusion model, never two heavy ones at once. These helpers are
+how each stage makes room for the next and refuses to start when it cannot --
+a clear "not enough VRAM, here is who is holding it" before loading, instead
+of a CUDA out-of-memory traceback halfway through a render.
+
+torch is imported lazily so modules that only need the *check* (and the unit
+tests) do not pay for importing it.
+
+The design worth noticing: this module never knows what models exist. Each
+engine *registers* a callback that unloads its own models, so "free the GPU"
+is a message broadcast to whoever is listening. Adding a sixth model does not
+change this file. That is the observer / registry pattern, and the alternative
+(an if-chain naming every engine here) would couple this module to all of them.
+
+**How to say this in an interview:** "Memory pressure is handled with a
+registry of release callbacks rather than central knowledge of every model, so
+the guard stays closed to modification as engines are added."
+"""
+
+# Postpones evaluation of annotations, so a type can be written as `List[str]`
+# or reference a class defined later in the file without quoting it. Standard
+# at the top of typed modules on Python 3.7-3.9; harmless and still useful here.
+from __future__ import annotations
+
+import gc
+import logging
+from typing import Callable, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+# Callables that drop a module's cached models. Engines register themselves so
+# "free the GPU" does not need to know what is loaded.
+#
+# Callable[[], None] = "a function taking no arguments and returning nothing".
+_releasers: Dict[str, Callable[[], None]] = {}
+
+
+class InsufficientVRAM(RuntimeError):
+    """
+    Not enough free GPU memory to load a model.
+
+    A *custom exception type*, so callers can catch exactly this and fall back
+    to CPU, rather than catching RuntimeError and accidentally swallowing
+    unrelated bugs. Subclassing RuntimeError (not Exception) keeps it in the
+    right family for anything doing broad handling.
+    """
+
+
+def register_releaser(name: str, release: Callable[[], None]) -> None:
+    """Register a function that unloads ``name``'s models from the GPU."""
+    # Keyed by name, so registering twice replaces rather than duplicates -
+    # which matters because a module re-imported under test would otherwise
+    # stack up stale releasers pointing at dead objects.
+    _releasers[name] = release
+
+
+def preferred_device() -> Optional[str]:
+    """
+    ``AVATAR_DEVICE`` ("cpu" or "cuda") when set, else ``None`` for automatic.
+
+    The escape hatch for a GPU someone else is using: every vision model here
+    is small enough to run on CPU, just slower.
+    """
+    import os
+
+    # Three-valued on purpose: "cpu" and "cuda" are explicit choices, None
+    # means "decide for me". Returning "cuda" as a default would remove the
+    # caller's ability to tell "unset" from "explicitly asked for CUDA".
+    value = os.getenv("AVATAR_DEVICE", "").strip().lower()
+    # Anything unrecognised (a typo like "gpu") is treated as unset rather than
+    # raising: a bad env var should not stop the process booting.
+    return value if value in ("cpu", "cuda") else None
+
+
+def cuda_available() -> bool:
+    """True when torch can actually see a GPU."""
+    try:
+        import torch
+
+        # bool() because torch returns a numpy bool in some versions, which is
+        # truthy but not `is True` - and callers compare it.
+        return bool(torch.cuda.is_available())
+    except Exception:  # noqa: BLE001
+        # Broad on purpose: torch may be missing, or present but unable to
+        # initialise its driver. Either way the answer is "no GPU", and a
+        # capability probe must never be the thing that crashes the process.
+        return False
+
+
+def free_vram_mb() -> Optional[int]:
+    """Free GPU memory in MiB, or ``None`` without CUDA."""
+    if not cuda_available():
+        # None, not 0: "unknown because there is no GPU" is different from
+        # "a GPU with nothing free", and ensure_vram relies on the difference.
+        return None
+    import torch
+
+    # mem_get_info asks the driver, so it counts memory held by *other*
+    # processes too. torch.cuda.memory_allocated() would only see our own
+    # tensors and would happily report plenty free while another process
+    # occupies the card.
+    free, _total = torch.cuda.mem_get_info()
+    # The leading underscore marks a deliberately unused value.
+    # // is integer division; 1024*1024 converts bytes to MiB.
+    return int(free // (1024 * 1024))
+
+
+def empty_cache() -> None:
+    """Return cached, unused blocks to the driver."""
+    # gc.collect() first, and that order matters: torch only releases a block
+    # once no Python object references the tensor, so collecting unreachable
+    # objects is what makes the following empty_cache() actually free anything.
+    gc.collect()
+    if cuda_available():
+        import torch
+
+        # torch keeps freed blocks in its own allocator pool for speed. This
+        # hands them back to the driver so another process can use them.
+        torch.cuda.empty_cache()
+
+
+def release_others(keep: Optional[str] = None) -> List[str]:
+    """
+    Unload every registered model except ``keep``.
+
+    Returns the names released. A releaser that raises is logged and skipped:
+    failing to free one model must not stop the others being freed.
+    """
+    released: List[str] = []
+    # list(...) copies the items before iterating: a releaser is free to
+    # register or drop entries, and mutating a dict while looping over it
+    # raises RuntimeError. Cheap insurance for a handful of entries.
+    for name, release in list(_releasers.items()):
+        if name == keep:
+            continue
+        try:
+            release()
+            released.append(name)
+        except Exception as err:  # noqa: BLE001
+            # Keep going. This is the "best effort cleanup" pattern: the goal
+            # is to free as much as possible, so one broken releaser must not
+            # abort the loop and strand the remaining models in memory.
+            logger.warning("Could not release %s from the GPU: %s", name, err)
+    empty_cache()
+    return released
+
+
+def ensure_vram(required_mb: int, purpose: str, keep: Optional[str] = None) -> None:
+    """
+    Make sure ``required_mb`` of GPU memory is free before loading a model.
+
+    First tries to get there by unloading the other registered models. If it
+    still is not enough -- another process holds the card -- raise with the
+    numbers, so the fix (close the other process) is obvious.
+
+    A machine without CUDA passes: the caller runs on CPU and this is not the
+    check that applies.
+
+    Returns nothing and raises on failure, rather than returning a bool. A
+    bool invites being ignored; an exception cannot be.
+    """
+    free = free_vram_mb()
+    # `free is None` is the no-CUDA case and passes: see the docstring. Writing
+    # this as `if not free` would be a bug - 0 MiB free is falsy but is exactly
+    # the situation this guard exists for.
+    if free is None or free >= required_mb:
+        return
+    released = release_others(keep=keep)
+    # Re-measure rather than assume the release worked. `or 0` covers the
+    # (impossible here, but cheap) None case so the comparison below is safe.
+    free = free_vram_mb() or 0
+    if free >= required_mb:
+        logger.info(
+            # `or "cache"` so the message reads sensibly when nothing was
+            # registered and the win came from empty_cache() alone.
+            "Freed GPU memory for %s by unloading: %s", purpose, ", ".join(released) or "cache"
+        )
+        return
+    import torch
+
+    # memory_allocated() is *our* tensors only. Comparing it against the
+    # shortfall is what distinguishes the two causes below.
+    own = int(torch.cuda.memory_allocated() // (1024 * 1024))
+    # Golden rule 7: the error names the fix. Which fix depends on who is
+    # actually holding the memory, so the message is chosen, not generic.
+    # 256 MiB is a threshold, not a measurement: below that our own footprint
+    # is CUDA context overhead rather than a model nobody released.
+    holder = (
+        f"This process still holds {own} MiB in models that did not register a "
+        "releaser; restart it, or render in a separate process."
+        if own > 256
+        else "Another process is holding the card: check `nvidia-smi`, close it, and retry."
+    )
+    raise InsufficientVRAM(
+        f"{purpose} needs about {required_mb} MiB of free GPU memory but only "
+        f"{free} MiB is free. {holder}"
+    )
+
+
+def reset_peak() -> None:
+    """Zero the high-water mark, to measure one stage's peak in isolation."""
+    if cuda_available():
+        import torch
+
+        torch.cuda.reset_peak_memory_stats()
+
+
+def peak_vram_mb() -> Optional[int]:
+    """Peak GPU memory allocated by this process since ``reset_peak``."""
+    if not cuda_available():
+        return None
+    import torch
+
+    # max_memory_allocated is a high-water mark, not a current reading: it
+    # survives the tensors being freed, which is what makes it usable as
+    # evidence that a render stayed under 6 GB (the Gate 2 criterion).
+    return int(torch.cuda.max_memory_allocated() // (1024 * 1024))

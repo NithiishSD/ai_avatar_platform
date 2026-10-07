@@ -48,6 +48,35 @@ env/*
 venv/
 .venv/
 .conda/
-backend/.conda/
+backend/.conda/*
 
+# Generated audio is regenerable; the smoke cloning reference and its
+# provenance record are rebuilt by scripts/make_reference.py --smoke.
+inputs/smoke_reference_*
 
+# Requirements PDFs are the acceptance authority for this project and must be
+# recoverable from history. The *.pdf rule above meant neither was ever
+# committed, so when the problem-statement PDF was corrupted by a text-mode
+# transfer there was no intact copy to restore. Track them explicitly.
+!docs/*.pdf
+
+# Vision model weights fetched by scripts/fetch_vision_models.py. They are
+# reproducible from that script, SyncNet alone is over GitHub's 50 MB warning
+# size, and Wav2Lip's licence does not allow redistributing it.
+.models/mediapipe/selfie_multiclass_256x256.tflite
+.models/sface/
+.models/syncnet/
+.models/wav2lip/
+
+# Face images are never committed: a photo of a person needs that person's
+# consent, and a repository is a publication. Register them locally with
+# their provenance sidecar instead.
+inputs/faces/*
+
+# Rendered videos are generated media, regenerable with scripts/render_avatar.py.
+outputs/renders/
+
+# Faces and voice references are never committed: they are photos and
+# recordings of people, and golden rule 3 makes consent a precondition of use,
+# not of storage. Provenance sidecars stay local with the media they describe.
+inputs/

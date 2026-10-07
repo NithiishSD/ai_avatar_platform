@@ -71,12 +71,41 @@ num2words>=0.5.12
 pandas>=1.4.0,<2.0.0
 gruut[de,es,fr]==2.2.3
 
+# Milestone 3 / Phase 3: Multilingual synthesis, emotion prosody, quality audit
+# -----------------------------------------------------------------------------
+# Model 4 (Multilingual): Facebook MMS-TTS - 1077 languages.
+# Loaded per-language via transformers VitsModel (facebook/mms-tts-<iso3>),
+# ~145 MB each, LRU-cached in backend/mms_engine.py. No extra pip package.
+# The language catalogue ships as data in backend/data/mms_tts_languages.json.
+#
+# Romanization for MMS "uroman" checkpoints (non-Latin scripts whose tokenizer
+# sets is_uroman). Optional: without it, non-ASCII text for those languages
+# raises a clear error instead of producing garbled audio.
+uroman>=1.3.1.1 ; python_version >= "3.9"
+
+# Speech quality auditing: MOS / PESQ / STOI / SI-SDR prediction.
+# torchaudio.pipelines.SQUIM_OBJECTIVE and SQUIM_SUBJECTIVE ship with
+# torchaudio >= 2.1 - no extra package required.
+#
+# Speaker verification for the >85% voice-cloning similarity threshold.
+# Without speechbrain the auditor falls back to a spectral proxy and labels it
+# as NOT valid threshold evidence.
+speechbrain>=1.0.0
+
 # Milestone 2: Lip Sync & Computer Vision Pipeline
 opencv-python-headless>=4.8.0,<5.0.0
 mediapipe>=0.10.9
 pillow>=10.0.0,<11.0.0
 tqdm>=4.66.0
 ffmpeg-python>=0.2.0
+
+# Avatar generator / customization studio: Stable Diffusion 1.5 through
+# diffusers. 0.32.x is the newest line that works with transformers<4.48 and
+# does not pull numpy 2. Weights: scripts/fetch_vision_models.py.
+diffusers>=0.32.0,<0.33.0
+
+# MFCC front end for the SyncNet LSE-C / LSE-D lip-sync metric. Pure Python.
+python_speech_features>=0.6
 
 # Audio/Video Metric & Text Utilities
 requests>=2.31.0

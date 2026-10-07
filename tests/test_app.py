@@ -1,3 +1,4 @@
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -25,8 +26,14 @@ class FakeRedis:
     def exists(self, key):
         return key in self.values
 
-    def set(self, key, value):
+    def set(self, key, value, nx=False):
+        if nx and key in self.values:
+            return None
         self.values[key] = value
+        return True
+
+    def delete(self, key):
+        self.values.pop(key, None)
 
     def get(self, key):
         return self.values.get(key)
@@ -51,7 +58,12 @@ class RenderJobApiTests(unittest.TestCase):
         response = self.client.get("/health")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"status": "ok", "queueBackend": "in_memory"})
+        payload = response.json()
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["queueBackend"], "in_memory")
+        # Phase 3 added a capability block; the original two keys must remain.
+        self.assertIn("mms-tts", payload["capabilities"]["models"])
+        self.assertGreater(payload["capabilities"]["languages"], 1000)
 
     def test_cors_headers_allow_vite_dev_server(self):
         response = self.client.get("/health", headers={"Origin": "http://localhost:5173"})
@@ -148,14 +160,41 @@ class RenderJobApiTests(unittest.TestCase):
         delay.assert_called_once()
 
     def test_celery_queue_publishes_validated_payload(self):
+        # Restore rather than hard-set False on the way out: this is the real
+        # app config, and leaving eager off leaked into every later test.
+        previous = celery.conf.task_always_eager
         celery.conf.task_always_eager = True
+        self.addCleanup(setattr, celery.conf, "task_always_eager", previous)
         queue = CeleryJobQueue(redis_client=FakeRedis())
 
         queued_job = queue.enqueue(AvatarRenderJob.model_validate(VALID_JOB))
 
         self.assertEqual(queued_job.status.value, "QUEUED")
         self.assertEqual(queue.get("AVT-9821-X").job.job_id, "AVT-9821-X")
-        celery.conf.task_always_eager = False
+
+    def test_in_memory_mode_never_points_celery_at_redis(self):
+        """
+        QUEUE_BACKEND=in_memory promises no Redis is needed. Celery reads
+        CELERY_BROKER_URL / CELERY_RESULT_BACKEND from the environment and they
+        beat the constructor arguments, so in_memory mode used to store its
+        eager results in Redis and fail when none was running.
+        """
+        import importlib
+
+        env = {
+            "QUEUE_BACKEND": "in_memory",
+            "CELERY_BROKER_URL": "redis://localhost:6379/0",
+            "CELERY_RESULT_BACKEND": "redis://localhost:6379/1",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            module = importlib.reload(importlib.import_module("celery_app"))
+            try:
+                self.assertNotIn("redis", module.celery.conf.broker_url)
+                self.assertNotIn("redis", module.celery.conf.result_backend)
+                self.assertTrue(module.celery.conf.task_always_eager)
+            finally:
+                # Leave the shared module as the rest of the suite expects it.
+                importlib.reload(module)
 
 
 if __name__ == "__main__":

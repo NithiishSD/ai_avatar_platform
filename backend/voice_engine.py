@@ -1,28 +1,40 @@
 """
-VoiceEngineRouter — Multi-Model TTS Orchestration (Phase 1)
-============================================================
-Routing matrix:
-  fast        + English       → Kokoro-82M      (sub-second, real-time)
-  clone                       → XTTS-v2         (zero-shot voice cloning)
-  high_quality | quality=high → Higgs TTS 2     (MOS >4.0, multilingual)
-  non-English language        → Higgs TTS 2     (Kokoro is English-only)
-  dialogue    | style=dialogue → Dia-1.6B       (multi-speaker [S1]/[S2])
-  Higgs unavailable (OOM)     → XTTS-v2 fallback
-  Dia unavailable             → Kokoro fallback
+VoiceEngineRouter — Multi-Model TTS Orchestration (Phases 1-3)
+==============================================================
+Routing matrix, highest priority first:
+  dialogue | style=dialogue | [S1]/[S2] → Dia-1.6B      (multi-speaker)
+  clone                                 → XTTS-v2       (zero-shot cloning)
+  high_quality | quality=high           → Higgs TTS 2   (MOS >4.0)
+  multilingual, or non-English with an
+    MMS-TTS checkpoint                  → MMS-TTS       (1077 languages)
+  non-English without MMS coverage      → Higgs TTS 2
+  fast + English                        → Kokoro-82M    (sub-second)
+
+Fallbacks: Dia → Kokoro, Higgs → XTTS-v2, MMS → Higgs → XTTS-v2.
+
+Phase 3 post-processing runs after whichever backend produced the audio:
+emotion prosody (blended with the caller's speed/pitch in a single transform),
+forced alignment, then the optional MOS/PESQ quality audit.
 """
 
 import os
 import time
+import math
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 import torch
 import soundfile as sf
 import numpy as np
 
 from audio_utils import validate_and_convert_for_cloning, AudioValidationError
+from alignment_engine import ForcedAligner
+import language_registry
+from emotion_engine import EmotionProsodyEngine
+from mms_engine import MMSTTSEngine, MMSRomanizationRequired
+from quality_auditor import SpeechQualityAuditor
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +68,14 @@ class SynthesisResult:
     latency_ms: float
     model: str
     mode: str
+    phoneme_timestamps: Optional[list] = None
+    # "mms_fa" when the timestamps were measured from the audio,
+    # "acoustic-fallback" when they were only estimated from the text.
+    alignment_method: Optional[str] = None
+    emotion: Optional[dict] = None
+    quality_report: Optional[dict] = None
+    language: Optional[dict] = None
+
 
 
 class VoiceEngineRouter:
@@ -80,9 +100,36 @@ class VoiceEngineRouter:
         self._dia_model = None        # Dia-1.6B
         self._dia_processor = None
 
+        # Phase 3 engines. All three are cheap to construct and load lazily.
+        self._mms = MMSTTSEngine(device=self.device)
+        self._emotion = EmotionProsodyEngine()
+        self._auditor: Optional[SpeechQualityAuditor] = None
+
         # Track load failures to avoid retrying broken models
         self._higgs_failed = False
         self._dia_failed = False
+        self._mms_failed = False
+
+        # Lets the vision side make room on the 6 GB card before it loads a
+        # model (golden rule 5). Everything reloads lazily on the next call.
+        import gpu_utils
+
+        gpu_utils.register_releaser("tts-router", self.release)
+
+    def release(self) -> None:
+        """Drop the heavy TTS models from memory; they reload on next use."""
+        self.kokoro_pipeline = None
+        self.xtts_model = None
+        self._higgs_pipe = None
+        self._dia_model = None
+        self._dia_processor = None
+
+    @property
+    def auditor(self) -> SpeechQualityAuditor:
+        """Quality auditor, constructed on first use (SQUIM loads lazily inside)."""
+        if self._auditor is None:
+            self._auditor = SpeechQualityAuditor(device=self.device)
+        return self._auditor
 
     # ------------------------------------------------------------------
     # Model Selection — Routing Decision Matrix
@@ -100,14 +147,17 @@ class VoiceEngineRouter:
         Returns the canonical model key for the given request parameters.
 
         Priority order:
-          1. Explicit dialogue mode / style or [S1]/[S2] tags → dia
+          1. Explicit dialogue mode / style or [S1]/[S2] tags → dia-1.6b
           2. Explicit clone mode → xtts-v2
           3. Explicit high_quality mode OR quality=high → higgs-tts-2
-          4. Non-English language → higgs-tts-2
-          5. fast mode English → kokoro
-          6. Unknown mode → raise ValueError
+          4. mode='multilingual' → mms-tts (errors if the language has no checkpoint)
+          5. Non-English with an MMS-TTS checkpoint → mms-tts
+          6. Non-English without one → higgs-tts-2
+          7. fast mode English → kokoro
+          8. Unknown mode → raise ValueError
         """
         normalized_lang = language.lower().replace("_", "-")
+        info = language_registry.resolve(language)
 
         # 1. Dialogue detection
         is_dialogue_mode = mode == "dialogue"
@@ -131,23 +181,43 @@ class VoiceEngineRouter:
                 return "xtts-v2"
             return "higgs-tts-2"
 
-        # 4. Non-English → Higgs (Kokoro is English-only)
+        # 4. Explicit multilingual mode — the caller wants MMS-TTS specifically.
+        if mode == "multilingual":
+            if not info.mms_supported:
+                raise ValueError(
+                    f"mode='multilingual' requires an MMS-TTS checkpoint, but "
+                    f"'{language}'"
+                    + (f" (ISO-639-3 '{info.iso3}')" if info.iso3 else "")
+                    + " is not among the "
+                    f"{language_registry.supported_count()} supported languages. "
+                    "Use mode='high_quality' (Higgs) or mode='clone' (XTTS-v2)."
+                )
+            if self._mms_failed:
+                logger.warning("MMS-TTS unavailable — falling back to Higgs for %s", language)
+                return "xtts-v2" if self._higgs_failed else "higgs-tts-2"
+            return "mms-tts"
+
+        # 5/6. Non-English: prefer MMS-TTS coverage, else Higgs.
         if normalized_lang not in _KOKORO_ENGLISH_CODES:
+            if info.mms_supported and not self._mms_failed:
+                return "mms-tts"
             if self._higgs_failed:
                 raise ValueError(
-                    f"Language '{language}' requires Higgs TTS 2, but it failed to load. "
+                    f"Language '{language}' has no available backend: MMS-TTS "
+                    f"{'failed to load' if info.mms_supported else 'has no checkpoint'} "
+                    "and Higgs TTS 2 failed to load. "
                     "Use mode='clone' with XTTS-v2 for multilingual synthesis."
                 )
             return "higgs-tts-2"
 
-        # 5. Fast English
+        # 7. Fast English
         if mode == "fast":
             return "kokoro"
 
-        # 6. Unknown
+        # 8. Unknown
         raise ValueError(
-            f"Unsupported mode='{mode}'. "
-            "Valid modes: 'fast', 'clone', 'high_quality', 'dialogue'."
+            f"Unsupported mode='{mode}'. Valid modes: 'fast', 'clone', "
+            "'high_quality', 'dialogue', 'multilingual'."
         )
 
     # ------------------------------------------------------------------
@@ -367,6 +437,51 @@ class VoiceEngineRouter:
         duration = len(audio_array) / sample_rate
         return sample_rate, duration
 
+    def _synthesize_mms(
+        self,
+        text: str,
+        output_path: Path,
+        language: str,
+        speaker_wav: Optional[str] = None,
+    ) -> tuple[int, float, dict]:
+        """
+        Run MMS-TTS for one of its 1077 languages.
+
+        Returns (sample_rate, duration_seconds, language_info). Falls back to
+        Higgs, then XTTS-v2, when the checkpoint cannot be fetched or loaded —
+        the caller still gets audio, and ``language_info`` records what happened.
+        """
+        info = language_registry.resolve(language)
+        try:
+            result = self._mms.synthesize(
+                text=text, language=language, output_path=output_path
+            )
+            payload = info.to_dict()
+            payload.update({"backend": "mms-tts", "romanized": result.romanized})
+            return result.sample_rate, result.duration_seconds, payload
+
+        except MMSRomanizationRequired:
+            # A missing romanizer is a configuration problem, not a model
+            # failure; surface it instead of silently degrading quality.
+            raise
+
+        except Exception as exc:  # noqa: BLE001 - any load failure degrades gracefully
+            logger.warning("MMS-TTS failed for %s (%s) — falling back", language, exc)
+            self._mms_failed = True
+            payload = info.to_dict()
+            payload["fallbackReason"] = str(exc)
+
+            if not self._higgs_failed:
+                sample_rate, duration = self._synthesize_higgs(text, output_path, speaker_wav)
+                payload["backend"] = "higgs-tts-2 (MMS fallback)"
+                return sample_rate, duration, payload
+
+            sample_rate, duration = self._synthesize_xtts(
+                text, output_path, speaker_wav, language
+            )
+            payload["backend"] = "xtts-v2 (MMS fallback)"
+            return sample_rate, duration, payload
+
     # ------------------------------------------------------------------
     # Main Public Interface
     # ------------------------------------------------------------------
@@ -380,19 +495,34 @@ class VoiceEngineRouter:
         language: str = "en",
         quality: str = "balanced",
         style: Optional[str] = None,
+        speed: Optional[float] = None,
+        pitch: Optional[float] = None,
+        return_alignment: bool = False,
+        emotion: Optional[str] = None,
+        emotion_intensity: float = 1.0,
+        emotion_vector: Optional[dict] = None,
+        audit_quality: bool = False,
     ) -> SynthesisResult:
         """
         Synthesize speech using the automatically selected model.
 
         Parameters
         ----------
-        text            : Text to synthesize. Use [S1]/[S2] tags for Dia dialogue.
-        mode            : 'fast' | 'clone' | 'high_quality' | 'dialogue'
-        speaker_wav     : Path to reference WAV (required for 'clone', optional for 'high_quality')
-        output_filename : Output filename under outputs/
-        language        : BCP-47 language code (e.g. 'en', 'es', 'fr', 'ja')
-        quality         : 'fast' | 'balanced' | 'high'
-        style           : Optional style hint ('dialogue', 'expressive', 'narration')
+        text              : Text to synthesize. Use [S1]/[S2] tags for Dia dialogue.
+        mode              : 'fast' | 'clone' | 'high_quality' | 'dialogue' | 'multilingual'
+        speaker_wav       : Path to reference WAV (required for 'clone', optional for 'high_quality')
+        output_filename   : Output filename under outputs/
+        language          : BCP-47 or ISO-639-3 code ('en', 'es', 'hin', 'swh', ...)
+        quality           : 'fast' | 'balanced' | 'high'
+        style             : Optional style hint ('dialogue', 'expressive', 'narration')
+        speed             : Speed/rhythm multiplier (0.5x to 2.0x)
+        pitch             : Pitch shift multiplier (0.5x to 2.0x)
+        return_alignment  : Generate millisecond phoneme/viseme timestamps
+        emotion           : Named emotion preset ('joy', 'anger', 'sorrow', 'authority', ...)
+        emotion_intensity : Strength of that preset; the remainder stays neutral
+        emotion_vector    : Blend of emotions, e.g. {'joy': 0.6, 'authority': 0.4}.
+                            Takes precedence over ``emotion``.
+        audit_quality     : Run the MOS/PESQ auditor on the result
         """
         if not text.strip():
             raise ValueError("text must not be empty")
@@ -407,11 +537,13 @@ class VoiceEngineRouter:
 
         start_time = time.time()
         output_path = OUTPUT_DIR / output_filename
+        language_info = language_registry.resolve(language).to_dict()
+        language_info["backend"] = model_key
 
         print(
             f"\n{'='*60}\n"
             f"[VoiceEngine] mode={mode!r} lang={language!r} quality={quality!r} "
-            f"style={style!r} → model={model_key!r}\n"
+            f"style={style!r} speed={speed} pitch={pitch} align={return_alignment} → model={model_key!r}\n"
             f"{'='*60}"
         )
 
@@ -429,8 +561,79 @@ class VoiceEngineRouter:
         elif model_key == "dia-1.6b":
             sample_rate, duration = self._synthesize_dia(text, output_path)
 
+        elif model_key == "mms-tts":
+            sample_rate, duration, language_info = self._synthesize_mms(
+                text, output_path, language, speaker_wav
+            )
+
         else:
             raise ValueError(f"Internal error: unknown model key '{model_key}'")
+
+        # ---- Phase 3: emotion prosody, blended with explicit speed/pitch ----
+        # Both are time-stretch + pitch-shift operations, so they are combined
+        # into one transform rather than applied in sequence.
+        extra_rate = float(speed) if speed is not None else 1.0
+        extra_semitones = 12.0 * math.log2(float(pitch)) if pitch is not None and pitch > 0 else 0.0
+
+        emotion_report = None
+        try:
+            application = self._emotion.apply_to_file(
+                output_path,
+                vector=emotion_vector,
+                emotion=emotion,
+                intensity=emotion_intensity,
+                extra_rate=extra_rate,
+                extra_semitones=extra_semitones,
+            )
+            emotion_report = application.to_dict()
+            if application.applied:
+                duration = application.duration_seconds
+                sample_rate = application.sample_rate
+                print(
+                    f"[Prosody] emotion={application.dominant} "
+                    f"({application.intensity:.2f}) speed={extra_rate} "
+                    f"pitch={extra_semitones:+.2f}st -> duration={duration:.2f}s"
+                )
+        except Exception as prosody_err:  # noqa: BLE001 - keep the raw audio
+            logger.warning("Prosody / emotion post-processing failed: %s", prosody_err)
+
+        # Generate millisecond phoneme/viseme timestamps if requested
+        phoneme_timestamps = None
+        alignment_method = None
+        if return_alignment:
+            try:
+                aligner = ForcedAligner(device=self.device)
+                timestamps = aligner.align(
+                    audio_path_or_tensor=str(output_path),
+                    transcript=text,
+                    sample_rate=sample_rate,
+                    language=language,
+                )
+                phoneme_timestamps = [t.model_dump(by_alias=True) for t in timestamps]
+                alignment_method = aligner.last_method
+                print(
+                    f"[Aligner] Extracted {len(phoneme_timestamps)} phoneme/viseme timestamps "
+                    f"({alignment_method})."
+                )
+                if alignment_method == "acoustic-fallback":
+                    print(f"[Aligner] WARNING: timing is estimated, not measured: {aligner.last_fallback_reason}")
+            except Exception as align_err:
+                logger.warning("Forced alignment failed: %s", align_err)
+
+        # ---- Phase 3: automated speech quality audit ------------------------
+        quality_report = None
+        if audit_quality:
+            try:
+                quality_report = self.auditor.audit(
+                    output_path, reference_path=speaker_wav
+                ).to_dict()
+                print(
+                    f"[Auditor] MOS={quality_report.get('mos')} "
+                    f"PESQ={quality_report.get('pesq')} "
+                    f"({quality_report.get('method')})"
+                )
+            except Exception as audit_err:  # noqa: BLE001 - auditing is advisory
+                logger.warning("Quality audit failed: %s", audit_err)
 
         latency = (time.time() - start_time) * 1000
         print(f"\n✅ Audio saved → {os.path.abspath(output_path)}")
@@ -444,7 +647,13 @@ class VoiceEngineRouter:
             latency_ms=latency,
             model=model_key,
             mode=mode,
+            phoneme_timestamps=phoneme_timestamps,
+            alignment_method=alignment_method,
+            emotion=emotion_report,
+            quality_report=quality_report,
+            language=language_info,
         )
+
 
 
 # ------------------------------------------------------------------

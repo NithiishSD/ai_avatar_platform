@@ -42,12 +42,21 @@ class RouterSelectionTests(unittest.TestCase):
     def test_quality_high_routes_to_higgs(self):
         self.assertEqual(self.router.select_model(mode="fast", language="en", quality="high"), "higgs-tts-2")
 
-    def test_non_english_routes_to_higgs(self):
-        self.assertEqual(self.router.select_model(mode="fast", language="es"), "higgs-tts-2")
-        self.assertEqual(self.router.select_model(mode="fast", language="fr"), "higgs-tts-2")
-        self.assertEqual(self.router.select_model(mode="fast", language="ja"), "higgs-tts-2")
-        self.assertEqual(self.router.select_model(mode="fast", language="de"), "higgs-tts-2")
-        self.assertEqual(self.router.select_model(mode="fast", language="zh"), "higgs-tts-2")
+    def test_non_english_with_mms_coverage_routes_to_mms(self):
+        """Phase 3: MMS-TTS covers these, so it wins over Higgs for plain synthesis."""
+        for code in ("es", "fr", "de", "hi", "ta", "swh"):
+            with self.subTest(language=code):
+                self.assertEqual(
+                    self.router.select_model(mode="fast", language=code), "mms-tts"
+                )
+
+    def test_non_english_without_mms_coverage_routes_to_higgs(self):
+        """Japanese, Mandarin and Italian have no MMS-TTS checkpoint."""
+        for code in ("ja", "zh", "it"):
+            with self.subTest(language=code):
+                self.assertEqual(
+                    self.router.select_model(mode="fast", language=code), "higgs-tts-2"
+                )
 
     # ------------------------------------------------------------------ Dia-1.6B
     def test_dialogue_mode_routes_to_dia(self):
@@ -67,8 +76,18 @@ class RouterSelectionTests(unittest.TestCase):
         self.router._higgs_failed = True
         self.assertEqual(self.router.select_model(mode="high_quality"), "xtts-v2")
 
-    def test_higgs_failed_raises_for_non_english(self):
+    def test_higgs_failed_still_routes_mms_covered_language_to_mms(self):
         self.router._higgs_failed = True
+        self.assertEqual(self.router.select_model(mode="fast", language="es"), "mms-tts")
+
+    def test_higgs_failed_raises_for_language_without_mms_coverage(self):
+        self.router._higgs_failed = True
+        with self.assertRaises(ValueError):
+            self.router.select_model(mode="fast", language="ja")
+
+    def test_both_multilingual_backends_failed_raises(self):
+        self.router._higgs_failed = True
+        self.router._mms_failed = True
         with self.assertRaises(ValueError):
             self.router.select_model(mode="fast", language="es")
 
