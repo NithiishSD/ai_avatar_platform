@@ -24,7 +24,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-01 | `test_voice_engine.py`, `test_mms_engine.py`, `test_openvoice_engine.py`, `test_bark_engine.py`, `UnrunnableEngineTests`; live XTTS-v2 clone (T2.1) | pass (**5** usable, each synthesised live: Kokoro, MMS-TTS, OpenVoice V2, Bark, XTTS-v2; Higgs and Dia cannot run on this stack, D-32) |
 | R-02 | `test_voice_engine.py` routing + `MissingWeightsTests`; `test_app.py` 503/400 before queueing | pass |
 | R-03 | OpenVoice V2 live clone through the API (T2.6b); XTTS-v2 live clone, 6 sentences, `measure_clone_similarity.py` (T2.1) | pass |
-| R-04 | OpenVoice V2 clone in Hindi over MMS-TTS, live (T2.6b); XTTS cross-lingual in T3.3 | partial |
+| R-04 | XTTS-v2 cross-lingual, live: Spanish, Hindi, French (T3.3); OpenVoice V2 in Hindi over MMS-TTS (T2.6b) | pass (speaks the language, voice carries over only partly: see N-02 note) |
 | R-05 | `test_alignment_engine.py`, `test_alignment_method.py`, `test_alignment_accuracy.py`; E2E `synthesis.spec.js` (measured, not estimated) | pass |
 | R-06 | `test_mms_engine.py`, `test_language_registry.py`, `test_romanizer.py` | pass |
 | R-07 | `test_emotion_engine.py` | pass |
@@ -56,7 +56,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-35 | T5.4 | gap |
 | R-36 | T5.3 | gap |
 | N-01 | 17 Sep: MOS 4.33 (SQUIM, Kokoro). 8 Oct: Bark dialogue 4.12 (SQUIM, self-referenced, biased up). Re-run with a non-matching reference in T6.6 | measured — met |
-| N-02 | 8 Oct, ECAPA-TDNN (speechbrain/spkrec-ecapa-voxceleb), clone of the first 30 s of the LJSpeech reference scored against the held-out last 20 s (admissible: human, open licence), 6 sentences, CPU: **XTTS-v2 mean 62.0%** (sd 4.6, min 55.1, max 67.6); OpenVoice V2 34.2% (base 26.9%); ceiling = the same speaker's real speech 91.7%. `scripts/measure_clone_similarity.py`, JSON in `outputs/benchmarks/` | **not met** (62.0% vs 85% and 90%) |
+| N-02 | 8 Oct, ECAPA-TDNN (speechbrain/spkrec-ecapa-voxceleb), clone of the first 30 s of the LJSpeech reference scored against the held-out last 20 s (admissible: human, open licence), 6 sentences, CPU: **XTTS-v2 mean 62.0%** (sd 4.6, min 55.1, max 67.6); OpenVoice V2 34.2% (base 26.9%); ceiling = the same speaker's real speech 91.7%. **Cross-lingual XTTS-v2 (T3.3), same method:** Spanish 43.9%, Hindi 48.8%, French 42.8% (6 sentences each). `scripts/measure_clone_similarity.py`, JSON in `outputs/benchmarks/` | **not met** (62.0% vs 85% and 90%) |
 | N-03 | in-process 13 ms (17 Sep); real server in T6.3 | partial |
 | N-04 | in-process only; real server in T6.3 | gap |
 | N-05 | 8 Oct, SyncNet v2, 25 fps: **Wav2Lip** offset 0 on 3/3 clips, LSE-C 9.84 / 10.51 / 11.18, LSE-D 6.61 / 5.97 / 5.48; blendshape offset 0, LSE-C 3.98 / 4.23 / 5.55 (T2.3). The D-12 window percentage not yet computed (T6.6) | measured — % figure pending |

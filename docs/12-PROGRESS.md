@@ -35,10 +35,10 @@ records what was verified live, with the real command and result.
 | T7.1 | Done | 98902e3 |
 | T7.3 | Done (4 documented exceptions, D-41) | ec5b180 |
 | T7.5 | Done (two HTML `placeholder` attributes remain by decision D-40) | d62dd62 |
-| T3.3 | Next | |
+| T3.3 | Done — voice carries over only partly (43–49%) | (this commit) |
+| T3.4 | Next | |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
-T3.3 cross-lingual cloning (XTTS part blocked by M-03; OpenVoice cross-lingual already measured) ->
 T3.4 Gate 3 flow (custom avatar + cloned multilingual voice + emotion, E2E) ->
 T6.3 load test -> T6.4 concurrency test (50+ jobs) -> T6.5 security review ->
 M4 live: T4.1 streaming TTS (`WS /api/v1/live`) -> T4.2 live frames -> T4.3 live UI + E2E -> T4.4 latency ->
@@ -808,3 +808,24 @@ Consequences: R-01 is now met (5 engines, each synthesised live) and R-03 passes
 Not measured: XTTS-v2 on a second speaker (only one admissible reference exists, Q-05), and
 anything on the GPU. Higher similarity might come from a longer or cleaner prompt or from the
 `gpt_cond_len` / `temperature` settings; not tried, so no claim.
+
+### 2026-10-08 — T3.3 cross-lingual cloning (XTTS-v2)
+
+`measure_clone_similarity.py` gained `--language` with six test sentences each in Spanish,
+French and Hindi (English reference, so the cloner has never heard the speaker in these
+languages). Real XTTS-v2, CPU, held-out scoring as in T2.1:
+
+| language | mean | sd | min | max |
+|---|---|---|---|---|
+| English (T2.1) | 62.0% | 4.6 | 55.1 | 67.6 |
+| Spanish | 43.9% | 5.4 | 33.3 | 51.1 |
+| Hindi | 48.8% | 1.9 | 45.8 | 52.0 |
+| French | 42.8% | 6.0 | 32.9 | 50.9 |
+
+Real-speech ceiling 91.7%. Speaking a new language costs about 13 to 19 points. Through the
+real API (`mode=clone`, `cloneEngine=xtts-v2`, via the SDK): Spanish 3.34 s, 43 phonemes,
+alignment `mms_fa` (measured), ECAPA 44.42% against the full reference; Hindi 4.36 s, 39
+phonemes, `mms_fa`, 49.52%. These agree with the script's numbers, and the 30 s prompt being
+part of the full reference did not inflate them. OpenVoice V2 Hindi (T2.6b) is the other data
+point. **Not met** against 85%/90%, like English. No cross-lingual figure for a second speaker
+(Q-05).

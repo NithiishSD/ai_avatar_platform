@@ -40,6 +40,36 @@ SENTENCES = [
     "Thick fog rolled through the valley while the church bells rang loudly.",
     "The committee will review the proposal and publish its decision next week.",
 ]
+# The same kinds of sentence in other languages, for cross-lingual cloning (R-04).
+# The reference is English; the cloner has never heard any of these languages
+# from this speaker, so a high score means the voice carried over.
+SENTENCES_BY_LANGUAGE = {
+    "en": SENTENCES,
+    "es": [
+        "El zorro marrón salta sobre el perro perezoso cerca de la orilla del río.",
+        "Ella vende conchas marinas en la orilla del mar cada mañana de verano.",
+        "Nuestros ingresos trimestrales crecieron un treinta y siete por ciento en todas las regiones.",
+        "Por favor confirme si el envío llegó antes del once de marzo.",
+        "La niebla espesa cubrió el valle mientras las campanas de la iglesia sonaban con fuerza.",
+        "El comité revisará la propuesta y publicará su decisión la próxima semana.",
+    ],
+    "fr": [
+        "Le renard brun saute par-dessus le chien paresseux près de la rive de la rivière.",
+        "Elle vend des coquillages au bord de la mer chaque matin d'été.",
+        "Notre chiffre d'affaires trimestriel a augmenté de trente-sept pour cent dans toutes les régions.",
+        "Veuillez confirmer si la livraison est arrivée avant le onze mars.",
+        "Un épais brouillard traversait la vallée pendant que les cloches de l'église sonnaient.",
+        "Le comité examinera la proposition et publiera sa décision la semaine prochaine.",
+    ],
+    "hi": [
+        "भूरी लोमड़ी नदी के किनारे आलसी कुत्ते के ऊपर से कूद जाती है।",
+        "वह हर गर्मी की सुबह समुद्र के किनारे सीपियाँ बेचती है।",
+        "हमारा तिमाही राजस्व सभी क्षेत्रों में सैंतीस प्रतिशत बढ़ा।",
+        "कृपया पुष्टि करें कि माल ग्यारह मार्च से पहले पहुँचा या नहीं।",
+        "घाटी में घना कोहरा छाया था जबकि गिरजाघर की घंटियाँ ज़ोर से बज रही थीं।",
+        "समिति प्रस्ताव की समीक्षा करेगी और अगले सप्ताह अपना निर्णय प्रकाशित करेगी।",
+    ],
+}
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -50,6 +80,11 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--language", default="en")
     parser.add_argument("--device", default=None)
     args = parser.parse_args(argv)
+    if args.language not in SENTENCES_BY_LANGUAGE:
+        print(f"error: no test sentences for {args.language!r}; add them to SENTENCES_BY_LANGUAGE "
+              f"(have {sorted(SENTENCES_BY_LANGUAGE)})", file=sys.stderr)
+        return 1
+    sentences = SENTENCES_BY_LANGUAGE[args.language]
 
     import numpy as np
     import soundfile as sf
@@ -87,11 +122,11 @@ def main(argv: List[str] | None = None) -> int:
         ceiling = auditor.speaker_similarity(held_path, prompt_path)
 
         rows: List[Dict[str, Any]] = []
-        for index, sentence in enumerate(SENTENCES):
+        for index, sentence in enumerate(sentences):
             started = time.perf_counter()
             result = router.synthesize(
                 sentence, mode="clone", speaker_wav=str(prompt_path), language=args.language,
-                output_filename=f"benchmark/sim-{args.engine}-{index}.wav", clone_engine=args.engine,
+                output_filename=f"benchmark/sim-{args.engine}-{args.language}-{index}.wav", clone_engine=args.engine,
                 return_alignment=False,
             )
             report = auditor.speaker_similarity(held_path, PROJECT_ROOT / result.output_path)
@@ -106,6 +141,7 @@ def main(argv: List[str] | None = None) -> int:
     values = np.array([r["similarityPercent"] for r in rows])
     summary = {
         "engine": args.engine,
+        "language": args.language,
         "method": ceiling.method + "; clone of the first "
         f"{args.prompt_seconds:.0f} s scored against the held-out remainder of the same recording",
         "reference": args.reference,
@@ -124,7 +160,7 @@ def main(argv: List[str] | None = None) -> int:
     }
     out = PROJECT_ROOT / "outputs" / "benchmarks"
     out.mkdir(parents=True, exist_ok=True)
-    destination = out / f"clone-similarity-{args.engine}-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    destination = out / f"clone-similarity-{args.engine}-{args.language}-{time.strftime('%Y%m%d-%H%M%S')}.json"
     destination.write_text(json.dumps(summary, indent=2))
     print(json.dumps({k: v for k, v in summary.items() if k != "rows"}, indent=2))
     print(f"written: {destination}")
