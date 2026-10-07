@@ -13,6 +13,15 @@ Two subsystems need the same romanizer for different reasons:
 Constructing ``uroman.Uroman`` loads its transliteration tables, so the
 instance is built once per process and shared. ``uroman`` is an optional
 dependency: every caller must handle ``None``.
+
+*Romanization* means writing text from any script in Latin letters by sound -
+"नमस्ते" becomes "namaste". It is not translation: the words are unchanged, only
+the alphabet. Both consumers above are models trained on a-z, so this is the
+adapter that lets a 1000-language pipeline reuse them.
+
+**How to say this in an interview:** "Non-Latin scripts are romanized before
+the character-level aligner sees them, because a CTC model over an a-z lexicon
+silently matches nothing otherwise and degrades to guessed timings."
 """
 
 from __future__ import annotations
@@ -22,6 +31,9 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# The *cached-failure* pattern, in two variables rather than one.
+# _romanizer alone could not distinguish "not tried yet" from "tried and
+# unavailable", so a missing dependency would retry (and re-log) on every call.
 _romanizer = None
 _checked = False
 
@@ -29,15 +41,24 @@ _checked = False
 def get_romanizer():
     """Return the process-wide ``uroman.Uroman``, or ``None`` if not installed."""
     global _romanizer, _checked
+    # The whole point of _checked: a second call after a failed import returns
+    # None immediately instead of attempting the import again.
     if _checked:
         return _romanizer
+    # Set *before* the attempt, so an exception still marks it as tried.
     _checked = True
     try:
         import uroman as ur
 
+        # This is the expensive line - it loads the transliteration tables -
+        # which is why the whole module exists rather than each caller doing it.
         _romanizer = ur.Uroman()
         logger.info("uroman romanizer available")
     except Exception as exc:  # noqa: BLE001
+        # logger.info, not warning or error: this is an optional dependency and
+        # English synthesis is unaffected, so a missing uroman is a fact to
+        # record rather than a problem to flag. The consequence is named in the
+        # message so the log is self-explanatory (golden rule 7).
         logger.info(
             "uroman not available (%s); non-Latin script support is limited", exc
         )
@@ -47,6 +68,9 @@ def get_romanizer():
 
 def is_ascii(text: str) -> bool:
     """True when romanization would be a no-op because the text is already ASCII."""
+    # ord() is a character's code point; < 128 is the ASCII range. all() short
+    # circuits on the first non-ASCII character, so this is cheap on the common
+    # path. Lets callers skip romanizing English rather than paying for it.
     return all(ord(ch) < 128 for ch in text)
 
 
@@ -56,6 +80,11 @@ def romanize(text: str, lcode: Optional[str] = None) -> Optional[str]:
 
     ``lcode`` is an ISO-639-3 hint. uroman works without it, but transliterates
     several scripts more accurately when it is supplied.
+
+    Returning ``None`` rather than the input unchanged is deliberate: the
+    caller must be able to tell "romanized" from "could not romanize", because
+    feeding un-romanized Devanagari to the aligner is exactly the silent
+    degradation golden rule 1 is about.
     """
     romanizer = get_romanizer()
     if romanizer is None:
@@ -65,12 +94,20 @@ def romanize(text: str, lcode: Optional[str] = None) -> Optional[str]:
             return romanizer.romanize_string(text, lcode=lcode)
         except TypeError:
             # Older uroman builds take no lcode keyword.
+            #
+            # Catching TypeError to detect an unsupported signature is a
+            # version-compatibility shim. It is narrow enough to be safe here
+            # (only a signature mismatch raises TypeError at the call itself),
+            # and `pass` falls through to the call without the hint below.
             pass
     return romanizer.romanize_string(text)
 
 
 def reset_cache() -> None:
     """Drop the cached instance. For tests that patch the import."""
+    # Without this, the first test to touch the romanizer would fix the cached
+    # value for the whole process and later tests could not patch the import.
+    # A seam for testability, not production code.
     global _romanizer, _checked
     _romanizer = None
     _checked = False
