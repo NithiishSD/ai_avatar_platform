@@ -67,6 +67,19 @@ class QualityAuditTests(unittest.TestCase):
         self.assertGreaterEqual(report.mos, 1.0)
         self.assertLessEqual(report.mos, 5.0)
 
+    def test_missing_subjective_model_is_a_dsp_estimate_not_mixed_metrics(self):
+        # _load_squim may return either model as None. With only the objective
+        # model present, the old code computed SQUIM's PESQ/STOI and then
+        # crashed calling None, leaving a report labelled dsp-estimate that
+        # still held model numbers. Either missing must mean the honest fallback.
+        objective = mock.Mock()
+        with mock.patch.object(self.auditor, "_load_squim", return_value=(objective, None)):
+            report = self.auditor.audit(self.audio)
+        self.assertEqual(report.method, "dsp-estimate")
+        objective.assert_not_called()
+        self.assertIsNone(report.pesq)
+        self.assertTrue(any("SQUIM models unavailable" in w for w in report.warnings))
+
     def test_squim_results_are_reported_with_all_four_metrics(self):
         objective = mock.Mock(
             return_value=(torch.tensor([0.93]), torch.tensor([3.8]), torch.tensor([17.2]))

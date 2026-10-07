@@ -21,14 +21,14 @@ import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import numpy as np
 import soundfile as sf
 import torch
 
 from language_registry import LanguageInfo, resolve
-from romanizer import get_romanizer
+from romanizer import as_text, get_romanizer
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,9 @@ class MMSTTSEngine:
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.cache_size = max(1, cache_size)
         # iso3 -> (model, tokenizer)
-        self._cache: "OrderedDict[str, Tuple[object, object]]" = OrderedDict()
+        # Any, not object: these are a transformers VitsModel and tokenizer,
+        # whose attributes (config, speaking_rate, ...) we use directly.
+        self._cache: "OrderedDict[str, Tuple[Any, Any]]" = OrderedDict()
         self._failed: dict[str, str] = {}
         self._lock = threading.Lock()
         self._uroman = None
@@ -100,7 +102,9 @@ class MMSTTSEngine:
         model_id = info.mms_model
         logger.info("Loading MMS-TTS %s (%s) on %s", model_id, info.name, self.device)
         try:
-            model = VitsModel.from_pretrained(model_id)
+            # transformers types its lazily imported model classes as possibly
+            # None; at runtime this is always the class.
+            model = VitsModel.from_pretrained(model_id)  # pyrefly: ignore[not-callable]
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             model = model.to(self.device).eval()
         except Exception as exc:  # noqa: BLE001 - reported verbatim to the caller
@@ -144,10 +148,14 @@ class MMSTTSEngine:
                 "input. Install the romanizer with `pip install uroman`, or send "
                 "already-romanized text."
             )
+        # The check sits outside the try: its own TypeError must not be taken
+        # for the old-uroman signature fallback.
         try:
-            return romanizer.romanize_string(text, lcode=info.iso3)
+            result = romanizer.romanize_string(text, lcode=info.iso3)
         except TypeError:
-            return romanizer.romanize_string(text)
+            # Older uroman builds take no lcode keyword.
+            result = romanizer.romanize_string(text)
+        return as_text(result)
 
     # ------------------------------------------------------------------
     # Synthesis

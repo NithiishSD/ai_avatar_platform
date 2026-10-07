@@ -21,11 +21,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import numpy as np
 
 import gpu_utils
+
+# Imported for annotations only: face_engine pulls in MediaPipe, which this
+# module does not otherwise need at import time.
+if TYPE_CHECKING:
+    from face_engine import FaceQualityReport
 from model_registry import AVATAR_DIFFUSION_REPO, VISION_FETCH_COMMAND
 
 logger = logging.getLogger(__name__)
@@ -111,7 +116,9 @@ class AvatarGenerator:
             from diffusers import StableDiffusionPipeline
 
             half = device == "cuda"
-            pipe = StableDiffusionPipeline.from_pretrained(
+            # Any: diffusers' stubs type from_pretrained as a union including a
+            # dummy placeholder class, which hides every real pipeline method.
+            pipe: Any = StableDiffusionPipeline.from_pretrained(
                 self.repo_id,
                 torch_dtype=torch.float16 if half else torch.float32,
                 variant="fp16",
@@ -172,7 +179,7 @@ class AvatarGenerator:
 
 
 def generate_avatar(
-    check: Callable[[np.ndarray], "object"],
+    check: Callable[[np.ndarray], "FaceQualityReport"],
     prompt: str = DEFAULT_PROMPT,
     negative_prompt: str = DEFAULT_NEGATIVE,
     seed: int = 0,

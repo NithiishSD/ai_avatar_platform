@@ -415,13 +415,16 @@ class PortraitAnimator:
         lips = np.round(
             self.ctrl[list(OUTER_UPPER) + list(OUTER_LOWER[::-1])]
         ).astype(np.int32)
-        cv2.fillPoly(mask, [lips], 255)
+        # Colours are 1-tuples, not bare ints: OpenCV's type stubs declare a
+        # Scalar (a sequence), and (255,) draws exactly the same pixels as 255
+        # on a single-channel image - including int32 label maps above 255.
+        cv2.fillPoly(mask, [lips], (255,))
         lip_pixels = self.base[mask > 0]
         lip = lip_pixels.mean(axis=0) if len(lip_pixels) else np.array([150.0, 80.0, 80.0])
         self._cavity_rgb = np.clip(lip * np.array([0.30, 0.18, 0.18]), 8, 90)
 
         face = np.zeros_like(mask)
-        cv2.fillPoly(face, [np.round(self.ctrl[list(FACE_OVAL)]).astype(np.int32)], 255)
+        cv2.fillPoly(face, [np.round(self.ctrl[list(FACE_OVAL)]).astype(np.int32)], (255,))
         skin_pixels = self.base[face > 0]
         luma = float(skin_pixels.mean()) if len(skin_pixels) else 150.0
         # Teeth lit like the rest of the face: never brighter than the skin
@@ -542,7 +545,7 @@ class PortraitAnimator:
         label = np.full((y1 - y0, x1 - x0), -1, dtype=np.int32)
         fixed = np.round((d - np.array([x0, y0])) * 16.0).astype(np.int32)
         for k in range(len(fixed)):
-            cv2.fillConvexPoly(label, fixed[k], int(k), lineType=cv2.LINE_8, shift=4)
+            cv2.fillConvexPoly(label, fixed[k], (int(k),), lineType=cv2.LINE_8, shift=4)
 
         # One affine per triangle, mapping a destination pixel back to the
         # source photo: [x, y, 1] @ inverse[k] -> (source x, source y).
@@ -615,7 +618,7 @@ class PortraitAnimator:
             top = upper - 0.35 * opening
             lid = np.zeros(shape, dtype=np.uint8)
             cv2.fillPoly(
-                lid, [fixed(np.vstack([top, edge[::-1]]))], 255, lineType=cv2.LINE_AA, shift=4
+                lid, [fixed(np.vstack([top, edge[::-1]]))], (255,), lineType=cv2.LINE_AA, shift=4
             )
             softness = max(0.7, eye_height / 9.0)
             alpha = cv2.GaussianBlur(lid.astype(np.float32) / 255.0, (0, 0), softness)
@@ -626,7 +629,7 @@ class PortraitAnimator:
                 lash,
                 [fixed(edge)],
                 False,
-                255,
+                (255,),
                 thickness=max(1, int(round(eye_height * 0.16))),
                 lineType=cv2.LINE_AA,
                 shift=4,
@@ -677,7 +680,7 @@ class PortraitAnimator:
 
         mouth = np.zeros(shape, dtype=np.uint8)
         cv2.fillPoly(
-            mouth, [poly(np.vstack([upper_b, lower_b[::-1]]))], 255, lineType=cv2.LINE_AA, shift=4
+            mouth, [poly(np.vstack([upper_b, lower_b[::-1]]))], (255,), lineType=cv2.LINE_AA, shift=4
         )
 
         layer = np.empty(shape + (3,), dtype=np.float32)
@@ -697,7 +700,7 @@ class PortraitAnimator:
                 float(np.degrees(np.arctan2(self.ex[1], self.ex[0]))),
                 0,
                 360,
-                255,
+                (255,),
                 -1,
                 lineType=cv2.LINE_AA,
             )
@@ -709,7 +712,7 @@ class PortraitAnimator:
         teeth_edge = upper_b + self.ey[None, :] * teeth_depth[:, None]
         teeth = np.zeros(shape, dtype=np.uint8)
         cv2.fillPoly(
-            teeth, [poly(np.vstack([upper_b, teeth_edge[::-1]]))], 255, lineType=cv2.LINE_AA, shift=4
+            teeth, [poly(np.vstack([upper_b, teeth_edge[::-1]]))], (255,), lineType=cv2.LINE_AA, shift=4
         )
         alpha = (teeth.astype(np.float32) / 255.0)[:, :, None]
         layer = layer * (1 - alpha) + (TEETH_RGB * light) * alpha
@@ -722,7 +725,7 @@ class PortraitAnimator:
             cv2.fillPoly(
                 lower_teeth,
                 [poly(np.vstack([edge, lower_b[::-1]]))],
-                255,
+                (255,),
                 lineType=cv2.LINE_AA,
                 shift=4,
             )

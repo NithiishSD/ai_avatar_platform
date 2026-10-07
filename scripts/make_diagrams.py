@@ -68,7 +68,8 @@ class Diagram:
 
     def __init__(self, width: float, height: float, title: str, subtitle: str = "") -> None:
         self.fig = plt.figure(figsize=(width, height), dpi=160)
-        self.ax = self.fig.add_axes([0, 0, 1, 1])
+        # A tuple rect (left, bottom, width, height), as matplotlib's stubs expect.
+        self.ax = self.fig.add_axes((0, 0, 1, 1))
         self.ax.set_xlim(0, width)
         self.ax.set_ylim(height, 0)
         self.ax.axis("off")

@@ -241,6 +241,9 @@ class CeleryJobQueue:
             # Silently ignore an update for a job that no longer exists: it
             # expired or was deleted, and a late progress report is not an error.
             return
+        # Same narrowing as get(): redis-py types a sync client's reply as
+        # possibly awaitable because one class serves sync and async use.
+        assert isinstance(stored_job, (str, bytes))
         payload = json.loads(stored_job)
         for name, value in changes.items():
             # JobStatus is not JSON-serialisable, so unwrap it; everything else

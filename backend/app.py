@@ -413,6 +413,9 @@ async def analyze_face(
         if file is not None:
             image, notices = avatar_store.decode_image(await _read_upload(file))
         else:
+            # The exactly-one-of check above guarantees this; the assert states
+            # it for the type checker, which cannot follow an XOR.
+            assert avatar_id is not None
             image, notices = avatar_store.decode_image(_avatar_or_http(avatar_id).path)
         with FACE_ENGINE_LOCK:
             report = shared_face_engine().check_quality(image)

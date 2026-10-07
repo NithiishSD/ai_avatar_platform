@@ -31,7 +31,7 @@ import logging
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -83,7 +83,7 @@ def frame_count_for(duration_seconds: float, fps: int) -> int:
     return max(1, int(math.ceil(float(duration_seconds) * int(fps) - 1e-6)))
 
 
-def _field(item: TimestampLike, snake: str, camel: str):
+def _field(item: TimestampLike, snake: str, camel: str) -> Any:
     if isinstance(item, Mapping):
         return item.get(camel, item.get(snake))
     return getattr(item, snake)
@@ -242,7 +242,7 @@ def build_animation(
     phoneme_timestamps: Iterable[TimestampLike],
     duration_seconds: float,
     fps: int,
-    emotion_vector: Optional[Mapping[str, object]] = None,
+    emotion_vector: Optional[Mapping[str, Any]] = None,
     seed: int = 0,
     energy_envelope: Optional[np.ndarray] = None,
     smoothing_ms: float = DEFAULT_SMOOTHING_MS,

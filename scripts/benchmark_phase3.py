@@ -32,7 +32,11 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional, TypeVar
+
+# A type variable: lets timed() return whatever the timed function returns,
+# instead of erasing it to `object` and making every caller cast.
+T = TypeVar("T")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "backend"))
@@ -66,7 +70,7 @@ TARGETS = {
 }
 
 
-def timed(fn: Callable[[], object]) -> tuple[float, object]:
+def timed(fn: Callable[[], T]) -> tuple[float, T]:
     start = time.perf_counter()
     value = fn()
     return (time.perf_counter() - start) * 1000.0, value
@@ -208,7 +212,7 @@ def benchmark_quality(router, auditor) -> dict:
     )
     reference_path = PROJECT_ROOT / reference.output_path
 
-    rows = []
+    rows: list[dict[str, Any]] = []
     for index, sentence in enumerate(SENTENCES):
         result = router.synthesize(
             sentence, mode="fast", output_filename=f"benchmark/quality_{index}.wav"
@@ -317,7 +321,8 @@ def benchmark_api(requests_count: int = 120) -> dict:
 
     eager = os.getenv("QUEUE_BACKEND", "in_memory").lower() != "celery"
     configured = app_module.security_gate.config
-    result = {
+    # Any values: the report mixes flags, counts, nested summaries and floats.
+    result: dict[str, Any] = {
         "queueMode": "eager (in_memory)" if eager else "celery",
         "configuredLimitRpm": (
             configured.requests_per_minute if configured.rate_limit_enabled else None

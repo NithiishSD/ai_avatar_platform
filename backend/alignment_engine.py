@@ -13,7 +13,7 @@ import math
 import os
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 
 import soundfile as sf
 import torch
@@ -450,7 +450,9 @@ class ForcedAligner:
         sample_rate: int,
         transcript: str,
         model: torch.nn.Module,
-        tokenizer: any,
+        # typing.Any, not the builtin any(): the lowercase name is a function,
+        # so as an annotation it described nothing.
+        tokenizer: Any,
         duration_ms: int,
     ) -> List[PhonemeTimestamp]:
         """

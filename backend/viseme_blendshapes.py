@@ -21,7 +21,7 @@ shapes appear on the right-hand side of the image.
 
 from __future__ import annotations
 
-from typing import Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 CANONICAL_VISEMES: Tuple[str, ...] = (
     "viseme_sil",
@@ -186,7 +186,7 @@ def viseme_weights(name: str) -> Dict[str, float]:
     return dict(VISEME_BLENDSHAPES[canonical])
 
 
-def emotion_weights(emotion_vector: Optional[Mapping[str, object]]) -> Dict[str, float]:
+def emotion_weights(emotion_vector: Optional[Mapping[str, Any]]) -> Dict[str, float]:
     """
     Facial-expression weights for an ``EmotionVector`` payload.
 

@@ -30,7 +30,7 @@ lint() {
 
 types() {
   echo "== types (pyrefly)"
-  "$BIN/pyrefly" check
+  "$BIN/pyrefly" check --output-format min-text
 }
 
 test_() {

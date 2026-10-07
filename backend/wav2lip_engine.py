@@ -191,7 +191,8 @@ def melspectrogram(wav: np.ndarray) -> np.ndarray:
     import librosa
     from scipy import signal
 
-    emphasised = signal.lfilter([1.0, -_PREEMPHASIS], [1.0], wav)
+    # Array, not tuple: lfilter only returns (y, zf) when passed initial state.
+    emphasised = np.asarray(signal.lfilter([1.0, -_PREEMPHASIS], [1.0], wav))
     spectrum = np.abs(
         librosa.stft(y=emphasised, n_fft=_N_FFT, hop_length=_HOP, win_length=_WIN)
     )

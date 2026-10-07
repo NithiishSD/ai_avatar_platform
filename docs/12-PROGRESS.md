@@ -10,8 +10,9 @@ records what was verified live, with the real command and result.
 | T0.1 | Done (on main, before the branch rule) | 1ea9d51 |
 | T0.2 | Done (on main, before the branch rule) | ab1b917 |
 | T0.1–T0.2 on m1 | Done | 1065342 |
-| T0.3 | Done | (this commit) |
-| T0.4 | Next | |
+| T0.3 | Done | 3a603c2 |
+| T0.4 | Done | (this commit) |
+| T0.5 | Next | |
 
 ## Log
 
@@ -79,3 +80,37 @@ Verified:
   --face demo --device cpu --json` → exit 0, speech `kokoro`,
   `alignmentMethod = mms_fa` (strict zip did not trigger the fallback on real
   tokenizer output), engine `blendshape`, 75 frames / 3.0 s rendered in 3.35 s.
+
+### 2026-10-07 — T0.4 Python typecheck clean
+
+`pyrefly.toml` rewritten (explicit includes/excludes, `scripts` on the search
+path, lenient sub-config for tests — D-20). 130 errors → 0. Production defects:
+- `quality_auditor`: `_load_squim` may return either model as None but only
+  `objective` was checked; a missing subjective model raised inside the try and
+  produced a report labelled `dsp-estimate` that still held SQUIM's PESQ/STOI.
+  Now either missing takes the honest fallback. New rejecting test.
+- `alignment_engine`: annotation `tokenizer: any` used the builtin function.
+- `romanizer` / `mms_engine`: uroman can be typed to return a list; added
+  `as_text()` that raises on non-str. Review of my own first version found the
+  check sat inside the old-uroman `except TypeError` shim, so a bad result
+  would have been mistaken for an old signature and silently retried; moved
+  outside the try. Test asserts exactly one call; **proved it fails on the
+  earlier structure** (`AssertionError: 2 != 1`).
+- `avatar_store`: `Image.LANCZOS` → `Image.Resampling.LANCZOS` (equal at
+  runtime, verified); `exif_transpose` result narrowed.
+- `job_queue.update`, `app` face-analyze: narrowing asserts for invariants the
+  checker cannot follow. `lfilter` results pinned with `np.asarray`.
+- `face_warp`: 9 OpenCV colours `255` → `(255,)`.
+- `benchmark_phase3`: `timed()` made generic (TypeVar) — fixed 8 errors at once.
+
+Verified:
+- `scripts/check.sh` → ruff "All checks passed!", pyrefly "0 errors", 481 tests OK.
+- gate can fail: a planted `def f() -> int: return "x"` → `check.sh types` exit 1;
+  reverted → 0.
+- live, real weights/data: real uroman `romanize("नमस्ते दुनिया","hin")` →
+  `'namaste duniyaa'`; emotion tilt −0.45 / +0.35 → finite float32; Wav2Lip mel
+  of real speech → (80, 181); SQUIM on `outputs/speech.wav` → method
+  `torchaudio-squim`, MOS 4.46, PESQ 3.80, STOI 0.999.
+- face_warp A/B: same aligned job (33 phonemes, 3.0 s) rendered with HEAD's and
+  the new `face_warp.py` in separate processes → decoded video md5
+  `6461f0c482dafc61` both, audio md5 identical. 75 frames pixel-identical.

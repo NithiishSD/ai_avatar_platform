@@ -293,7 +293,8 @@ class VoiceEngineRouter:
 
             model_id = "nari-labs/Dia-1.6B"
             self._dia_processor = AutoProcessor.from_pretrained(model_id)
-            self._dia_model = AutoModel.from_pretrained(
+            # transformers types lazily imported classes as possibly None.
+            self._dia_model = AutoModel.from_pretrained(  # pyrefly: ignore[not-callable]
                 model_id,
                 torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
                 device_map=self.device if self.device == "cuda" else None,

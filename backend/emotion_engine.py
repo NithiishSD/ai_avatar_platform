@@ -521,7 +521,9 @@ class EmotionProsodyEngine:
         from scipy.signal import lfilter
 
         alpha = 0.6
-        low = lfilter([1.0 - alpha], [1.0, -alpha], signal).astype(np.float32)
+        # lfilter returns a (signal, state) tuple only when given initial state
+        # (zi); without it the result is an array, which np.asarray pins down.
+        low = np.asarray(lfilter([1.0 - alpha], [1.0, -alpha], signal), dtype=np.float32)
         mix = min(1.0, abs(tilt))
         return ((1.0 - mix) * signal + mix * low).astype(np.float32)
 

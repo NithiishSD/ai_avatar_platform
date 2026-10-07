@@ -198,7 +198,10 @@ class SpeechQualityAuditor:
         resampled, _ = _load_mono(path, target_sr=SQUIM_SAMPLE_RATE)
         objective, subjective = self._load_squim()
 
-        if objective is None:
+        # Both, not just objective: _load_squim may return either as None, and
+        # calling a missing subjective model used to raise inside the try below,
+        # leaving a report labelled dsp-estimate that still held SQUIM's PESQ.
+        if objective is None or subjective is None:
             report.method = "dsp-estimate"
             report.mos = self._dsp_mos_estimate(resampled)
             report.warnings.append(

@@ -218,14 +218,18 @@ def decode_image(image: Union[bytes, bytearray, str, Path, np.ndarray]) -> Tuple
             # Truncated or corrupt data, or a canvas PIL itself refuses.
             raise AvatarError(f"the image could not be decoded: {err}") from err
         notices = _embedded_notices(handle)
-        handle = ImageOps.exif_transpose(handle).convert("RGB")
+        # exif_transpose only returns None when asked to work in place, which
+        # we never do; the fallback keeps the type honest without a branch.
+        handle = (ImageOps.exif_transpose(handle) or handle).convert("RGB")
 
     longest = max(handle.size)
     if longest > MAX_IMAGE_SIDE:
         scale = MAX_IMAGE_SIDE / longest
         handle = handle.resize(
             (max(1, round(handle.width * scale)), max(1, round(handle.height * scale))),
-            Image.LANCZOS,
+            # Resampling.LANCZOS is the canonical name since Pillow 9.1; the
+            # bare Image.LANCZOS is a legacy alias.
+            Image.Resampling.LANCZOS,
         )
     return np.ascontiguousarray(np.asarray(handle, dtype=np.uint8)), notices
 
