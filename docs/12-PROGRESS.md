@@ -21,7 +21,7 @@ records what was verified live, with the real command and result.
 | T1.3 | Done | 0d68c57 |
 | T1.4 | Done | b02a741 |
 | **M1 gate** | **Passed** (= roadmap Gate 1) | |
-| T2.1 | **Blocked** — XTTS-v2 download incomplete; CPML acceptance needed from owner (M-03) | (this commit: audit fix) |
+| T2.1 | Done — measured, **N-02 not met** (62.0% vs 85%) | (this commit) |
 | T2.2 | Done | 54686a2 |
 | T2.3 | Verified on CPU — waiting on M-04 (peak VRAM on the host GPU, and a look at the video) | (this commit) |
 | T2.6 | Done — 4 usable engines; the 5th (XTTS-v2) waits on M-03 | 6b94d3c, b55e538, f5d85bc |
@@ -776,3 +776,35 @@ Verified:
 
 Not done: synthesis task records are not persisted (D-43); a render interrupted by a restart
 is failed, not resumed.
+
+### 2026-10-08 — T2.1 XTTS-v2 live clone + similarity (M-03 resolved)
+
+The owner ran `fetch_models.py --only xtts-v2` and answered the licence prompt themselves.
+Weights verified against Hugging Face: `model.pth` 1,867,929,118 bytes and
+`speakers_xtts.pth` sha256 match the published values; `doctor.py` → `PASS xtts-v2`,
+36 pass / 4 warn / 0 fail. (`hash.md5` is Coqui's own folder marker, not the file's md5.)
+
+New `scripts/measure_clone_similarity.py`: splits the admissible reference (first 30 s as the
+cloner's sample, last 20 s held out), clones 6 sentences, scores each by ECAPA-TDNN against
+the held-out audio, reports the real-speech ceiling, writes JSON. It refuses a synthetic
+reference (checked: exit 1 with the reason); its working copies are removed afterwards.
+
+Real XTTS-v2, CPU, `ljspeech_reference.wav` (LJSpeech, open licence):
+
+| sentence | similarity |
+|---|---|
+| quick brown fox | 67.6% |
+| sells sea shells | 63.2% |
+| quarterly revenue | 55.1% |
+| confirm shipment | 57.5% |
+| thick fog | 62.0% |
+| committee review | 66.9% |
+
+**Mean 62.0%, sd 4.6.** Ceiling (same speaker's real speech) **91.7%**. OpenVoice V2 under the
+identical method: 34.2%. **N-02 is not met** at 85% or 90%; XTTS-v2 gets about 68% of the way
+to the ceiling. Latency: ~30 s per sentence on this CPU including the cold load (not a GPU figure).
+Consequences: R-01 is now met (5 engines, each synthesised live) and R-03 passes.
+
+Not measured: XTTS-v2 on a second speaker (only one admissible reference exists, Q-05), and
+anything on the GPU. Higher similarity might come from a longer or cleaner prompt or from the
+`gpt_cond_len` / `temperature` settings; not tried, so no claim.
