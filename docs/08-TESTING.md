@@ -21,7 +21,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 
 | ID | Test / measurement | Status |
 |---|---|---|
-| R-01 | `test_voice_engine.py`, `test_mms_engine.py`, `test_openvoice_engine.py`, `UnrunnableEngineTests` | pass (**3** usable: Kokoro, MMS-TTS, OpenVoice V2. XTTS-v2 incomplete (M-03); Higgs and Dia **cannot run on this stack** (D-32); target 5 — gap) |
+| R-01 | `test_voice_engine.py`, `test_mms_engine.py`, `test_openvoice_engine.py`, `test_bark_engine.py`, `UnrunnableEngineTests` | partial (**4** usable: Kokoro, MMS-TTS, OpenVoice V2, Bark; XTTS-v2 = 5th, waiting on M-03; Higgs and Dia cannot run on this stack, D-32) |
 | R-02 | `test_voice_engine.py` routing + `MissingWeightsTests`; `test_app.py` 503/400 before queueing | pass |
 | R-03 | OpenVoice V2 live clone through the API (T2.6b); XTTS-v2 **blocked** (M-03) | pass (OpenVoice); XTTS gap |
 | R-04 | OpenVoice V2 clone in Hindi over MMS-TTS, live (T2.6b); XTTS cross-lingual in T3.3 | partial |
@@ -32,7 +32,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-09 | `test_voice_engine.py` prosody tests | pass |
 | R-10 | `test_face_engine.py`; E2E `avatar.spec.js` (mesh drawn inside the face box, measured from canvas pixels); pose signs measured on real MediaPipe (T1.3) + `PoseFallbackTests` | pass |
 | R-11 | `test_face_quality.py` | pass |
-| R-12 | `test_render_engine.py`, `test_app_vision.py` | pass |
+| R-12 | `test_render_engine.py`, `test_app_vision.py`; live: cloned voice → Wav2Lip video through the API (`clone_to_video.py`, T2.4) | pass |
 | R-13 | `test_render_engine.py` engine selection; live: blendshape and Wav2Lip on the same 3 jobs (T2.3) | pass |
 | R-14 | `test_viseme_blendshapes.py`, `test_face_animation.py` | pass |
 | R-15 | `test_avatar_generator.py`; API in T3.2 | partial (CLI only) |
@@ -55,7 +55,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-34 | `test_render_engine.py` label | pass |
 | R-35 | T5.4 | gap |
 | R-36 | T5.3 | gap |
-| N-01 | benchmark 17 Sep 2026: MOS 4.33 (SQUIM, Kokoro) | measured — met (re-run in T6.6) |
+| N-01 | 17 Sep: MOS 4.33 (SQUIM, Kokoro). 8 Oct: Bark dialogue 4.12 (SQUIM, self-referenced, biased up). Re-run with a non-matching reference in T6.6 | measured — met |
 | N-02 | 8 Oct, ECAPA-TDNN vs held-out LJSpeech (admissible), 6 sentences: **OpenVoice V2 34.2%** (base 26.9%, real speech 91.7%). XTTS-v2 not measurable (M-03) | **not met** (OpenVoice) |
 | N-03 | in-process 13 ms (17 Sep); real server in T6.3 | partial |
 | N-04 | in-process only; real server in T6.3 | gap |

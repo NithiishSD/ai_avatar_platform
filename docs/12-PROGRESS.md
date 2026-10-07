@@ -24,7 +24,9 @@ records what was verified live, with the real command and result.
 | T2.1 | **Blocked** — XTTS-v2 download incomplete; CPML acceptance needed from owner (M-03) | (this commit: audit fix) |
 | T2.2 | Done | 54686a2 |
 | T2.3 | Verified on CPU — waiting on M-04 (peak VRAM on the host GPU, and a look at the video) | (this commit) |
-| T2.6 | In progress — (a) 6b94d3c; (b) OpenVoice V2 b55e538; (c) Bark built + unit-tested (this commit), **live check waiting on its download** | |
+| T2.6 | Done — 4 usable engines; the 5th (XTTS-v2) waits on M-03 | 6b94d3c, b55e538, f5d85bc |
+| T2.4 | Done | (this commit) |
+| T2.5 | Next | |
 
 ## Log
 
@@ -535,3 +537,43 @@ Download: network to huggingface.co was intermittent (DNS failures, 15 s
 responses); 1.6 GB arrived, one preset (`en_speaker_9_semantic_prompt.npy`)
 still incomplete — and the audit correctly reports Bark **not present** until
 it lands. Live verification (CPU timing, SQUIM MOS, two audible voices) is next.
+
+### 2026-10-08 — T2.6 (c) verified live; T2.6 done
+
+Download completed after DNS trouble; audit → `bark` present, 1.7 GB.
+Live, real server, `mode=dialogue`, "[S1] Good morning, did you sleep well?
+[S2] Not really, the storm kept me awake all night.", `auditQuality`:
+202 SUCCESS, model `bark`, 9.51 s of audio, alignment `mms_fa`, 66 phonemes,
+97.5 s on CPU (cold load included). SQUIM MOS **4.12** / PESQ 2.48 / STOI 0.97 —
+self-referenced (no separate reference given), so biased upward; noted as such.
+Two distinct voices, ECAPA on separate lines: same speaker 67.8% (S1) / 54.5%
+(S2); across speakers 13.6% / 17.7%. Bark runs ~9–10× slower than real time on
+CPU (3.6 s of audio in 32.7 s).
+
+**T2.6 outcome:** usable engines with weights here — Kokoro, MMS-TTS, OpenVoice
+V2, Bark (4). XTTS-v2 is the 5th once the owner completes M-03; it is also one of
+the three the problem statement names, so R-01 needs it regardless. Higgs and
+Dia cannot run on this stack (D-32).
+
+### 2026-10-08 — T2.4 cloned voice → lip-synced video, through the API
+
+`scripts/clone_to_video.py`: standard-library client of the public API — clone
+(`POST /audio/synthesize`, polls under Celery) → frozen `AvatarRenderJob` from
+the response (audio addressed by the server's own `/outputs/` URL) → `POST
+/avatar/render-job?engine=` → poll → `POST …/lipsync-score` → `POST
+/audio/voice-similarity`. Exit 0 / 1 with the server's own error text.
+
+Verified, real server, real weights, CPU:
+`clone_to_video.py --text "Hello, this is a cloned voice speaking through a
+talking avatar. The words should match the lips." --voice
+inputs/ljspeech_reference.wav --face demo --clone-engine openvoice-v2 --engine
+wav2lip --job-id gate2-openvoice-wav2lip` → exit 0:
+- voice: `openvoice-v2 (base: kokoro)`, 5.97 s, alignment `mms_fa`, 17.0 s
+- video: `/outputs/renders/gate2-openvoice-wav2lip.mp4`, wav2lip, 10.1 s
+- **lip sync: offset 0 frames, LSE-C 10.81, LSE-D 5.64** (syncnet-v2, 25 fps)
+- **voice similarity: 27.87%** (ECAPA vs the full reference) — not met
+
+Gate 2 ("audio from a cloned voice + a single photo → an accurately lip-synced
+clip") is **demonstrated end to end** but not signed off: clone similarity is
+far below target (XTTS-v2 pending M-03), and nobody has watched the video yet
+(M-04). Not marked passed.

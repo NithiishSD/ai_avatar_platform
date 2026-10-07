@@ -48,6 +48,7 @@ reference exists; no lint, typecheck or E2E tooling.
 | T2.6 | Five available TTS engines | Five engines with weights, each synthesising live; approach chosen in-task and logged (OpenVoice V2 if it installs under numpy<2, else fetch an open model that runs here) | R-01 |
 
 **Gate M2 (= roadmap Gate 2):** gates green; a cloned voice drives a lip-synced video with a measured sync score.
+_Status 8 Oct: demonstrated end to end via the API with OpenVoice V2 + Wav2Lip (offset 0, LSE-C 10.81) — not signed off until M-04 (visual) and XTTS-v2 (M-03)._
 
 ## M3 — Gate 3: customised multilingual avatar with emotion
 
