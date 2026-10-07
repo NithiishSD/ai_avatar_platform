@@ -1,0 +1,14 @@
+# Development and CI tooling only. Never imported by the application, so none
+# of these can affect the numpy<2 / transformers<4.48 runtime constraints.
+#
+#   ./backend/.conda/bin/python -m pip install -r backend/requirements-dev.txt
+#
+# Pinned exactly: a linter or type checker that upgrades itself silently
+# changes what "the gate passes" means between two runs of the same code.
+
+# Linter and import sorter. Rules live in pyproject.toml.
+ruff==0.16.10
+# Type checker, already configured by pyrefly.toml at the repo root.
+pyrefly==1.3.2
+# Checks installed packages against known vulnerability databases.
+pip-audit==2.10.1

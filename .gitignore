@@ -54,27 +54,20 @@ backend/.conda/*
 # provenance record are rebuilt by scripts/make_reference.py --smoke.
 inputs/smoke_reference_*
 
-# Requirements PDFs are the acceptance authority for this project and must be
-# recoverable from history. The *.pdf rule above meant neither was ever
-# committed, so when the problem-statement PDF was corrupted by a text-mode
-# transfer there was no intact copy to restore. Track them explicitly.
-!docs/*.pdf
-
-# Vision model weights fetched by scripts/fetch_vision_models.py. They are
-# reproducible from that script, SyncNet alone is over GitHub's 50 MB warning
-# size, and Wav2Lip's licence does not allow redistributing it.
-.models/mediapipe/selfie_multiclass_256x256.tflite
-.models/sface/
-.models/syncnet/
-.models/wav2lip/
+# Model weights come from scripts/fetch_models.py and
+# scripts/fetch_vision_models.py, never from git: they are large, some are
+# symlinks into one machine's Hugging Face cache, and Wav2Lip's licence does
+# not allow redistributing it.
+.models/
 
 # Face images are never committed: a photo of a person needs that person's
 # consent, and a repository is a publication. Register them locally with
 # their provenance sidecar instead.
 inputs/faces/*
 
-# Rendered videos are generated media, regenerable with scripts/render_avatar.py.
-outputs/renders/
+# Everything under outputs/ is generated media (speech, renders, benchmark
+# reports) and can be regenerated.
+outputs/
 
 # Faces and voice references are never committed: they are photos and
 # recordings of people, and golden rule 3 makes consent a precondition of use,
