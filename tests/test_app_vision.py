@@ -387,5 +387,82 @@ class HealthTests(unittest.TestCase):
         )
 
 
+class AvatarGenerateRouteTests(VisionApiCase):
+    """POST /avatar/generate with Stable Diffusion replaced by a fake."""
+
+    def setUp(self):
+        super().setUp()
+        import avatar_generator
+
+        self.avatar_generator = avatar_generator
+
+        class Fake:
+            repo_id = "fake/sd"
+            def generate(self, prompt, negative_prompt, seed, steps, guidance_scale):
+                Fake.seeds.append((seed, prompt))
+                return gradient_image(512)
+
+            def release(self):
+                pass
+
+        # Class attribute set after the definition: the instance is built inside
+        # the code under test, so the test reads the calls from the class.
+        Fake.seeds = []  # type: ignore[attr-defined]
+        self.fake = Fake
+        for patcher in (
+            mock.patch.object(avatar_generator, "AvatarGenerator", Fake),
+            mock.patch.object(app_module, "_diffusion_weights", return_value={"present": True, "detail": ""}),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def wait(self, task_id):
+        import time
+
+        for _ in range(100):
+            body = self.client.get(f"/api/v1/avatar/generate/{task_id}").json()
+            if body["status"] in ("COMPLETED", "FAILED"):
+                return body
+            time.sleep(0.05)
+        self.fail("generation did not finish")
+
+    def test_generates_and_registers_a_usable_synthetic_face(self):
+        response = self.client.post(
+            "/api/v1/avatar/generate",
+            json={"avatarId": "gen-api", "age": "older", "hair": "grey", "glasses": True, "seed": 5},
+        )
+        self.assertEqual(response.status_code, 202, response.text)
+        body = self.wait(response.json()["taskId"])
+        self.assertEqual(body["status"], "COMPLETED", body)
+        self.assertEqual(body["result"]["avatarId"], "gen-api")
+        self.assertEqual(body["result"]["provenance"]["source"], "synthetic")
+        self.assertIn("elderly", self.fake.seeds[0][1])
+        listed = self.client.get("/api/v1/avatar/faces").json()["avatars"]
+        self.assertEqual([(a["avatarId"], a["usable"]) for a in listed], [("gen-api", True)])
+
+    def test_free_text_prompt_and_unknown_choices_are_422(self):
+        for extra in ({"prompt": "a photo of somebody famous"}, {"age": "ancient"}, {"attempts": 99}, {"steps": 1}):
+            response = self.client.post("/api/v1/avatar/generate", json={"avatarId": "x", **extra})
+            self.assertEqual(response.status_code, 422, extra)
+
+    def test_taken_id_is_409_and_nothing_is_generated(self):
+        self.add_synthetic()  # registers "demo"
+        response = self.client.post("/api/v1/avatar/generate", json={"avatarId": "demo"})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.fake.seeds, [])
+
+    def test_missing_weights_is_503_with_the_reason(self):
+        with mock.patch.object(app_module, "_diffusion_weights", return_value={"present": False, "detail": "fetch it"}):
+            response = self.client.post("/api/v1/avatar/generate", json={"avatarId": "x"})
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("fetch it", response.json()["detail"])
+
+    def test_unknown_task_is_404_and_options_are_served(self):
+        self.assertEqual(self.client.get("/api/v1/avatar/generate/nope").status_code, 404)
+        options = self.client.get("/api/v1/avatar/generate/options").json()
+        self.assertIn("grey", options["hair"])
+        self.assertIsInstance(options["available"], bool)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -35,7 +35,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-12 | `test_render_engine.py`, `test_app_vision.py`; E2E `clone.spec.js`; live: cloned voice → Wav2Lip video through the API (`clone_to_video.py`, T2.4) | pass |
 | R-13 | `test_render_engine.py` engine selection; live: blendshape and Wav2Lip on the same 3 jobs (T2.3) | pass |
 | R-14 | `test_viseme_blendshapes.py`, `test_face_animation.py` | pass |
-| R-15 | `test_avatar_generator.py`; API in T3.2 | partial (CLI only) |
+| R-15 | `test_avatar_generator.py` (prompt choices, registration, id clash), `test_app_vision.py` `AvatarGenerateRouteTests` (202/409/422/503/404, mocked SD); E2E `generate.spec.js`; live SD 1.5 through the API (T3.2) | pass |
 | R-16 | `test_render_engine.py` (`BackgroundSpecTests`, `BackgroundRenderTests`), `test_app_vision.py` (400 without segmenter, 422 malformed); E2E `background.spec.js` (decoded video corners are the chosen colour); live on the real segmenter (T3.1) | pass |
 | R-17 | `test_lipsync_metric.py` | pass |
 | R-18 | T4.1 | gap |

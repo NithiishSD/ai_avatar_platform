@@ -22,7 +22,7 @@ well-formed and typed - no defensive checks scattered through the code."
 """
 
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -627,6 +627,40 @@ class AvatarRegisterResponse(BaseModel):
     # Optional because a synthetic avatar is registered by the generator, which
     # has already run the gate and does not re-report it.
     quality: Optional[FaceQualityResponse] = None
+
+
+class AvatarGenerateRequest(BaseModel):
+    """
+    Ask for a synthetic face (T3.2). Attributes are fixed choices, not a free
+    prompt: see ``avatar_generator`` for why a prompt could not be trusted to
+    describe nobody. The allowed values are served by
+    ``GET /api/v1/avatar/generate/options``.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    avatar_id: str = Field(alias="avatarId", pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    age: Literal["young", "adult", "middle-aged", "older"] = "adult"
+    presentation: Literal["person", "man", "woman"] = "person"
+    hair: Literal["short-dark", "short-light", "long-dark", "long-light", "grey", "bald"] = "short-dark"
+    glasses: bool = False
+    seed: int = Field(default=0, ge=0, le=2**31 - 1)
+    # Each attempt is a full diffusion run (about 10 s on a GPU, minutes on a
+    # CPU), so the retries and steps are capped to bound one request's cost.
+    attempts: int = Field(default=4, ge=1, le=8)
+    steps: int = Field(default=30, ge=10, le=50)
+    overwrite: bool = False
+
+
+class AvatarGenerateResponse(BaseModel):
+    """Poll state of a generation: QUEUED / PROCESSING / COMPLETED / FAILED."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    task_id: str = Field(alias="taskId")
+    status: str
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
 
 
 class LipSyncScoreResponse(BaseModel):

@@ -30,6 +30,7 @@ import gpu_utils
 # Imported for annotations only: face_engine pulls in MediaPipe, which this
 # module does not otherwise need at import time.
 if TYPE_CHECKING:
+    from avatar_store import AvatarStore
     from face_engine import FaceQualityReport
 from model_registry import AVATAR_DIFFUSION_REPO, VISION_FETCH_COMMAND
 
@@ -49,6 +50,33 @@ DEFAULT_NEGATIVE = (
     "teeth, smile, sunglasses, bare shoulders, nude, hands, two people, multiple faces, cropped head, blurry, deformed, "
     "cartoon, painting, text, watermark"
 )
+
+
+# What a caller may ask for. These are fixed choices, not free text, on purpose:
+# a free prompt could name a real person, and a face generated from that name
+# would be a likeness of someone who never consented (golden rule 3). Every
+# phrase below describes a kind of face, never an individual.
+AGES = {"young": "young adult", "adult": "adult", "middle-aged": "middle-aged", "older": "elderly"}
+PRESENTATIONS = {"person": "person", "man": "man", "woman": "woman"}
+HAIR = {
+    "short-dark": "short dark hair",
+    "short-light": "short light brown hair",
+    "long-dark": "long dark hair",
+    "long-light": "long blonde hair",
+    "grey": "short grey hair",
+    "bald": "a shaved head",
+}
+
+
+def build_prompt(age: str = "adult", presentation: str = "person", hair: str = "short-dark", glasses: bool = False) -> str:
+    """The diffusion prompt for a set of attribute choices (raises KeyError on an unknown one)."""
+    return (
+        f"passport style portrait photograph of {AGES[age]} {PRESENTATIONS[presentation]} "
+        f"with {HAIR[hair]}{', wearing glasses' if glasses else ''}, facing the camera, head "
+        "and shoulders, wearing a plain dark sweater, open eyes looking straight "
+        "into the camera, relaxed closed mouth, plain grey background, soft even "
+        "lighting, sharp focus, 50mm"
+    )
 
 
 # Warnings a user's own photo may carry, but a generated face must not: there
@@ -234,3 +262,45 @@ def generate_avatar(
         f"({'; '.join(f'{k}: {v}' for k, v in rejected.items())}). "
         "Try another --seed or more --attempts."
     )
+
+
+def generate_registered_avatar(
+    store: "AvatarStore",
+    check: Callable[[np.ndarray], "FaceQualityReport"],
+    avatar_id: str,
+    prompt: str = DEFAULT_PROMPT,
+    seed: int = 0,
+    attempts: int = 6,
+    steps: int = 30,
+    overwrite: bool = False,
+    generator: Optional[AvatarGenerator] = None,
+) -> "GeneratedAvatar":
+    """
+    Generate a face that passes the quality gate and register it as synthetic.
+
+    The id is checked *before* the slow generation, so a clash costs nothing.
+    Returns the generated avatar; the stored record is ``store.get(avatar_id)``.
+    """
+    import provenance
+    from avatar_store import AvatarError, AvatarNotFound
+
+    if not overwrite:
+        try:
+            store.get(avatar_id)
+        except AvatarNotFound:
+            pass
+        else:
+            raise AvatarError(f"avatar {avatar_id!r} already exists; pass overwrite or choose another id")
+    generated = generate_avatar(
+        check, prompt=prompt, seed=seed, attempts=attempts, steps=steps, generator=generator
+    )
+    store.register(
+        generated.image,
+        avatar_id=avatar_id,
+        source=provenance.SYNTHETIC,
+        licence="CreativeML OpenRAIL-M (generated output)",
+        notes="Generated face; depicts no real person.",
+        extra=generated.lineage(),
+        overwrite=overwrite,
+    )
+    return generated

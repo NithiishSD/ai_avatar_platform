@@ -114,35 +114,25 @@ def main(argv: Optional[List[str]] = None) -> int:
             import avatar_generator
             from face_engine import FACE_ENGINE_LOCK, shared_face_engine
 
-            if store._find(args.avatar_id) is not None and not args.overwrite:
-                raise AvatarError(
-                    f"avatar {args.avatar_id!r} already exists; pass --overwrite or choose another id"
-                )
-
             def check(image):
                 with FACE_ENGINE_LOCK:
                     return shared_face_engine().check_quality(image)
 
             print(f"Generating a synthetic face (seed {args.seed}, up to {args.attempts} attempts)...")
-            generated = avatar_generator.generate_avatar(
+            generated = avatar_generator.generate_registered_avatar(
+                store,
                 check,
+                args.avatar_id,
                 prompt=args.prompt or avatar_generator.DEFAULT_PROMPT,
                 seed=args.seed,
                 attempts=args.attempts,
                 steps=args.steps,
+                overwrite=args.overwrite,
             )
             for seed, reason in generated.rejected_seeds.items():
                 print(f"  seed {seed} rejected: {reason}")
-            record, report = store.register(
-                generated.image,
-                avatar_id=args.avatar_id,
-                source=provenance.SYNTHETIC,
-                licence="CreativeML OpenRAIL-M (generated output)",
-                notes=args.notes or "Generated face; depicts no real person.",
-                extra=generated.lineage(),
-                overwrite=args.overwrite,
-            )
             print(f"  accepted seed {generated.seed}")
+            record, report = store.get(args.avatar_id), None
     except AvatarRejected as err:
         print("Photo rejected by the quality gate:", file=sys.stderr)
         for issue in err.report.errors:

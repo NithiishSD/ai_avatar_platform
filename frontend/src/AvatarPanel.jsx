@@ -112,6 +112,12 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
   const [uploadFile, setUploadFile] = useState(null);
   const [uploading, setUploading] = useState(false);
 
+  /* Synthetic face generation (Stable Diffusion, a background task). */
+  const [showGenerate, setShowGenerate] = useState(false);
+  const [genOptions, setGenOptions] = useState(null);
+  const [gen, setGen] = useState({ avatarId: "", age: "adult", presentation: "person", hair: "short-dark", glasses: false });
+  const [genTask, setGenTask] = useState(null);
+
   /* Fetching and applying are separate so the mount effect can drop a
      response that arrives after the panel unmounts, while the registration
      handler simply awaits both. */
@@ -143,6 +149,55 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
       });
     return () => { ignore = true; };
   }, [fetchAvatarList, applyAvatarList]);
+
+  useEffect(() => {
+    let ignore = false;
+    fetch(`${apiBase}/api/v1/avatar/generate/options`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((options) => {
+        if (!ignore && options) setGenOptions(options);
+      })
+      .catch(() => {});
+    return () => { ignore = true; };
+  }, [apiBase]);
+
+  /* Poll the generation until it finishes; on success refresh the list and
+     select the new face. Generation takes seconds on a GPU, minutes on a CPU. */
+  useEffect(() => {
+    if (!genTask || ["COMPLETED", "FAILED"].includes(genTask.status)) return undefined;
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch(`${apiBase}/api/v1/avatar/generate/${genTask.taskId}`);
+        const body = await res.json();
+        if (!res.ok) return;
+        setGenTask(body);
+        if (body.status === "COMPLETED") {
+          applyAvatarList(await fetchAvatarList());
+          setAvatarId(body.result.avatarId);
+        }
+      } catch {
+        /* transient: keep polling */
+      }
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [apiBase, genTask, applyAvatarList, fetchAvatarList]);
+
+  const handleGenerate = async (event) => {
+    event.preventDefault();
+    setError("");
+    try {
+      const res = await fetch(`${apiBase}/api/v1/avatar/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(gen),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(detailOf(body, "Generation was rejected"));
+      setGenTask(body);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
   /* Landmarks, pose and the quality verdict for the selected face. */
   useEffect(() => {
@@ -300,6 +355,51 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
         <button type="button" className="secondary" style={{ marginTop: "10px" }} onClick={() => setShowUpload((v) => !v)}>
           {showUpload ? "Cancel" : "Register a photo"}
         </button>
+        <button type="button" className="secondary" id="generate-face-toggle"
+          style={{ marginTop: "10px", marginLeft: "8px" }} onClick={() => setShowGenerate((v) => !v)}>
+          {showGenerate ? "Cancel" : "Generate a synthetic face"}
+        </button>
+        {showGenerate && (
+          <form onSubmit={handleGenerate} style={{ marginTop: "10px" }}>
+            <div style={{ ...small, marginBottom: "6px" }}>
+              Creates a face that depicts nobody (Stable Diffusion 1.5). The choices are fixed so a real
+              person cannot be described by name.
+              {genOptions && !genOptions.available && (
+                <div style={{ color: "#fbbf24" }}>⚠ {genOptions.detail}</div>
+              )}
+            </div>
+            <label style={{ ...small, display: "block", marginTop: "6px" }}>
+              Avatar id
+              <input id="generate-avatar-id" style={field} required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}"
+                value={gen.avatarId} onChange={(e) => setGen({ ...gen, avatarId: e.target.value })} />
+            </label>
+            {["age", "presentation", "hair"].map((key) => (
+              <label key={key} style={{ ...small, display: "block", marginTop: "6px" }}>
+                {key}
+                <select style={field} value={gen[key]} onChange={(e) => setGen({ ...gen, [key]: e.target.value })}>
+                  {(genOptions?.[key] ?? [gen[key]]).map((value) => (
+                    <option key={value} value={value}>{value}</option>
+                  ))}
+                </select>
+              </label>
+            ))}
+            <label style={{ ...small, display: "block", marginTop: "6px" }}>
+              <input type="checkbox" checked={gen.glasses}
+                onChange={(e) => setGen({ ...gen, glasses: e.target.checked })} /> glasses
+            </label>
+            <button type="submit" id="generate-face-btn" style={{ marginTop: "10px" }}
+              disabled={genOptions?.available === false || ["QUEUED", "PROCESSING"].includes(genTask?.status)}>
+              {["QUEUED", "PROCESSING"].includes(genTask?.status) ? "Generating…" : "Generate face"}
+            </button>
+            {genTask && (
+              <div id="generate-status" style={{ ...small, marginTop: "6px" }}>
+                {genTask.status}
+                {genTask.status === "COMPLETED" && ` · seed ${genTask.result.seed}`}
+                {genTask.status === "FAILED" && <div className="alert error">{genTask.error}</div>}
+              </div>
+            )}
+          </form>
+        )}
         {showUpload && (
           <form onSubmit={handleUpload} style={{ marginTop: "10px" }}>
             <div style={{ ...small, marginBottom: "6px" }}>

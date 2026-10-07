@@ -17,6 +17,8 @@ from contracts import (
     AudioSynthesisRequest,
     AvatarFaceEntry,
     AvatarFacesResponse,
+    AvatarGenerateRequest,
+    AvatarGenerateResponse,
     AvatarRegisterResponse,
     FaceAnalysisResponse,
     LipSyncScoreResponse,
@@ -40,8 +42,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import avatar_generator
 import avatar_store
 import language_registry
+from generation_jobs import GenerationJobs
 from face_engine import FaceEngineUnavailable
 import provenance
 import render_engine
@@ -51,6 +55,7 @@ from emotion_engine import preset_catalogue
 from job_queue import CeleryJobQueue, InMemoryJobQueue
 from model_registry import (
     audit_summary,
+    audit_vision_weights,
     log_vision_audit,
     log_weight_audit,
     vision_audit_summary,
@@ -156,6 +161,8 @@ job_queue = (
     CeleryJobQueue() if queue_backend == "celery" else InMemoryJobQueue(runner=run_render)
 )
 faces = avatar_store.AvatarStore()
+# Avatar generation runs in this process on one worker thread (generation_jobs).
+generation_jobs = GenerationJobs()
 
 # One auditor for the process: SQUIM weights load once, on first audit.
 quality_auditor = SpeechQualityAuditor()
@@ -368,6 +375,94 @@ async def register_avatar_face(
         avatar=AvatarFaceEntry.model_validate(record.to_dict()),
         quality=_quality_payload(report) if report is not None else None,
     )
+
+
+def _diffusion_weights() -> dict:
+    """Whether the Stable Diffusion weights are on disk, as ``{present, detail}``."""
+    status_ = next(s for s in audit_vision_weights() if s.key == "avatar-diffusion")
+    return {"present": status_.present, "detail": status_.detail}
+
+
+@app.get("/api/v1/avatar/generate/options")
+def avatar_generate_options() -> dict:
+    """The attribute choices ``POST /avatar/generate`` accepts, and whether it can run."""
+    weights = _diffusion_weights()
+    return {
+        "age": list(avatar_generator.AGES),
+        "presentation": list(avatar_generator.PRESENTATIONS),
+        "hair": list(avatar_generator.HAIR),
+        "available": bool(weights.get("present")),
+        "detail": weights.get("detail", ""),
+    }
+
+
+@app.post(
+    "/api/v1/avatar/generate",
+    response_model=AvatarGenerateResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def generate_avatar_face(request: AvatarGenerateRequest) -> AvatarGenerateResponse:
+    """
+    Queue a synthetic face. It is registered as ``synthetic`` (it depicts
+    nobody) with its prompt and seed recorded, then usable like any avatar.
+
+    Refused up front when the diffusion weights are missing (503, with the
+    fetch command) or the id is taken (409), so a doomed job is never queued.
+    """
+    weights = _diffusion_weights()
+    if not weights.get("present"):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=weights.get("detail", "avatar-diffusion weights missing"))
+    if not request.overwrite:
+        try:
+            faces.get(request.avatar_id)
+        except avatar_store.AvatarNotFound:
+            pass
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"avatar {request.avatar_id!r} already exists; choose another id or set overwrite",
+            )
+
+    def work() -> dict:
+        from face_engine import FACE_ENGINE_LOCK, shared_face_engine
+
+        def check(image):
+            with FACE_ENGINE_LOCK:
+                return shared_face_engine().check_quality(image)
+
+        generated = avatar_generator.generate_registered_avatar(
+            faces,
+            check,
+            request.avatar_id,
+            prompt=avatar_generator.build_prompt(request.age, request.presentation, request.hair, request.glasses),
+            seed=request.seed,
+            attempts=request.attempts,
+            steps=request.steps,
+            overwrite=request.overwrite,
+        )
+        record = faces.get(request.avatar_id)
+        return {
+            "avatarId": request.avatar_id,
+            "imageUrl": record.to_dict()["imageUrl"],
+            "seed": generated.seed,
+            "rejectedSeeds": {str(k): v for k, v in generated.rejected_seeds.items()},
+            "provenance": record.provenance,
+        }
+
+    return AvatarGenerateResponse(taskId=generation_jobs.submit(work), status="QUEUED")
+
+
+@app.get(
+    "/api/v1/avatar/generate/{task_id}",
+    response_model=AvatarGenerateResponse,
+    response_model_exclude_none=True,
+)
+def get_avatar_generation(task_id: str) -> AvatarGenerateResponse:
+    job = generation_jobs.get(task_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown generation task {task_id!r}")
+    return AvatarGenerateResponse.model_validate(job)
 
 
 def _avatar_or_http(avatar_id: str, usable: bool = True):

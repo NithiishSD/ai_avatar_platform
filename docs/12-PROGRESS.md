@@ -27,8 +27,9 @@ records what was verified live, with the real command and result.
 | T2.6 | Done — 4 usable engines; the 5th (XTTS-v2) waits on M-03 | 6b94d3c, b55e538, f5d85bc |
 | T2.4 | Done | (this commit) |
 | T2.5 | Done (visual check of the video still in M-04) | 13f696c |
-| T3.1 | Done | (this commit) |
-| T3.2 | Next | |
+| T3.1 | Done | 63367d0 |
+| T3.2 | Done | (this commit) |
+| T3.3 | Next | |
 
 ## Log
 
@@ -623,3 +624,26 @@ Verified:
 
 Not measured: segmenter quality on photos with busy backgrounds or hair against
 a similar colour — only the synthetic-looking `demo` portrait was tried.
+
+### 2026-10-08 — T3.2 avatar generation API
+
+`POST /api/v1/avatar/generate` (+ `/options`, `/{taskId}`), `generation_jobs.py`
+(one worker thread), `avatar_generator.build_prompt` and
+`generate_registered_avatar` (the CLI now shares it), a "Generate a synthetic
+face" form in the avatar panel (D-37).
+
+Verified:
+- `scripts/check.sh` → ruff clean, pyrefly 0 errors, 556 tests OK (9 new).
+- planted: the id-clash check removed → `test_existing_id_is_refused_before_any_generation` fails; restored.
+- live, real Stable Diffusion 1.5 on CPU, real server: POST `{middle-aged, woman,
+  long-dark, seed 3, attempts 3, steps 20}` → 202; COMPLETED after **141 s**, seed 3
+  passed the quality gate first time, provenance `synthetic` with prompt, seed and
+  steps recorded; `demo` → 409, a `prompt` field → 422. Rendered with the
+  blendshape engine (60 frames, 2.9 s, no warnings); frame looked at: a clean
+  frontal portrait. **The prompt asked for long hair and got short hair** —
+  attribute control is approximate (SD 1.5), so the UI says "choices", not guarantees.
+- E2E `generate.spec.js` → passed (6.7 s): options come from the API, taken id shows the 409 text.
+  The full UI-triggered SD run is not in E2E (minutes on CPU); it was verified by hand above.
+
+Not done: the generated face `gen-live` is left in the local `inputs/faces/`
+(gitignored); delete with `scripts/make_avatar.py --delete gen-live` if unwanted.

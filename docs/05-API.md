@@ -28,12 +28,14 @@ Auth: `X-API-Key` header when `AUTH_ENABLED=true`. Rate limit: 429 with
 | POST | `/api/v1/avatar/render-job` | queue a render (`AvatarRenderJob`, `?engine=`) | 202 |
 | GET | `/api/v1/avatar/render-job/{jobId}` | poll a render | 200 / 404 |
 | POST | `/api/v1/avatar/render-job/{jobId}/lipsync-score` | SyncNet score of the result | 200 |
+| GET | `/api/v1/avatar/generate/options` | fixed attribute choices + whether weights exist | 200 |
+| POST | `/api/v1/avatar/generate` | queue a synthetic face (`AvatarGenerateRequest`; 409 id taken, 503 no weights) | 202 + `taskId` |
+| GET | `/api/v1/avatar/generate/{taskId}` | poll a generation | 200 / 404 |
 
 ## Planned (from 07-TASKS)
 
 | Method | Path | Task |
 |---|---|---|
-| POST | `/api/v1/avatar/generate` | queue a synthetic avatar | M3 |
 | WS | `/api/v1/live` | streaming TTS + live avatar frames | M4 |
 | POST | `/api/v1/provenance/verify` | does a file carry our watermark / manifest | M5 |
 | GET | `/api/v1/audit` | consent audit trail | M5 |
