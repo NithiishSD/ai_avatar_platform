@@ -25,3 +25,7 @@ dist-ssr
 
 # Vite pre-bundles dependencies here on every dev run; generated, never source.
 .vite
+
+# Playwright output (traces and reports from failed runs).
+test-results/
+playwright-report/

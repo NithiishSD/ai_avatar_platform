@@ -12,8 +12,9 @@ records what was verified live, with the real command and result.
 | T0.1–T0.2 on m1 | Done | 1065342 |
 | T0.3 | Done | 3a603c2 |
 | T0.4 | Done | 9c88e6d |
-| T0.5 | Done — browser check in T0.6 | (this commit) |
-| T0.6 | Next | |
+| T0.5 | Done (browser-verified in T0.6) | 8b935b2 |
+| T0.6 | Done | (this commit) |
+| T0.7 | Next | |
 
 ## Log
 
@@ -137,4 +138,23 @@ when `load` sets state, but not inline async/`.then` setState with a flag.
 Verified:
 - `npm run lint` (now `--deny-warnings`) → exit 0; a planted warning → exit 1.
 - `npm run build` → built in 1.05 s, no warnings.
-- Browser behaviour: verified by the T0.6 E2E run (below).
+- Browser behaviour: verified by the T0.6 E2E run (below) — all five pass,
+  including the race test, which fails when the fix is removed.
+
+### 2026-10-07 — T0.6 E2E harness
+
+`@playwright/test` 1.63.0, Chromium 1243 downloaded. `frontend/playwright.config.js`
+starts the real backend (uvicorn :8000) and Vite (:5173) itself.
+`frontend/e2e/smoke.spec.js`, 5 tests: studio heading + `ok (in_memory)` health;
+language catalogue populated from the API; clone mode loads references
+(`ljspeech_reference` present); a delayed lookup for one language cannot
+overwrite a newer one; `demo` selected with "478 landmarks · yaw" and the canvas.
+
+Verified:
+- `npx playwright test` → **5 passed (14.7 s)** against real servers.
+- The race test can fail: with `if (!ignore && data)` reverted to `if (data)` in
+  the language-info effect, it fails ("element(s) not found" — the stale
+  language replaced the newer one); restored → passes. This is also the live
+  browser check for T0.5.
+- Seen in the backend log during the run: Higgs/Dia "will fall back to another
+  model" at startup — that is T1.4's subject.
