@@ -101,7 +101,7 @@ reference exists; no lint, typecheck or E2E tooling.
 | T7.1 | Python SDK | `sdk/` package: synthesise, render, poll, score; tests against a mocked transport | R-25 |
 | T7.2 | Docker | `Dockerfile` + root `docker-compose.yml`; `docker compose up --build`; `/health` 200 | R-26, DoD 7 |
 | T7.3 | Dependency audit | `pip-audit` + `npm audit`; fixed or each exception logged | DoD 8 |
-| T7.4 | Inline explanation sweep | Every tracked source file has a module docstring and concept comments | rule 9 |
+| T7.4 | Documentation pass (owner's spec, 8 Oct) | **Teaching-weighted** inline comments (module docstring; each new concept explained once; why-comments on non-obvious lines) in the 31 application files below 35% explanation density - 19 backend, 8 scripts, `App.jsx`, `AvatarPanel.jsx`, `main.jsx`, `playwright.config.js` (~11,200 lines; tests excluded). Plus `docs/14-CODE-GUIDE.md`: one request followed through the system, module by module, and a concepts index. Python verified comment-only by AST comparison; JSX by a byte-identical production bundle | rule 9 |
 | T7.5 | Placeholder sweep | No TODO/FIXME/XXX/placeholder in tracked code | DoD 12 |
 | T7.6 | README | setup, run, test, deploy | DoD 15 |
 | T7.7 | Final verification | every DoD item run and reported | all |

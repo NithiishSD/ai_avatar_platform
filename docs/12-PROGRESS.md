@@ -503,3 +503,11 @@ Verified:
 - Open finding: via the API, cloned from *and* scored against the full 50 s
   reference, the EN clip scored 21.3% (base 24.7%) — lower than unconverted. Not
   explained yet; to investigate in T6.6 before any number is published.
+
+### 2026-10-08 — documentation scope set, deferred to T7.4
+
+Owner asked whether every line is explained. Measured: 74 source files; 8
+application files fully documented (contracts, job_queue, celery_app,
+security, gpu_utils, romanizer, openvoice_engine, audio_utils); 31 below 35%
+explanation density (~11,200 lines). Owner chose teaching-weighted, inline + a
+code guide, application code only, and to do it at the end (T7.4, D-34).
