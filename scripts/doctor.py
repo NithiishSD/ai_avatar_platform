@@ -149,7 +149,8 @@ def check_speech_weights() -> None:
             "models", status.key,
             "PASS" if status.present else severity,
             f"{status.size_label} — {status.detail}",
-            "" if status.present else f"scripts/fetch_models.py --only {status.key}",
+            # The registry knows the right fix: a fetch, or "none on this stack".
+            "" if status.present else status.fix,
         )
 
 

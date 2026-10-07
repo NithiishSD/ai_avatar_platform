@@ -35,20 +35,18 @@ librosa>=0.10.1
 inflect>=7.0.0
 phonemizer-fork>=3.3.0
 
-# Model 2 (High Quality / Multilingual): Higgs TTS 2 (3B)
-# Loaded via transformers pipeline — no separate pip install needed.
-# HF model: bosonai/higgs-tts-2-3b-base  (VRAM: ~3 GB on RTX 4050)
+# Transformers: kept below 4.48 because Coqui TTS 0.22 breaks on newer releases.
+# That pin is also why Higgs TTS 2 (bosonai/higgs-tts-2-3b-base, model type
+# higgs_audio_v2, 11.6 GB fp32) and Dia-1.6B (needs nari-tts -> numpy 2) cannot
+# run on this stack; model_registry.UNRUNNABLE records the evidence (8 Oct 2026).
 transformers>=4.38.0,<4.48.0
 accelerate>=0.28.0
 huggingface_hub>=0.21.0
 einops>=0.7.0
 
-# Model 3 (Dialogue / Multi-speaker): Dia-1.6B (Nari Labs)
-# Loaded via transformers AutoModel API (nari-labs/Dia-1.6B) to avoid the
-# numpy>=2.2.4 conflict from the nari-tts package.
-# NOTE: Do NOT install 'nari-tts' via pip — it pins numpy>=2.2.4 which
-#       conflicts with the numpy<2.0.0 requirement for Numba/Coqui-TTS.
-#       The transformers AutoModel path works without nari-tts.
+# Dia-1.6B: do NOT install 'nari-tts' - it pins numpy>=2.2.4, which breaks
+# Numba/Coqui TTS. The transformers AutoModel route this file used to promise
+# does not work either: the pinned transformers cannot read Dia's config.
 
 # Coqui XTTS-v2 Engine Dependencies
 # (TTS==0.22.0 is installed via 'pip install --no-deps TTS==0.22.0' to bypass legacy numpy==1.22.0 pin)

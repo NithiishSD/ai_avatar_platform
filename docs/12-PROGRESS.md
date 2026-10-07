@@ -24,7 +24,7 @@ records what was verified live, with the real command and result.
 | T2.1 | **Blocked** — XTTS-v2 download incomplete; CPML acceptance needed from owner (M-03) | (this commit: audit fix) |
 | T2.2 | Done | 54686a2 |
 | T2.3 | Verified on CPU — waiting on M-04 (peak VRAM on the host GPU, and a look at the video) | (this commit) |
-| T2.6 | Next (T2.4/T2.5 need XTTS-v2, M-03) | |
+| T2.6 | In progress — (a) Higgs/Dia honesty done (this commit); (b) OpenVoice V2 next | |
 
 ## Log
 
@@ -437,3 +437,32 @@ a model trained against a SyncNet discriminator (so LSE-C alone flatters it —
 which is why the visual check M-04 matters). Gates: 504 tests OK, lint, types.
 
 Not measurable here: peak VRAM (acceptance says < 6 GB) — M-04.
+
+### 2026-10-08 — T2.6 (a): Higgs and Dia cannot run here at all
+
+Before choosing how to reach five engines, checked each candidate with evidence:
+
+| engine | HF size | licence | `AutoConfig` under transformers 4.47.1 |
+|---|---|---|---|
+| Higgs TTS 2 3B | 11.58 GB (`model.safetensors` 11.5 GB fp32) | other | **fails**: model type `higgs_audio_v2` not recognised |
+| Dia-1.6B | 12.89 GB (two 6.4 GB copies) | apache-2.0 | **fails**: no `model_type` in config (needs `nari-tts` → numpy 2) |
+| OpenVoice V2 | 0.13 GB (converter 131 MB) | MIT, ungated | n/a (own package) |
+
+So the router declared five engines of which two could never load on this stack
+— the transformers <4.48 and numpy <2 pins are forced by Coqui TTS — and their
+weights exceed the 6 GB card anyway. Everything told the operator to fetch them:
+`doctor.py`, the 503 body, the startup log, and `fetch_models.py --all` (which
+also understated Higgs as 6.5 GB). `requirements.txt` claimed "~3 GB VRAM".
+
+Fix (D-32): `ModelWeightStatus.fix`; `model_registry.UNRUNNABLE` holds both
+reasons; the audit reports them unavailable with "fix: none on this stack";
+`ModelWeightsMissing` says "Fetch it with" only when fetching is the fix; doctor
+prints the registry's fix; the fetcher refuses both keys with the reason;
+requirements comments corrected. Log wording "MODEL WEIGHTS MISSING" →
+"MODEL UNAVAILABLE … Fix: …" (test updated to match, still one warning per model).
+
+Verified: 4 new tests, 508 OK. Live: doctor → `WARN higgs-tts-2 … cannot run on
+this stack … fix: none on this stack`; `fetch_models.py --only dia-1.6b` → the
+reason, exit 1, nothing downloaded; real server: startup log "MODEL UNAVAILABLE",
+`high_quality` and `dialogue` → 503 "… Downloading it would not help. Fix: none
+on this stack (see detail); use another engine".

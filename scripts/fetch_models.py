@@ -32,7 +32,7 @@ from typing import Callable, List, Optional
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 
-from model_registry import audit_model_weights  # noqa: E402
+from model_registry import UNRUNNABLE, audit_model_weights  # noqa: E402
 
 # Refuse to fill the disk. A GPU box that runs out of room mid-download leaves
 # a half-written cache that reports as present but fails to load.
@@ -76,14 +76,6 @@ def _fetch_xtts() -> None:
     TTS(model_name="tts_models/multilingual/multi-dataset/xtts_v2")
 
 
-def _fetch_higgs() -> None:
-    _fetch_hf("bosonai/higgs-tts-2-3b-base")
-
-
-def _fetch_dia() -> None:
-    _fetch_hf("nari-labs/Dia-1.6B")
-
-
 def _fetch_mms() -> None:
     """
     MMS-TTS is one checkpoint per language, fetched on demand at ~145 MB each.
@@ -121,22 +113,6 @@ SPECS: List[ModelSpec] = [
         note="the four languages the Phase 3 benchmark reports",
         fetch=_fetch_mms,
     ),
-    ModelSpec(
-        key="higgs-tts-2",
-        name="Higgs TTS 2 (3B)",
-        approx_gb=6.5,
-        default=False,
-        note="high_quality path; large. --all to include",
-        fetch=_fetch_higgs,
-    ),
-    ModelSpec(
-        key="dia-1.6b",
-        name="Dia-1.6B (dialogue)",
-        approx_gb=6.5,
-        default=False,
-        note="dialogue path; large and lowest demo value. --all to include",
-        fetch=_fetch_dia,
-    ),
 ]
 
 
@@ -158,6 +134,13 @@ def main() -> int:
 
     if args.only:
         wanted = {k.strip() for k in args.only.split(",") if k.strip()}
+        # Higgs and Dia used to be offered here: 18 GB that this stack cannot
+        # load (see model_registry.UNRUNNABLE). Refuse with the reason instead.
+        refused = wanted & set(UNRUNNABLE)
+        if refused:
+            for key in sorted(refused):
+                print(f"{key}: {UNRUNNABLE[key]}.", file=sys.stderr)
+            return 1
         unknown = wanted - {s.key for s in SPECS}
         if unknown:
             parser.error(f"unknown model key(s): {', '.join(sorted(unknown))}")

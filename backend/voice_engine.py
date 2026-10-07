@@ -52,12 +52,13 @@ class ModelWeightsMissing(RuntimeError):
     command that fixes it (golden rule 7).
     """
 
-    def __init__(self, model_key: str, detail: str) -> None:
+    def __init__(self, model_key: str, detail: str, fix: str = "") -> None:
         self.model_key = model_key
-        super().__init__(
-            f"{model_key} is not available: {detail}. "
-            f"Fetch it with: {model_registry.MODEL_FETCH_COMMAND} --only {model_key}"
-        )
+        fix = fix or f"{model_registry.MODEL_FETCH_COMMAND} --only {model_key}"
+        # "Fetch it with" only when fetching is the fix: for an engine this
+        # stack cannot run, that advice would cost gigabytes and change nothing.
+        remedy = f"Fetch it with: {fix}" if fix.startswith(model_registry.MODEL_FETCH_COMMAND) else f"Fix: {fix}"
+        super().__init__(f"{model_key} is not available: {detail}. {remedy}")
 
 
 # Engines that condition on a reference recording - that is, clone a voice.
@@ -307,7 +308,7 @@ class VoiceEngineRouter:
         """
         for status in model_registry.audit_model_weights():
             if status.key == model_key and not status.present:
-                raise ModelWeightsMissing(model_key, status.detail)
+                raise ModelWeightsMissing(model_key, status.detail, status.fix)
 
     # ------------------------------------------------------------------
     # Model Loaders (lazy, cached)

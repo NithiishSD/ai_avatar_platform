@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -81,6 +81,9 @@ class ModelWeightStatus:
     present: bool
     size_bytes: int
     detail: str
+    # How to fix it, when not present. Usually the fetch command; for a model
+    # this stack cannot run at all, fetching would not help and this says so.
+    fix: str = ""
 
     @property
     def size_label(self) -> str:
@@ -101,6 +104,7 @@ class ModelWeightStatus:
             "sizeBytes": self.size_bytes,
             "sizeLabel": self.size_label,
             "detail": self.detail,
+            "fix": self.fix,
         }
 
 
@@ -312,20 +316,55 @@ def check_mms(key: str = "mms-tts", name: str = "MMS-TTS") -> ModelWeightStatus:
     )
 
 
+# Routed engines that cannot run on this stack whatever is downloaded,
+# established 8 Oct 2026 by loading their real cached configs (T2.6). The
+# transformers pin (<4.48) is forced by Coqui TTS; re-check if it ever moves.
+UNRUNNABLE: Dict[str, str] = {
+    "higgs-tts-2": (
+        "cannot run on this stack: its config declares model type "
+        "'higgs_audio_v2', which the pinned transformers (<4.48, required by "
+        "Coqui TTS) does not recognise, and its 11.6 GB of fp32 weights exceed "
+        "the 6 GB card. Downloading it would not help"
+    ),
+    "dia-1.6b": (
+        "cannot run on this stack: its config has no model type the pinned "
+        "transformers (<4.48) recognises - it needs the nari-tts package, which "
+        "requires numpy 2 while Coqui TTS needs numpy below 2 - and each 6.4 GB "
+        "copy of its weights exceeds the 6 GB card. Downloading it would not help"
+    ),
+}
+
+
+def _unrunnable(key: str, name: str, repo_id: str) -> ModelWeightStatus:
+    return ModelWeightStatus(
+        key=key,
+        name=name,
+        source=repo_id,
+        present=False,
+        size_bytes=0,
+        detail=UNRUNNABLE[key],
+        fix="none on this stack (see detail); use another engine",
+    )
+
+
 def audit_model_weights() -> List[ModelWeightStatus]:
     """Audit every model ``VoiceEngineRouter.select_model`` can return."""
-    return [
+    statuses = [
         check_hf_repo("kokoro", "Kokoro v1.0 (82M)", "hexgrad/Kokoro-82M"),
         check_coqui_model(
             "xtts-v2",
             "XTTS-v2 (voice cloning)",
             "tts_models/multilingual/multi-dataset/xtts_v2",
         ),
-        check_hf_repo(
-            "higgs-tts-2", "Higgs TTS 2 (3B)", "bosonai/higgs-tts-2-3b-base"
-        ),
-        check_hf_repo("dia-1.6b", "Dia-1.6B (dialogue)", "nari-labs/Dia-1.6B"),
+        _unrunnable("higgs-tts-2", "Higgs TTS 2 (3B)", "bosonai/higgs-tts-2-3b-base"),
+        _unrunnable("dia-1.6b", "Dia-1.6B (dialogue)", "nari-labs/Dia-1.6B"),
         check_mms(),
+    ]
+    # Every other missing model is fixed by fetching it. `replace` builds a
+    # new frozen instance with one field changed.
+    return [
+        s if s.present or s.fix else replace(s, fix=f"{MODEL_FETCH_COMMAND} --only {s.key}")
+        for s in statuses
     ]
 
 
@@ -474,13 +513,12 @@ def log_weight_audit(statuses: Optional[List[ModelWeightStatus]] = None) -> List
     )
     for status in missing:
         logger.warning(
-            "MODEL WEIGHTS MISSING - %s [%s]: %s. Requests that need it are "
-            "refused until it is fetched: %s --only %s",
+            "MODEL UNAVAILABLE - %s [%s]: %s. Requests that need it are "
+            "refused. Fix: %s",
             status.name,
             status.key,
             status.detail,
-            MODEL_FETCH_COMMAND,
-            status.key,
+            status.fix,
         )
     return statuses
 
