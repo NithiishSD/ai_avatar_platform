@@ -1,0 +1,139 @@
+{
+  "generatedAt": "2026-10-08T11:01:13+00:00",
+  "device": "cpu",
+  "emotions": {
+    "baselineSeconds": 4.425,
+    "emotions": {
+      "joy": {
+        "durationRatio": 0.909,
+        "expectedRateInverse": 0.909,
+        "loudnessRatio": 1.148,
+        "expectedEnergy": 1.15,
+        "latencyMs": 3535.2
+      },
+      "anger": {
+        "durationRatio": 0.877,
+        "expectedRateInverse": 0.877,
+        "loudnessRatio": 1.349,
+        "expectedEnergy": 1.35,
+        "latencyMs": 1560.3
+      },
+      "sorrow": {
+        "durationRatio": 1.163,
+        "expectedRateInverse": 1.163,
+        "loudnessRatio": 0.82,
+        "expectedEnergy": 0.82,
+        "latencyMs": 2538.1
+      },
+      "authority": {
+        "durationRatio": 1.075,
+        "expectedRateInverse": 1.075,
+        "loudnessRatio": 1.121,
+        "expectedEnergy": 1.12,
+        "latencyMs": 2184.0
+      },
+      "calm": {
+        "durationRatio": 1.087,
+        "expectedRateInverse": 1.087,
+        "loudnessRatio": 0.92,
+        "expectedEnergy": 0.92,
+        "latencyMs": 3366.5
+      },
+      "excitement": {
+        "durationRatio": 0.847,
+        "expectedRateInverse": 0.847,
+        "loudnessRatio": 1.28,
+        "expectedEnergy": 1.28,
+        "latencyMs": 1377.5
+      }
+    }
+  },
+  "quality": {
+    "perSentence": [
+      {
+        "sentence": "The quick brown fox jumps over the lazy dog near the river bank.",
+        "model": "kokoro",
+        "mos": 4.804,
+        "pesq": 3.69,
+        "stoi": 0.997,
+        "siSdr": 20.232,
+        "method": "torchaudio-squim"
+      },
+      {
+        "sentence": "She sells sea shells by the sea shore every single summer morning.",
+        "model": "kokoro",
+        "mos": 4.891,
+        "pesq": 4.133,
+        "stoi": 0.995,
+        "siSdr": 26.19,
+        "method": "torchaudio-squim"
+      },
+      {
+        "sentence": "Our quarterly revenue grew by thirty seven percent across all regions.",
+        "model": "kokoro",
+        "mos": 4.926,
+        "pesq": 3.66,
+        "stoi": 0.993,
+        "siSdr": 18.02,
+        "method": "torchaudio-squim"
+      },
+      {
+        "sentence": "Please confirm whether the shipment arrived before the eleventh of March.",
+        "model": "kokoro",
+        "mos": 4.868,
+        "pesq": 3.673,
+        "stoi": 0.994,
+        "siSdr": 19.333,
+        "method": "torchaudio-squim"
+      },
+      {
+        "sentence": "Thick fog rolled through the valley while the church bells rang loudly.",
+        "model": "kokoro",
+        "mos": 4.982,
+        "pesq": 3.705,
+        "stoi": 0.994,
+        "siSdr": 23.942,
+        "method": "torchaudio-squim"
+      }
+    ],
+    "meanMos": 4.894,
+    "minMos": 4.804,
+    "meanPesq": 3.772,
+    "methods": [
+      "torchaudio-squim"
+    ],
+    "isModelPrediction": true
+  },
+  "matrix": [
+    {
+      "requirement": "TTS quality MOS > 3.5",
+      "measured": 4.894,
+      "verdict": "PASS",
+      "method": "torchaudio-squim"
+    },
+    {
+      "requirement": "Voice cloning similarity > 85%",
+      "measured": null,
+      "verdict": "NOT MEASURED",
+      "method": "not run"
+    },
+    {
+      "requirement": "API initiation response < 500 ms",
+      "measured": null,
+      "verdict": "NOT MEASURED",
+      "method": "queue=n/a"
+    },
+    {
+      "requirement": "API capacity 100+ requests/minute",
+      "measured": null,
+      "verdict": "NOT MEASURED",
+      "method": "min(rate-limit policy None rpm, raw app throughput None rpm over 0 sequential in-process requests); not a deployed-server load test"
+    },
+    {
+      "requirement": "Warm synthesis latency < 2 s",
+      "measured": null,
+      "verdict": "NOT MEASURED",
+      "method": "median of repeated Kokoro runs, model resident"
+    }
+  ]
+}

@@ -48,7 +48,8 @@ records what was verified live, with the real command and result.
 | **M4 gate** | **Passed 8 Oct** (= roadmap Gate 4): `check.sh` 671 tests green, `npx playwright test` 13 passed, `npm run build` clean; N-07 met as defined (first audio → first frame 1.4–1.8 ms), text → first audio ~0.43 s warm | |
 | T5.2 | **Built and unit-tested; live robustness sweep and a person's look (M-07) still to do** | (this commit) |
 | T5.4 | Done | 43c9c87 |
-| T5.3 | Done | (this commit) |
+| T5.3 | Done | caaf316 |
+| T6.6 | Measured on CPU (8 Oct): offset -4 not reproduced, N-06 **not met**, MOS 4.894; N-10 and the GPU timing wait on M-04; the 10+ language percentage is T8.4 | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
@@ -1151,3 +1152,15 @@ Not done: a person looking at how the panel reads (add to M-07's visual pass); t
 An earlier run showed `live.spec.js` failing after 17 minutes against a 240 s timeout while the machine was stalled; the spec alone passed
 (2 passed, 27 s) and the full rerun passed, so this was the stall, not the code. The gate is **not** declared passed: T5.1 waits on M-06
 (listening) and T5.2 on M-07 (looking at the marked video; the Verify panel and the watermark line in the studio are part of that look).
+
+### 2026-10-08 — T6.6 benchmarks re-run (CPU)
+
+- **Blendshape offset -4:** not reproduced. Background colour and clip length are not the cause (same sentence, 39 and 128 frames, with and without
+  `#0b3d91`: offset 0 in all four). Six more sentences with the blue background: offset 0 five times, +1 once. The server's score endpoint and the script
+  both call `lipsync_metric.score_video`, so there is no second code path. The one -4 reading came from a sentence that was not recorded; it stays an
+  unexplained single outlier, and the blendshape claim is "offset 0 on 13 of 14 clips, +1 on one, -4 on one that could not be repeated".
+- **N-06 (60 s of video in < 30 s): not met on this CPU.** 176 words -> 53.05 s of video: 43.8 s wall unmarked (render stage 5.7 s), 133.8 s wall with
+  both watermarks (render stage 81.4 s). Reported as not met with the numbers; a GPU run is not possible here.
+- **N-01:** SQUIM MOS 4.894 with a non-matching reference (5 Kokoro sentences). The harness rewrites `docs/benchmarks/phase3_benchmark.md` with
+  "NOT MEASURED" rows for skipped sections; that file was restored and only the dated JSON kept.
+- Not done here: N-10 peak VRAM and GPU timings (M-04, host GPU); N-05 over 10+ languages (T8.4); N-02 unchanged (62.0%, not met).
