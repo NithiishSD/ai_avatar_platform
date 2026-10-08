@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional
@@ -20,6 +22,9 @@ from contracts import (
     AvatarGenerateRequest,
     AvatarGenerateResponse,
     AvatarRegisterResponse,
+    LiveControlMessage,
+    LiveSayMessage,
+    LiveStartMessage,
     FaceAnalysisResponse,
     LipSyncScoreResponse,
     AvatarRenderJob,
@@ -36,14 +41,15 @@ from contracts import (
     VoiceSimilarityRequest,
     VoiceSimilarityResponse,
 )
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import avatar_generator
+import live_engine
 import avatar_store
 import language_registry
 from generation_jobs import GenerationJobs
@@ -63,7 +69,16 @@ from model_registry import (
     vision_audit_summary,
 )
 from quality_auditor import SpeechQualityAuditor
-from request_context import REQUEST_ID_HEADER, configure_log_output, install_logging, request_id_middleware
+from request_context import (
+    REQUEST_ID_HEADER,
+    bind_request_id,
+    configure_log_output,
+    current_request_id,
+    install_logging,
+    new_request_id,
+    request_id_middleware,
+    unbind_request_id,
+)
 from security import API_KEY_HEADER, SecurityGate
 from voice_engine import CLONE_ENGINES, ModelWeightsMissing, VoiceConsentRequired
 
@@ -749,6 +764,214 @@ def align_audio(request: AlignmentRequest) -> AlignmentResponse:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(err)) from err
     except Exception as err:
         raise _audio_failure("Alignment", err) from err
+
+
+# ---------------------------------------------------------------------------
+# Live interactive avatar: WS /api/v1/live (R-18, R-19)
+# ---------------------------------------------------------------------------
+# Each session holds a face animator and keeps a sentence pipeline busy, so the
+# number running at once is capped; a client over the cap is told to retry.
+LIVE_MAX_SESSIONS = int(os.getenv("LIVE_MAX_SESSIONS", "2"))
+LIVE_START_TIMEOUT_S = 15.0
+LIVE_IDLE_TIMEOUT_S = 600.0
+_live_active = 0
+_live_lock = threading.Lock()
+_live_message = TypeAdapter(LiveSayMessage | LiveControlMessage)
+
+
+async def _live_fail(ws: WebSocket, code: str, detail: str, close: int = 1008) -> None:
+    """Tell the client what went wrong (so it can fix it), then close."""
+    try:
+        await ws.send_json({"type": "error", "code": code, "detail": _scrub(detail)})
+        await ws.close(code=close)
+    except (RuntimeError, WebSocketDisconnect):
+        pass  # the client already left
+
+
+@app.websocket("/api/v1/live")
+async def live_avatar(ws: WebSocket) -> None:
+    """
+    A live avatar session. The client sends one ``start`` message, then any number
+    of ``say`` (speak this text), ``interrupt`` (stop speaking, keep the session)
+    and finally ``stop``. The server answers ``ready``, then per sentence an
+    ``audio`` message followed by its PCM16 chunk and the avatar's JPEG frames as
+    binary messages (framing in ``live_engine``), a ``chunk`` message with that
+    sentence's timings, and ``done`` when the text is finished. Protocol errors are
+    ``error`` messages; the ones that cannot be recovered also close the socket.
+
+    HTTP middleware does not run for WebSockets, so the key check, the consent
+    checks, the request id and the session cap all happen here.
+    """
+    global _live_active
+    await ws.accept()
+    token = bind_request_id(new_request_id(ws.headers.get(REQUEST_ID_HEADER)))
+    reserved = False
+    session = None
+    receiver = None
+    try:
+        try:
+            raw = await asyncio.wait_for(ws.receive_json(), LIVE_START_TIMEOUT_S)
+            start = LiveStartMessage.model_validate(raw)
+        except asyncio.TimeoutError:
+            return await _live_fail(ws, "start_timeout", f"send a start message within {LIVE_START_TIMEOUT_S:.0f} s", 1008)
+        except (ValidationError, ValueError, TypeError) as err:
+            return await _live_fail(ws, "bad_start", f"the first message must be a valid start message: {err}", 1003)
+        except WebSocketDisconnect:
+            return
+
+        allowed, _status_code, detail = security_gate.inspect(
+            path="/api/v1/live",
+            api_key=start.api_key or ws.headers.get(API_KEY_HEADER),
+            client_host=ws.client.host if ws.client else None,
+        )
+        if not allowed:
+            return await _live_fail(ws, "unauthorised", str(detail.get("detail", "request rejected")))
+
+        with _live_lock:
+            if _live_active >= LIVE_MAX_SESSIONS:
+                full = True
+            else:
+                _live_active += 1
+                reserved, full = True, False
+        if full:
+            return await _live_fail(
+                ws, "busy", f"{LIVE_MAX_SESSIONS} live sessions are already running; try again shortly", 1013
+            )
+
+        # The same checks the REST route makes before queueing: weights, consent, language.
+        try:
+            speaker = None
+            if start.mode == "clone":
+                if not start.speaker_wav:
+                    raise ValueError("clone mode needs speakerWav: a recording inside inputs/ (GET /api/v1/audio/samples)")
+                speaker = str(resolve_voice_reference(start.speaker_wav))
+            router = get_router()
+            model_key = router.select_model(
+                mode=start.mode, language=start.language, quality="balanced", style=None,
+                text="", clone_engine=start.clone_engine,
+            )
+            router.preflight(model_key, speaker, start.language)
+            session = live_engine.LiveSession(
+                router, faces, start.avatar_id, language=start.language, mode=start.mode,
+                emotion=start.emotion, emotion_intensity=start.emotion_intensity, fps=start.fps,
+                max_side=start.max_side, speaker_wav=speaker, clone_engine=start.clone_engine,
+            )
+            info = await run_in_threadpool(session.open)
+        except HTTPException as err:
+            return await _live_fail(ws, "bad_request", str(err.detail))
+        except VoiceConsentRequired as err:
+            return await _live_fail(ws, "consent", str(err))
+        except avatar_store.AvatarConsentError as err:
+            return await _live_fail(ws, "consent", str(err))
+        except avatar_store.AvatarNotFound as err:
+            return await _live_fail(ws, "avatar_not_found", str(err))
+        except ModelWeightsMissing as err:
+            return await _live_fail(ws, "model_unavailable", str(err), 1011)
+        except (ValueError, avatar_store.AvatarError, FaceEngineUnavailable, live_engine.LiveError) as err:
+            return await _live_fail(ws, "bad_request", str(err))
+
+        await ws.send_json({"type": "ready", "sessionId": session.session_id, "avatarId": start.avatar_id,
+                            "mode": start.mode, "model": model_key, "sampleRate": 24000,
+                            "requestId": current_request_id(), **info})
+        logger.info("Live session %s opened: avatar=%s mode=%s %dx%d@%d", session.session_id,
+                    start.avatar_id, start.mode, info["width"], info["height"], info["fps"])
+
+        # A receiver task keeps reading while speech is being sent, so an
+        # `interrupt` is seen between frames instead of after the whole text.
+        inbox: asyncio.Queue = asyncio.Queue()
+
+        async def receive() -> None:
+            while True:
+                try:
+                    inbox.put_nowait(await ws.receive_json())
+                except (ValueError, TypeError):  # not JSON: tell the client, keep listening
+                    inbox.put_nowait({"type": "_malformed"})
+                except (WebSocketDisconnect, RuntimeError):  # the client left
+                    inbox.put_nowait({"type": "_closed"})
+                    return
+
+        receiver = asyncio.create_task(receive())
+        queued: list = []
+
+        async def next_message() -> dict:
+            if queued:
+                return queued.pop(0)
+            return await asyncio.wait_for(inbox.get(), LIVE_IDLE_TIMEOUT_S)
+
+        while True:
+            try:
+                raw = await next_message()
+            except asyncio.TimeoutError:
+                return await _live_fail(ws, "idle", "no message for too long; the session was closed", 1000)
+            kind = raw.get("type") if isinstance(raw, dict) else None
+            if kind in ("_closed", "stop"):
+                break
+            if kind == "_malformed":
+                await ws.send_json({"type": "error", "code": "malformed", "detail": "messages must be JSON objects"})
+                continue
+            try:
+                message = _live_message.validate_python(raw)
+            except ValidationError as err:
+                await ws.send_json({"type": "error", "code": "bad_message", "detail": _scrub(str(err))[:300]})
+                continue
+            if not isinstance(message, LiveSayMessage):  # an interrupt with nothing to interrupt
+                await ws.send_json({"type": "interrupted"})
+                continue
+
+            generator = live_engine.stream_text(session, message.text)
+            stopped = interrupted = False
+            try:
+                async for event in generator:
+                    # Look for control messages without losing queued `say`s.
+                    while not inbox.empty():
+                        waiting = inbox.get_nowait()
+                        waiting_kind = waiting.get("type") if isinstance(waiting, dict) else None
+                        if waiting_kind in ("_closed", "stop"):
+                            stopped = True
+                        elif waiting_kind == "interrupt":
+                            interrupted = True
+                        else:
+                            queued.append(waiting)
+                    if stopped or interrupted:
+                        break
+                    if event.kind == "frame":
+                        await ws.send_bytes(event.payload)
+                    elif event.kind == "audio":
+                        await ws.send_json({"type": "audio", **event.meta})
+                        await ws.send_bytes(event.payload)
+                    else:
+                        await ws.send_json({"type": event.kind, **event.meta})
+                        if event.kind == "chunk":
+                            logger.info("Live chunk %s: %s", event.meta["chunk"], event.meta)
+            except live_engine.LiveError as err:
+                await ws.send_json({"type": "error", "code": "speech_failed", "detail": str(err)})
+            except WebSocketDisconnect:
+                stopped = True
+            except Exception as err:  # noqa: BLE001 - one bad sentence must not kill the session silently
+                logger.exception("Live speech failed")
+                await ws.send_json({"type": "error", "code": "speech_failed", "detail": _scrub(f"{type(err).__name__}: {err}")})
+            finally:
+                await generator.aclose()
+            if stopped:
+                break
+            if interrupted:
+                await ws.send_json({"type": "interrupted"})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if receiver is not None:
+            receiver.cancel()
+        if session is not None:
+            session.cleanup()
+            logger.info("Live session %s closed", session.session_id)
+        if reserved:
+            with _live_lock:
+                _live_active -= 1
+        unbind_request_id(token)
+        try:
+            await ws.close()
+        except (RuntimeError, WebSocketDisconnect):
+            pass
 
 
 def _job_response(task_id: str, task_status: str, result: dict) -> SynthesisJobResponse:

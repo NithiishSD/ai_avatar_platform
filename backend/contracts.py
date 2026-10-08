@@ -629,6 +629,48 @@ class AvatarRegisterResponse(BaseModel):
     quality: Optional[FaceQualityResponse] = None
 
 
+class LiveStartMessage(BaseModel):
+    """
+    First message of a live session (``WS /api/v1/live``): who speaks, how, and at what size.
+
+    ``apiKey`` rides in the message because a browser's WebSocket constructor
+    cannot set headers; the ``X-API-Key`` header is accepted too.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    type: Literal["start"]
+    avatar_id: str = Field(alias="avatarId", pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    api_key: Optional[str] = Field(default=None, alias="apiKey", max_length=256)
+    language: str = Field(default="en", min_length=2, max_length=16)
+    mode: Literal["fast", "clone"] = "fast"
+    emotion: Optional[str] = Field(default=None, max_length=32)
+    emotion_intensity: float = Field(default=1.0, alias="emotionIntensity", ge=0.0, le=1.0)
+    # A live frame must be cheap enough to render in real time on a CPU, so the
+    # default is smaller than a file render's 512 px.
+    fps: int = Field(default=25, ge=5, le=30)
+    max_side: int = Field(default=384, alias="maxSide", ge=128, le=640)
+    speaker_wav: Optional[str] = Field(default=None, alias="speakerWav", max_length=1024)
+    clone_engine: Optional[Literal["xtts-v2", "openvoice-v2"]] = Field(default=None, alias="cloneEngine")
+
+
+class LiveSayMessage(BaseModel):
+    """Speak this text now (sentence by sentence)."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    type: Literal["say"]
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class LiveControlMessage(BaseModel):
+    """``interrupt`` stops the current speech and keeps the session; ``stop`` ends it."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    type: Literal["interrupt", "stop"]
+
+
 class AvatarGenerateRequest(BaseModel):
     """
     Ask for a synthetic face (T3.2). Attributes are fixed choices, not a free

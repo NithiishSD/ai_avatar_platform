@@ -36,9 +36,25 @@ Auth: `X-API-Key` header when `AUTH_ENABLED=true`. Rate limit: 429 with
 
 | Method | Path | Task |
 |---|---|---|
-| WS | `/api/v1/live` | streaming TTS + live avatar frames | M4 |
 | POST | `/api/v1/provenance/verify` | does a file carry our watermark / manifest | M5 |
 | GET | `/api/v1/audit` | consent audit trail | M5 |
+
+## Live avatar: `WS /api/v1/live`
+
+One session = one socket. Client to server (JSON text): `start` (`avatarId`, `language`, `mode`
+fast|clone, `emotion`, `fps` 5–30, `maxSide` 128–640, `speakerWav` + `cloneEngine` for clone mode,
+`apiKey` because a browser WebSocket cannot set headers; the `X-API-Key` header also works),
+then any number of `say` (`text` ≤ 2000 chars), `interrupt` (stop speaking, keep the session) and
+finally `stop`. Server to client: `ready` (size, fps, sampleRate, model, requestId); per sentence an
+`audio` message then binary media, a `chunk` message with its timings, and `done` with the totals;
+`interrupted`; `error` (`code` + `detail`; start errors also close the socket).
+
+Binary messages are `kind(u8) chunk(u32) index(u32) presentationMs(u32)` big-endian (13 bytes) then
+the payload: kind 1 = PCM16 mono audio at `sampleRate`, kind 2 = one JPEG frame. `presentationMs` is
+when it is due on the session timeline, so a client plays by that, not by arrival. Error codes:
+`bad_start`, `start_timeout`, `unauthorised`, `busy` (close 1013; `LIVE_MAX_SESSIONS`, default 2),
+`consent`, `avatar_not_found`, `bad_request`, `model_unavailable`, `bad_message`, `malformed`,
+`speech_failed`, `idle`. Consent, weights and language are checked before any speech, as in REST.
 
 ## Request ids
 

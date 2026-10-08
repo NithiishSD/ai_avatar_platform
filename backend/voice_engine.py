@@ -18,6 +18,7 @@ forced alignment, then the optional MOS/PESQ quality audit.
 """
 
 import os
+import threading
 import time
 import math
 import re
@@ -183,6 +184,9 @@ class VoiceEngineRouter:
         self._bark = BarkEngine(device=self.device)
         self._emotion = EmotionProsodyEngine()
         self._auditor: Optional[SpeechQualityAuditor] = None
+
+        # Re-entrant: synthesize() can call itself through a fallback.
+        self._synthesis_lock = threading.RLock()
 
         # Track load failures to avoid retrying broken models
         self._higgs_failed = False
@@ -618,7 +622,19 @@ class VoiceEngineRouter:
     # Main Public Interface
     # ------------------------------------------------------------------
 
-    def synthesize(
+    def synthesize(self, *args, **kwargs) -> SynthesisResult:
+        """
+        Synthesize speech (see ``_synthesize`` for the parameters), one call at a time.
+
+        The router holds lazily-loaded models and per-model state, and one heavy
+        model should be resident at a time (golden rule 5), so two simultaneous
+        calls (two REST requests, or a live session beside a REST request) must
+        not load or run models at once. The lock makes them take turns.
+        """
+        with self._synthesis_lock:
+            return self._synthesize(*args, **kwargs)
+
+    def _synthesize(
         self,
         text: str,
         mode: str = "fast",

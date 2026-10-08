@@ -397,3 +397,38 @@ class HiggsLoadingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class SynthesisSerialisationTests(unittest.TestCase):
+    """Two synthesize() calls at once must take turns (the router is not thread-safe)."""
+
+    def test_concurrent_calls_never_overlap_inside_the_router(self):
+        import threading
+        import time
+
+        router = VoiceEngineRouter(device="cpu")
+        inside, overlaps = [0], [0]
+        guard = threading.Lock()
+
+        def fake(*args, **kwargs):
+            with guard:
+                inside[0] += 1
+                if inside[0] > 1:
+                    overlaps[0] += 1
+            time.sleep(0.02)
+            with guard:
+                inside[0] -= 1
+            return "done"
+
+        with patch.object(router, "_synthesize", side_effect=fake):
+            threads = [threading.Thread(target=lambda: router.synthesize("hi")) for _ in range(12)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        self.assertEqual(overlaps[0], 0)
+
+    def test_the_wrapper_passes_arguments_and_the_result_through(self):
+        router = VoiceEngineRouter(device="cpu")
+        with patch.object(router, "_synthesize", return_value="R") as inner:
+            self.assertEqual(router.synthesize("hello", mode="clone", language="es"), "R")
+        inner.assert_called_once_with("hello", mode="clone", language="es")

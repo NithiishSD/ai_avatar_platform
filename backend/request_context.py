@@ -87,6 +87,15 @@ def configure_log_output() -> None:
         root.setLevel(logging.INFO)
 
 
+def bind_request_id(request_id: str) -> contextvars.Token:
+    """Make ``request_id`` current for this task (a WebSocket, which the HTTP middleware never sees)."""
+    return _request_id.set(request_id)
+
+
+def unbind_request_id(token: contextvars.Token) -> None:
+    _request_id.reset(token)
+
+
 async def request_id_middleware(request: Request, call_next):
     """Assign the id, expose it to the logs for this request, return it in the header."""
     request_id = new_request_id(request.headers.get(REQUEST_ID_HEADER))
