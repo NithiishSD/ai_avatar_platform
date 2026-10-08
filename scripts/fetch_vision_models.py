@@ -222,6 +222,10 @@ def _fetch_syncnet() -> None:
         "http://www.robots.ox.ac.uk/~vgg/software/lipsync/data/syncnet_v2.model",
         model_registry.SYNCNET_MODEL,
         min_bytes=10_000_000,
+        # Pinned (the copy every lip-sync number here was measured with): this file is opened with
+        # torch.load, whose weights_only guard has a known bypass in torch 2.5 (D-56), and it is
+        # served over plain HTTP, so only these exact bytes are accepted.
+        sha256="961e8696f888fce4f3f3a6c3d5b3267cf5b343100b238e79b2659bff2c605442",
     )
 
 
@@ -251,6 +255,9 @@ def _fetch_wav2lip() -> None:
         "https://huggingface.co/numz/wav2lip_studio/resolve/main/Wav2lip/wav2lip_gan.pth",
         model_registry.WAV2LIP_CHECKPOINTS[0],
         min_bytes=100_000_000,
+        # Pinned for the same torch.load reason as SyncNet (D-56): a re-uploaded checkpoint on a
+        # third-party mirror is refused instead of loaded.
+        sha256="ca9ab7b7b812c0e80a6e70a5977c545a1e8a365a6c49d5e533023c034d7ac3d8",
     )
 
 

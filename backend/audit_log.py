@@ -153,7 +153,7 @@ class AuditLog:
         Each filter is optional; ``limit`` is clamped to 1..1000 so one call cannot dump the whole table.
         """
         # Only fixed column names are put into the SQL text; every user value goes through a "?"
-        # placeholder, which SQLite binds as data, so a filter value cannot inject SQL.
+        # parameter marker, which SQLite binds as data, so a filter value cannot inject SQL.
         clauses, params = [], []
         for column, value in (("event", event), ("subject", subject)):
             if value:

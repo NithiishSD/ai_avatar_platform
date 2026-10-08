@@ -61,6 +61,7 @@ records what was verified live, with the real command and result.
 | T7.4 | **Partial, paused by the owner**: 48 files documented (comment-only, proven); 17 files still below 35% | 206805a |
 | T7.2 | Done | 8da4461 + (this commit) |
 | T7.6 | Done (README rewritten) | 8da4461 |
+| T7.7 | Done — every DoD item run (results below); open items are the owner's manual checks and the paused T7.4 | (this commit) |
 | T8.4 | Done — Wav2Lip meets the lip-sync percentage on 13 languages, blendshape does not; N-20 not met | 0eb03a9 |
 | T8.7 | Built and measured; the Stable Diffusion words wait on M-08 | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
@@ -1358,3 +1359,26 @@ container retried huggingface.co on every load (now offline: weights come from t
 Verified: image 4.85 GB; `/health` 200 `ok`; Docker health `healthy`; `whoami` = `app`; studio served at `/`; through the SDK: speech 3.0 s (kokoro, mms_fa,
 watermark detected), render 6.0 s (blendshape, mark 128/128), SyncNet offset 1. A first run during heavy host load (load average 52, the host rebooted right
 after) took 292 s for the same render; repeated idle, 6.0 s. `scripts/check.sh` 865 tests OK.
+
+### 2026-10-08 — T7.7 final verification: every Definition of Done item, run for real
+
+| # | Item | Result |
+|---|---|---|
+| 1 | Unit + integration tests | `scripts/check.sh` -> **865 tests OK** |
+| 2 | Python lint | ruff: all checks passed |
+| 3 | Python typecheck | pyrefly: 0 errors |
+| 4 | Frontend lint | `npm run lint` (oxlint, deny warnings): clean |
+| 5 | Frontend production build | `npm run build`: clean |
+| 6 | E2E | `npx playwright test` (inside `scripts/check.sh all`): **17 passed** (2.4 min), real models |
+| 7 | Docker build + health | `docker compose up --build -d` -> `/health` 200 `"status":"ok"`, health `healthy`, non-root, a real render inside (T7.2) |
+| 8 | Dependency audit | `npm audit --omit=dev`: 0. `pip-audit`: transformers (34) and diffusers (5) as accepted in D-41; torch 2.5.1 family (audited explicitly, pip-audit skips `+cu121`) accepted in D-56 with SyncNet and Wav2Lip checkpoints now SHA-256-pinned |
+| 9 | Requirements traced | every R-/N- id in 02 has a row in 08 (`comm` of the two id lists: empty) |
+| 10 | Targets measured | every N- id has a dated result or a stated reason; **gaps: N-10 (peak VRAM, needs the GPU: M-04) and N-11 (needs a deployment: Q-07)**; not met, with numbers: N-02, N-06, N-15, N-17, N-20 |
+| 11 | Health check honest | `scripts/doctor.py`: 39 pass, 4 warn, **0 fail** |
+| 12 | No placeholders | `git grep -nE "TODO|FIXME|XXX|placeholder"`: only the two HTML `placeholder` attributes kept by D-40 (two SQL comments added by the documentation pass were reworded) |
+| 13 | Production hygiene | `scripts/check.sh hygiene main`: ok |
+| 14 | No assistant wording on main | `git log main` / `git grep` on main: no hits |
+| 15 | README complete | rewritten: setup, weights and licences, run, SDK, test, deploy, measured results, limits; self-contained (main ships without docs/) |
+
+Not complete, stated: **T7.4 documentation pass is paused by the owner** (48 files done, 17 below 35%); `main` has not been released to (a release copies code only and
+needs the owner's request); the manual checks M-04 to M-10 wait for the owner.

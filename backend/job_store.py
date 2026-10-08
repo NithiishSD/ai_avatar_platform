@@ -75,7 +75,7 @@ class JobStore:
     def put(self, kind: str, job_id: str, record: Dict[str, Any]) -> None:
         """Insert or replace the record for ``(kind, job_id)`` and commit at once."""
         with self._lock:
-            # ``?`` placeholders let sqlite3 quote the values, so an id can never be read
+            # ``?`` parameter markers let sqlite3 quote the values, so an id can never be read
             # as SQL. ``excluded`` is the row that failed to insert, i.e. the new values.
             self._db.execute(
                 "INSERT INTO jobs (kind, id, record) VALUES (?, ?, ?) "
