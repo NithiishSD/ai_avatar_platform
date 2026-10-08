@@ -54,7 +54,8 @@ records what was verified live, with the real command and result.
 | T8.10 | Done | 2cf36b4 |
 | T8.3 | Done | ea59957 |
 | T8.9 | Done | 3faafde |
-| T8.5 | Done | (this commit) |
+| T8.5 | Done | b4643a7 |
+| T8.2 | Done | (this commit) |
 | T8.4 | Done — Wav2Lip meets the lip-sync percentage on 13 languages, blendshape does not; N-20 not met | 0eb03a9 |
 | T8.7 | Built and measured; the Stable Diffusion words wait on M-08 | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
@@ -1263,3 +1264,16 @@ Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **833 tests OK** (7 n
 0.5 s chunks: 24/24 animated, 300 frames, chunk -> frames p50 39 ms / p95 47 ms, mouth-loudness correlation 0.705; 4 s of silence: 100 frames, no lower-face movement.
 
 Not done: a microphone button in the UI (the protocol is ready; the browser side is not built); phoneme-accurate visemes from live audio (needs streaming ASR).
+
+### 2026-10-08 — T8.2 voice-to-avatar: the user's recording + a photo -> video
+
+`backend/voice_to_avatar.py` + `POST /api/v1/avatar/voice-to-avatar` + an "…or use your own recording" form in the avatar panel. The upload is decoded (ffmpeg) to 24 kHz
+mono under `outputs/supplied/`, transcribed by Whisper base unless a transcript is given, force-aligned (MMS_FA), and queued as an ordinary render job. The speech record
+gains an `origin` field (`generated` for synthesis, or `supplied` with basis and transcript source), which the video's manifest carries; `audio_supplied` goes on the audit
+trail. Face and engine are checked before any decoding or ASR. D-53.
+
+Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **842 tests OK** (9 new; plant caught). Live, real models, CPU: 8 s LJSpeech excerpt with no transcript, recognised
+correctly, rendered, video mark 128/128, manifest `origin: supplied`, SyncNet offset 1 and 6/8 seconds within +/-1 frame. E2E `voice-to-avatar.spec.js` passed (40 s).
+`npm run lint` and `npm run build` clean.
+
+Not done: Whisper's own word timestamps (a second alignment pass is used instead); a person checking the UI form (add to the M-07 look).

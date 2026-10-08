@@ -354,6 +354,44 @@ class RenderRouteTests(VisionApiCase):
         self.assertIn("unknown render engine", response.json()["jobs"][0]["detail"])
         self.assertEqual(self.client.get("/api/v1/avatar/render-batch/nope").status_code, 404)
 
+    # --- voice-to-avatar (T8.2) ---------------------------------------------------------------
+    def v2a(self, **form):
+        data = {"avatarId": "demo", "consentBasis": "speaker-recorded", **form}
+        return self.client.post("/api/v1/avatar/voice-to-avatar", data=data,
+                                files={"file": ("me.wav", (self.outputs / "speech.wav").read_bytes(), "audio/wav")})
+
+    def test_voice_to_avatar_queues_a_render_of_the_supplied_audio(self):
+        import voice_to_avatar
+
+        supplied = voice_to_avatar.SuppliedSpeech(
+            audio_path=self.outputs / "speech.wav", duration_seconds=1.0, transcript="hello", transcript_source="asr",
+            language="en", phoneme_timestamps=[{"phoneme": "AA", "viseme": "viseme_aa", "startMs": 0, "endMs": 500}],
+            alignment_method="mms_fa", sha256="ab" * 32)
+        with mock.patch("voice_to_avatar.prepare", return_value=supplied) as prepare:
+            response = self.v2a(language="en")
+        self.assertEqual(response.status_code, 202, response.text)
+        body = response.json()
+        self.assertTrue(body["jobId"].startswith("v2a-"))
+        self.assertEqual((body["speech"]["transcript"], body["speech"]["transcriptSource"]), ("hello", "asr"))
+        self.assertEqual(prepare.call_args[0][1:], ("speaker-recorded", None, "en"))
+        self.assertFalse(prepare.call_args[0][0].exists())     # the upload's temp file is removed
+        self.assertEqual(self.wait(body["jobId"])["status"], "COMPLETED")
+
+    def test_voice_to_avatar_refuses_an_unusable_face_before_reading_the_audio(self):
+        with mock.patch("voice_to_avatar.prepare") as prepare:
+            self.assertEqual(self.v2a(avatarId="ghost").status_code, 404)
+            self.assertEqual(self.v2a(engine="sadtalker").status_code, 400)
+        prepare.assert_not_called()
+
+    def test_voice_to_avatar_reports_a_bad_recording_as_422_with_the_reason(self):
+        import voice_to_avatar
+
+        with mock.patch("voice_to_avatar.prepare", side_effect=voice_to_avatar.VoiceToAvatarError("the recording is silent")):
+            response = self.v2a()
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("silent", response.json()["detail"])
+        self.assertEqual(self.ran, [])
+
     def test_face_without_consent_is_403(self):
         provenance.sidecar_path(self.store.get("demo").path).unlink()
         response = self.client.post("/api/v1/avatar/render-job", json=self.payload())

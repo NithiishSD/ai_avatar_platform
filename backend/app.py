@@ -32,6 +32,7 @@ from contracts import (
     LipSyncScoreResponse,
     AvatarRenderJob,
     RenderBatchRequest,
+    RenderQuality,
     RenderJobResponse,
     SynthesisJobResponse,
     AlignmentRequest,
@@ -913,6 +914,59 @@ def score_render_job(job_id: str) -> LipSyncScoreResponse:
     # Keep the score with the job so /api/v1/metrics can report it.
     job_queue.update(job_id, result={**queued_job.result, "lipsync": score.to_dict()})
     return LipSyncScoreResponse(jobId=job_id, score=score.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# Voice-to-avatar (T8.2): the caller's own recording drives the face
+# ---------------------------------------------------------------------------
+MAX_SUPPLIED_AUDIO_BYTES = 50 * 1024 * 1024
+
+
+@app.post("/api/v1/avatar/voice-to-avatar", status_code=status.HTTP_202_ACCEPTED)
+async def voice_to_avatar_route(
+    file: UploadFile = File(...),
+    avatar_id: str = Form(..., alias="avatarId"),
+    consent_basis: str = Form(..., alias="consentBasis"),
+    transcript: Optional[str] = Form(None),
+    language: Optional[str] = Form(None),
+    engine: Optional[str] = Form(None),
+    render_quality: RenderQuality = Form(RenderQuality.PREVIEW, alias="renderQuality"),
+) -> dict:
+    """
+    Upload a recording (with the basis the voice is used under) and an avatar id; get a render job.
+
+    Without a ``transcript`` the words come from speech recognition (Whisper base). The audio is
+    aligned like synthesised speech, and the video's manifest says it was supplied, not generated.
+    """
+    import voice_to_avatar
+
+    # Cheap refusals first: an unusable face or engine is known before any decoding or ASR.
+    try:
+        faces.require_usable(avatar_id)
+        engine = render_engine.validate_engine(engine)
+    except avatar_store.AvatarNotFound as err:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(err)) from err
+    except avatar_store.AvatarConsentError as err:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(err)) from err
+    except (avatar_store.AvatarError, render_engine.RenderError) as err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
+
+    upload = await _spool_upload(file, MAX_SUPPLIED_AUDIO_BYTES)
+    try:
+        speech = await run_in_threadpool(voice_to_avatar.prepare, upload, consent_basis, transcript, language)
+    except voice_to_avatar.VoiceToAvatarError as err:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(err)) from err
+    finally:
+        upload.unlink(missing_ok=True)
+
+    job = AvatarRenderJob.model_validate({
+        "jobId": f"v2a-{uuid.uuid4().hex[:12]}", "avatarId": avatar_id, "audioUrl": speech.audio_path.resolve().as_uri(),
+        "sampleRate": voice_to_avatar.OUTPUT_RATE, "durationSeconds": speech.duration_seconds,
+        "phonemeTimestamps": speech.phoneme_timestamps, "emotionVector": {"happy": 0.0, "neutral": 1.0, "eyeblinkRate": 1.0},
+        "renderQuality": render_quality, "targetFps": 25,
+    })
+    queued = _submit_render(job, engine)
+    return {**_render_response(job.job_id, queued).model_dump(by_alias=True, exclude_none=True), "speech": speech.to_dict()}
 
 
 # ---------------------------------------------------------------------------

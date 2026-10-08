@@ -113,6 +113,7 @@ def write_speech_record(
     alignment_method: Optional[str],
     duration_seconds: float,
     watermark: Optional[Dict[str, Any]],
+    origin: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """
     Record how a clip was made, next to the clip, tied to its exact bytes.
@@ -123,6 +124,9 @@ def write_speech_record(
     """
     record = {
         "schema": "ai-avatar-platform/speech-record/1",
+        # "generated" by this platform's speech engines, or a dict describing audio a caller supplied
+        # (voice-to-avatar): the manifest must not present someone's own recording as synthetic speech.
+        "origin": origin or {"type": "generated"},
         "audioSha256": sha256_file(audio_path),
         "model": model,
         "mode": mode,

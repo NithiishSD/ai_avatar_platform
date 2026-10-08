@@ -104,6 +104,11 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
   const [replaceBackground, setReplaceBackground] = useState(false);
   const [backgroundColor, setBackgroundColor] = useState("#0b3d91");
   const [job, setJob] = useState(null);
+  // Voice-to-avatar (T8.2): the user's own recording instead of synthesised speech.
+  const [showOwnAudio, setShowOwnAudio] = useState(false);
+  const [ownAudio, setOwnAudio] = useState({ file: null, consentBasis: "", transcript: "" });
+  const [ownSpeech, setOwnSpeech] = useState(null);
+  const [sendingOwnAudio, setSendingOwnAudio] = useState(false);
   const [score, setScore] = useState(null);
   const [scoring, setScoring] = useState(false);
   const [error, setError] = useState("");
@@ -265,6 +270,33 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
       setJob(body);
     } catch (err) {
       setError(err.message);
+    }
+  };
+
+  /* Upload a recording; the server transcribes it if no transcript is given, aligns it and queues the render. */
+  const handleOwnAudio = async (event) => {
+    event.preventDefault();
+    setError("");
+    setScore(null);
+    setOwnSpeech(null);
+    setSendingOwnAudio(true);
+    const form = new FormData();
+    form.append("file", ownAudio.file);
+    form.append("avatarId", avatarId);
+    form.append("consentBasis", ownAudio.consentBasis);
+    form.append("engine", engine);
+    form.append("renderQuality", renderQuality);
+    if (ownAudio.transcript.trim()) form.append("transcript", ownAudio.transcript.trim());
+    try {
+      const res = await fetch(`${apiBase}/api/v1/avatar/voice-to-avatar`, { method: "POST", body: form });
+      const body = await res.json();
+      if (!res.ok) throw new Error(detailOf(body, "The recording was refused"));
+      setOwnSpeech(body.speech);
+      setJob(body); // the same render job polling and result view as a synthesised clip
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSendingOwnAudio(false);
     }
   };
 
@@ -473,6 +505,45 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
           disabled={!canRender || rendering} onClick={handleRender}>
           {rendering ? "Rendering…" : "Render Avatar Video"}
         </button>
+        <button type="button" id="own-audio-toggle" className="link-button" style={{ ...small, marginTop: "8px", background: "none", border: "none", color: "#38bdf8", cursor: "pointer", padding: 0 }}
+          onClick={() => setShowOwnAudio((v) => !v)}>
+          {showOwnAudio ? "▾" : "▸"} …or use your own recording
+        </button>
+        {showOwnAudio && (
+          <form id="own-audio-form" onSubmit={handleOwnAudio} style={{ marginTop: "6px" }}>
+            <div style={small}>Your recording drives the mouth. Without a transcript the words are recognised automatically (Whisper).</div>
+            <label style={{ ...small, display: "block", marginTop: "6px" }}>
+              Recording
+              <input id="own-audio-file" type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac" required
+                onChange={(e) => setOwnAudio({ ...ownAudio, file: e.target.files?.[0] || null })} />
+            </label>
+            <label style={{ ...small, display: "block", marginTop: "6px" }}>
+              Whose voice is it, and on what basis?
+              <select id="own-audio-consent" style={field} required value={ownAudio.consentBasis}
+                onChange={(e) => setOwnAudio({ ...ownAudio, consentBasis: e.target.value })}>
+                <option value="">choose…</option>
+                <option value="speaker-recorded">my own voice, recorded by me</option>
+                <option value="written-consent">someone who consented in writing</option>
+                <option value="open-licence">an openly licensed recording</option>
+              </select>
+            </label>
+            <label style={{ ...small, display: "block", marginTop: "6px" }}>
+              Transcript (optional)
+              <textarea id="own-audio-transcript" style={{ ...field, minHeight: "48px" }} value={ownAudio.transcript}
+                onChange={(e) => setOwnAudio({ ...ownAudio, transcript: e.target.value })} />
+            </label>
+            <button type="submit" id="own-audio-btn" style={{ marginTop: "8px", width: "100%" }}
+              disabled={!selected?.usable || !ownAudio.file || !ownAudio.consentBasis || sendingOwnAudio || rendering}>
+              {sendingOwnAudio ? "Transcribing and aligning…" : "Render with my recording"}
+            </button>
+            {ownSpeech && (
+              <div id="own-audio-info" style={{ ...small, marginTop: "6px" }}>
+                {ownSpeech.transcriptSource === "asr" ? "Recognised" : "Transcript"} ({ownSpeech.language}, {ownSpeech.durationSeconds} s):
+                “{ownSpeech.transcript}”
+              </div>
+            )}
+          </form>
+        )}
         {alignmentMethod === "acoustic-fallback" && (
           <div style={{ ...small, color: "#fbbf24", marginTop: "6px" }}>
             ⚠ Phoneme timing for this clip was estimated, not measured (the forced aligner could not run).
