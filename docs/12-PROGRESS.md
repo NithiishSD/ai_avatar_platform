@@ -39,10 +39,11 @@ records what was verified live, with the real command and result.
 | T3.4 | Done | 0b43bca |
 | **M3 gate** | **Passed 8 Oct** (= roadmap Gate 3): `check.sh` 620 tests green, `npx playwright test` 11 passed, `npm run build` clean. Targets inside it: N-02 not met (62.0% English, 43–49% cross-lingual), N-09 met | |
 | T6.3 | Done | (this commit) |
-| T6.4 | Next | |
+| T6.4 | Done | (this commit) |
+| T6.5 | Next | |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
-T6.4 concurrency test (50+ jobs) -> T6.5 security review ->
+T6.5 security review ->
 M4 live: T4.1 streaming TTS (`WS /api/v1/live`) -> T4.2 live frames -> T4.3 live UI + E2E -> T4.4 latency ->
 M5: T5.1 audio watermark -> T5.2 video watermark + signed manifest -> T5.3 verify endpoint -> T5.4 audit trail ->
 T6.6 re-run benchmarks (incl. the unexplained blendshape offset -4, see the T7.1 entry) ->
@@ -906,3 +907,15 @@ Reading it honestly: N-03 is met for render jobs and **not** for synthesis in th
 but the default of 120 is barely above the target of 100, and a UI session rendering continuously
 polls ~60/min (D-42). Raw capacity of a trivial read is ~50k/min from one process, which says
 nothing about heavy endpoints. Not measured: Celery mode, multiple uvicorn workers, auth enabled.
+
+### 2026-10-08 — T6.4 concurrency test (N-08)
+
+`tests/test_queue_concurrency.py` (4 tests, thread-switch interval forced to 1 µs so a missing
+lock shows up) and `scripts/concurrency_test.py` (live). **Proved able to fail:** with the
+`enqueue` lock replaced by a bare block, `test_the_same_id_submitted_by_many_threads_is_accepted_exactly_once`
+fails ("the id was accepted more than once"); restored → 4 pass.
+Live, real server (limiter lifted), 60 distinct jobs from 60 threads released together plus 12
+repeats of used ids: 202 ×60, 409 ×12, all 60 COMPLETED, none failed or lost, 60 distinct MP4s;
+all submitted in 0.22 s, drained in 18.8 s (191 jobs/min on ~1.2 s clips; renders run one at a
+time by design). **N-08 met on the in-process queue.** Not run: Celery + Redis (no Redis here),
+so the Redis `SET NX` uniqueness path is covered by the existing fake-Redis unit tests only.

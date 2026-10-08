@@ -62,7 +62,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | N-05 | 8 Oct, SyncNet v2, 25 fps: **Wav2Lip** offset 0 on 3/3 clips, LSE-C 9.84 / 10.51 / 11.18, LSE-D 6.61 / 5.97 / 5.48; blendshape offset 0, LSE-C 3.98 / 4.23 / 5.55 (T2.3). The D-12 window percentage not yet computed (T6.6) | measured — % figure pending |
 | N-06 | T6.6 | gap |
 | N-07 | T4.4 | gap |
-| N-08 | T6.4 | gap |
+| N-08 | 8 Oct: `test_queue_concurrency.py` (64 threads, one id: accepted exactly once; 60 distinct ids each run once; 80-submission mixed burst; **proved able to fail: with the lock removed the same-id test fails**) and live `scripts/concurrency_test.py` on a real server: **60 distinct render jobs + 12 repeats released together: 60×202, 12×409, 60 COMPLETED, 0 lost / failed, 60 distinct video files**; burst accepted in 0.22 s (accept latency mean 136 ms, p95 206), drained in 18.8 s = 191 jobs/min for ~1.2 s clips on CPU, one worker | **met** (60 ≥ 50, in_memory queue; Celery/Redis not run) |
 | N-09 | 8 Oct, `jitter_metric.py` (static anchor landmarks per frame, % of inter-ocular distance): `demo` blendshape render mean **0.278%**, p95 0.758%, max 0.963% (target < 2%); negative control through the real detector: still photo 0.0%, 5 px shake 3.59%. Unit: `test_jitter_metric.py` | measured — met (upper bound, see method); also Wav2Lip 8 Oct: mean 0.354%, p95 0.834%, max 1.093% |
 | N-10 | not measurable here (no CUDA in sandbox); host measurement requested (M-04) | gap |
 | N-11 | needs a deployment (Q-07) | gap |
