@@ -23,7 +23,7 @@ records what was verified live, with the real command and result.
 | **M1 gate** | **Passed** (= roadmap Gate 1) | |
 | T2.1 | Done — measured, **N-02 not met** (62.0% vs 85%) | de4a36a |
 | T2.2 | Done | 54686a2 |
-| T2.3 | Verified on CPU — waiting on M-04 (peak VRAM on the host GPU, and a look at the video) | (this commit) |
+| T2.3 | Done — signed off by the owner (M-04, 8 Oct); follow-up I-01 (jaw, expression, head motion) | (this commit) |
 | T2.6 | Done — 4 usable engines; the 5th (XTTS-v2) waits on M-03 | 6b94d3c, b55e538, f5d85bc |
 | T2.4 | Done | (this commit) |
 | T2.5 | Done (visual check of the video still in M-04) | 13f696c |
@@ -1407,3 +1407,10 @@ rule; `scripts/check.sh` 866 tests OK. The owner re-runs the same command to mea
 30 s render 4.17 s unmarked / **7.2 s marked (N-20 not met with the mark)**; **60 s video end to end, marks on, 13.7 s (N-06 met on GPU)**; peak 3,288 MiB allocated,
 4,712 MiB reserved (**N-10 met**); Wav2Lip on CUDA offset 0, LSE-C 9.03, 3/3 seconds within one frame. README results table updated (GPU and CPU both stated).
 Remaining for N-20: the video mark costs 2.45 s per 24 s on this GPU on top of a 3.36 s render; not claimed. Remaining for M-04: the owner watching the Wav2Lip video.
+
+### 2026-10-08 — M-04 answered by the owner (T2.3 sign-off) and a new request
+
+Owner watched the GPU Wav2Lip render: mouth in sync with the words, no box or blur around the mouth, no flicker. **T2.3 signed off** (peak VRAM 4.7 GB reserved,
+met, from M-11). Feedback: only the lips move. Checked in the code: Wav2Lip repaints the lip region and the warp deliberately leaves out jaw shapes underneath it;
+neither engine has any head motion (`face_animation.py` has no head pose track); expression is limited to blinks and brows unless an emotion is chosen.
+**New item I-01 (owner's request): jaw/cheek movement, more expression and natural head motion** — to build after the remaining manual checks.
