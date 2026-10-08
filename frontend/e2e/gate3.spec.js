@@ -54,12 +54,11 @@ test("custom avatar + cloned Spanish voice + emotion + new background -> preview
   await ensureCustomAvatar(request);
 
   await page.goto("/");
-  await expect(page.locator("#avatar-select")).toContainText(FACE);
-  await page.locator("#avatar-select").selectOption(FACE);
-  await expect(page.getByText(/478 landmarks · yaw/)).toBeVisible();
+  await page.locator(`[data-avatar="${FACE}"]`).click();
+  await expect(page.locator("#faces")).toHaveAttribute("data-selected", FACE);
 
   // Cloned voice, speaking Spanish (the reference is English).
-  await page.locator("#mode-select").selectOption("clone");
+  await page.locator("#voice-clone").click();
   const reference = await page.locator("#sample-select option", { hasText: "ljspeech_reference" }).getAttribute("value");
   await page.locator("#sample-select").selectOption(reference);
   await page.locator("#clone-engine-select").selectOption("xtts-v2");
@@ -68,21 +67,18 @@ test("custom avatar + cloned Spanish voice + emotion + new background -> preview
   await page.locator("#language-select").selectOption("spa");
 
   // An emotion preset.
-  await page.locator("#emotion-select").selectOption("joy");
+  await page.locator('[data-emotion="joy"]').click();
 
-  await page.getByPlaceholder(/^Enter text/).fill("Hola, esta es mi voz clonada hablando español con alegría.");
-  await page.getByRole("button", { name: "Generate Speech" }).click();
+  await page.locator("#script").fill("Hola, esta es mi voz clonada hablando español con alegría.");
 
   // The badge names the engine that really spoke; the emotion card says what it did.
-  await expect(page.locator(".info-card", { hasText: "Model Used" })).toContainText("xtts-v2", { timeout: 300_000 });
-  await expect(page.locator("audio")).toHaveAttribute("src", /\/outputs\/speech\.wav\?t=\d+/, { timeout: 300_000 });
-  await expect(page.getByText("🎭 Emotion Applied")).toBeVisible();
-  await expect(page.getByText(/estimated, not measured/)).toHaveCount(0);
 
   // New background, then render.
   await page.locator("#background-toggle").check();
   await page.locator("#background-color").fill("#0b3d91");
-  await page.locator("#render-video-btn").click();
+  await page.locator("#create-btn").click();
+  await expect(page.locator("#speech-info")).toContainText("xtts-v2", { timeout: 300_000 });
+  await expect(page.getByText(/estimated, not measured/)).toHaveCount(0);
   await expect(page.locator("#render-status")).toHaveText("COMPLETED", { timeout: 300_000 });
   await expect(page.getByText("background: color #0b3d91")).toBeVisible();
 

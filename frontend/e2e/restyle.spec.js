@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 
 test("the restyle form offers the API's styles and shows its refusals", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("#avatar-select")).toHaveValue("demo");
+  await expect(page.locator("#faces")).toHaveAttribute("data-selected", "demo");
 
   await page.locator("#restyle-toggle").click();
   for (const style of ["realistic", "cartoon", "painting", "sketch"]) {

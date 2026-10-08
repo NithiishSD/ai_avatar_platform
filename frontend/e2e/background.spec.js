@@ -30,15 +30,13 @@ async function readFrame(video) {
 test("a chosen background colour is what the rendered video shows", async ({ page }) => {
   test.setTimeout(240_000);
   await page.goto("/");
-  await expect(page.locator("#avatar-select")).toHaveValue("demo");
+  await expect(page.locator("#faces")).toHaveAttribute("data-selected", "demo");
 
-  await page.getByPlaceholder(/^Enter text/).fill("A new background behind the speaker.");
-  await page.getByRole("button", { name: "Generate Speech" }).click();
-  await expect(page.locator("audio")).toHaveAttribute("src", /\/outputs\/speech\.wav\?t=\d+/, { timeout: 120_000 });
+  await page.locator("#script").fill("A new background behind the speaker.");
 
   await page.locator("#background-toggle").check();
   await page.locator("#background-color").fill("#00c800");
-  await page.locator("#render-video-btn").click();
+  await page.locator("#create-btn").click();
   await expect(page.locator("#render-status")).toHaveText("COMPLETED", { timeout: 120_000 });
   await expect(page.getByText("background: color #00c800")).toBeVisible();
 

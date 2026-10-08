@@ -1422,3 +1422,15 @@ Owner's live test: sync ok; **Interrupt stopped the picture but the audio played
 `live.spec.js` now waits for queued audio, interrupts, and requires `data-playing` 0 within 1 s. Verified against the running studio with a headless probe:
 2 queued chunks -> 0, `stop()` called twice. Microphone: same mouth shape for every word (loudness-only by design) -> I-02. Face looks still -> I-01 extended
 (visible blinks, small expressions, slight head and face motion). Owner also asked for a **UI redesign** (I-03): fewer settings, old development controls removed.
+
+### 2026-10-08 — UI redesign (owner's request I-03)
+
+New `App.jsx` (header + three tabs), `CreateVideo.jsx` (the one-click create flow), `FacePicker.jsx` (face cards + add / generate / restyle), new `App.css` (one set of
+colour tokens and classes), `index.css` reduced to a reset (it was Vite's starter template), `AvatarPanel.jsx` deleted. Page height 2,651 px -> about 1,070 px. D-58.
+
+Found while building: the language list items carry `iso3`, not `code` (first draft showed a bare "en" and duplicate React keys); a nested `<form>` (face forms inside the
+create form) is invalid HTML, so the create screen is a plain container with a click handler.
+
+Verified: one click in a headless browser against the running servers: COMPLETED in 18.3 s, "Voice: kokoro", watermark 128/128, manifest and download links, no console
+errors. `npm run lint` clean, `npm run build` clean. **E2E rewritten for the new layout: 17 passed (1.9 min)** — the landmark-overlay test became a face-picker test,
+the stale-language-lookup race moved to the language search (same guard), synthesis is checked through the create flow, and the live and verify tests open their tabs.

@@ -17,12 +17,10 @@ function silentWav() {
 test("a render is marked and signed, and the Verify panel judges files correctly", async ({ page }) => {
   test.setTimeout(420_000);
   await page.goto("/");
-  await expect(page.locator("#avatar-select")).toHaveValue("demo");
+  await expect(page.locator("#faces")).toHaveAttribute("data-selected", "demo");
 
-  await page.getByPlaceholder(/^Enter text/).fill("This video carries a hidden mark and a signed record.");
-  await page.getByRole("button", { name: "Generate Speech" }).click();
-  await expect(page.locator("audio")).toHaveAttribute("src", /\/outputs\/speech\.wav\?t=\d+/, { timeout: 120_000 });
-  await page.locator("#render-video-btn").click();
+  await page.locator("#script").fill("This video carries a hidden mark and a signed record.");
+  await page.locator("#create-btn").click();
   await expect(page.locator("#render-status")).toHaveText("COMPLETED", { timeout: 300_000 });
 
   // The studio says the video is marked, with how many tag bits read back from the encoded file.
@@ -40,6 +38,7 @@ test("a render is marked and signed, and the Verify panel judges files correctly
   expect(manifest.signature.algorithm).toBe("ed25519");
   expect(manifest.aiGenerated).toBe(true);
 
+  await page.locator("#tab-verify").click(); // the Verify panel is on its own tab
   const verify = async (files) => {
     await page.locator("#verify-file").setInputFiles(files.file);
     if (files.manifest) await page.locator("#verify-manifest").setInputFiles(files.manifest);

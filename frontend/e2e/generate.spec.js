@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 
 test("the generate form offers the API's fixed choices and shows its refusals", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("#avatar-select")).toHaveValue("demo");
+  await expect(page.locator("#faces")).toHaveAttribute("data-selected", "demo");
 
   await page.locator("#generate-face-toggle").click();
   // Options are served by GET /avatar/generate/options, not hardcoded.

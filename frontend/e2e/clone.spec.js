@@ -9,9 +9,9 @@ test("a cloned voice becomes a playable lip-synced avatar video", async ({ page 
   // generously so a slow machine fails on a real fault, not on the clock.
   test.setTimeout(420_000);
   await page.goto("/");
-  await expect(page.locator("#avatar-select")).toHaveValue("demo");
+  await expect(page.locator("#faces")).toHaveAttribute("data-selected", "demo");
 
-  await page.locator("#mode-select").selectOption("clone");
+  await page.locator("#voice-clone").click();
   await expect(page.locator("#sample-select")).toContainText("ljspeech_reference");
   // selectOption matches a label exactly and the label carries duration and
   // format, so look the option's value up by its text instead.
@@ -19,16 +19,14 @@ test("a cloned voice becomes a playable lip-synced avatar video", async ({ page 
   await page.locator("#sample-select").selectOption(reference);
   await page.locator("#clone-engine-select").selectOption("openvoice-v2");
 
-  await page.getByPlaceholder(/^Enter text/).fill("This is a cloned voice driving a talking avatar.");
-  await page.getByRole("button", { name: "Generate Speech" }).click();
+  await page.locator("#script").fill("This is a cloned voice driving a talking avatar.");
 
   // The badge names the engine that actually spoke: no silent fallback.
-  await expect(page.locator(".info-card", { hasText: "Model Used" })).toContainText("openvoice-v2", { timeout: 240_000 });
-  await expect(page.locator("audio")).toHaveAttribute("src", /\/outputs\/speech\.wav\?t=\d+/, { timeout: 240_000 });
-  await expect(page.getByText(/estimated, not measured/)).toHaveCount(0);
 
   // Render the clone onto the face.
-  await page.locator("#render-video-btn").click();
+  await page.locator("#create-btn").click();
+  await expect(page.locator("#speech-info")).toContainText("openvoice-v2", { timeout: 240_000 });
+  await expect(page.getByText(/estimated, not measured/)).toHaveCount(0);
   await expect(page.locator("#render-status")).toHaveText("COMPLETED", { timeout: 180_000 });
 
   // The video element decoded real frames, not just got a URL.

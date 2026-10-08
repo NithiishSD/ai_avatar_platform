@@ -10,6 +10,7 @@ test.use({
 test("speaking into the microphone streams audio and the avatar answers with frames", async ({ page }) => {
   test.setTimeout(180_000);
   await page.goto("/");
+  await page.locator("#tab-live").click(); // the live avatar is on its own tab
   await expect(page.locator("#live-avatar-select")).toHaveValue("demo");
   await page.locator("#live-start").click();
   await expect(page.locator("#live-panel")).toHaveAttribute("data-state", "ready", { timeout: 90_000 });
