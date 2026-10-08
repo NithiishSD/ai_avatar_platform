@@ -336,7 +336,9 @@ def resolve_voice_reference(raw: str) -> Path:
 
 def _scrub(text: str) -> str:
     """Take server file-system locations out of an error message before a client sees it."""
-    for location, label in ((str(project_root), "<project>"), (str(Path.home()), "~")):
+    import tempfile
+
+    for location, label in ((str(project_root), "<project>"), (str(Path.home()), "~"), (tempfile.gettempdir(), "<tmp>")):
         text = text.replace(location, label)
     return text
 
@@ -586,6 +588,80 @@ def get_audit_trail(event: Optional[str] = None, subject: Optional[str] = None, 
 def verify_audit_trail() -> dict:
     """Recompute the hash chain: is the trail intact? Reports the first entry where it breaks."""
     return audit_log.shared_audit().verify_chain()
+
+
+MAX_VERIFY_BYTES = 200 * 1024 * 1024
+MAX_MANIFEST_BYTES = 1024 * 1024
+
+
+async def _spool_upload(upload: UploadFile, limit: int, suffix: str = "") -> Path:
+    """Stream an upload to a temp file outside ``outputs/`` (which is served publicly), refusing one over ``limit``."""
+    import tempfile
+
+    handle = tempfile.NamedTemporaryFile(prefix="verify-", suffix=suffix, delete=False)
+    total = 0
+    try:
+        while chunk := await upload.read(1 << 20):
+            total += len(chunk)
+            if total > limit:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"the file is larger than the {limit // (1024 * 1024)} MB limit",
+                )
+            handle.write(chunk)
+    except BaseException:
+        handle.close()
+        Path(handle.name).unlink(missing_ok=True)
+        raise
+    handle.close()
+    return Path(handle.name)
+
+
+@app.post("/api/v1/provenance/verify")
+async def verify_provenance(
+    file: Optional[UploadFile] = File(None),
+    manifest_file: Optional[UploadFile] = File(None, alias="manifest"),
+    path: Optional[str] = Form(None),
+) -> dict:
+    """
+    Is this audio or video file one of ours?
+
+    Send the file (``file``) or name one under ``outputs/`` or ``inputs/`` (``path``), and optionally its
+    manifest (``manifest``; ``<video>.manifest.json`` beside a named file is used automatically). The
+    answer reports each kind of evidence separately (audio watermark, video watermark, signed manifest,
+    audit record) and a verdict with its meaning. A file with no marks gets ``no_evidence``, which
+    explicitly does not mean the content is real.
+    """
+    import json
+
+    import authenticity
+
+    if (file is None) == (path is None):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="send exactly one of: a 'file' upload, or a 'path' under outputs/")
+    document = None
+    if manifest_file is not None:
+        raw = await manifest_file.read(MAX_MANIFEST_BYTES + 1)
+        if len(raw) > MAX_MANIFEST_BYTES:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="the manifest is larger than 1 MB")
+        try:
+            document = json.loads(raw)
+        except ValueError as err:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="the manifest is not valid JSON") from err
+    spooled: Optional[Path] = None
+    try:
+        if file is not None:
+            spooled = await _spool_upload(file, MAX_VERIFY_BYTES, suffix=Path(file.filename or "").suffix[:12])
+            target = spooled
+        else:
+            target = resolve_audio_path(path or "")
+        try:
+            shown = Path((file.filename or "") if file is not None else target.name).name[:120] or None
+            return await run_in_threadpool(authenticity.verify_file, target, document, shown)
+        except ValueError as err:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=_scrub(str(err))) from err
+    finally:
+        if spooled is not None:
+            spooled.unlink(missing_ok=True)
 
 
 def _avatar_or_http(avatar_id: str, usable: bool = True):

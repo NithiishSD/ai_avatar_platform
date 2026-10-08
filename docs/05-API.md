@@ -36,8 +36,8 @@ Auth: `X-API-Key` header when `AUTH_ENABLED=true`. Rate limit: 429 with
 
 | Method | Path | Task |
 |---|---|---|
-| POST | `/api/v1/provenance/verify` | does a file carry our watermark / manifest | M5 |
 
+| POST | `/api/v1/provenance/verify` | is this audio/video file ours? multipart `file` (<= 200 MB) or form `path`, optional `manifest`; reports audio mark, video mark, manifest and audit record separately, and a verdict | 200 / 400 / 413 / 422 |
 | GET | `/api/v1/audit` | the consent audit trail, newest first; filters `event`, `subject`, `since`, `limit` | 200 / 400 |
 | GET | `/api/v1/audit/verify` | recompute the trail's hash chain | 200 |
 

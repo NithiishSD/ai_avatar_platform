@@ -47,7 +47,8 @@ records what was verified live, with the real command and result.
 | T4.3 | Done | (this commit) |
 | **M4 gate** | **Passed 8 Oct** (= roadmap Gate 4): `check.sh` 671 tests green, `npx playwright test` 13 passed, `npm run build` clean; N-07 met as defined (first audio → first frame 1.4–1.8 ms), text → first audio ~0.43 s warm | |
 | T5.2 | **Built and unit-tested; live robustness sweep and a person's look (M-07) still to do** | (this commit) |
-| T5.4 | Done | (this commit) |
+| T5.4 | Done | 43c9c87 |
+| T5.3 | Done | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
@@ -1100,3 +1101,32 @@ also rewrite the whole chain.
 Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, 762 tests OK (24 new); four plants each caught (hash ignoring the details,
 no missing-row check, refusals not recorded, no `face_use` on render). Not done: a live look at the trail after a real clone and
 render through the server (the entries are asserted in unit tests; T5.3's live run will read them back).
+
+### 2026-10-08 — T5.3 verify endpoint
+
+`backend/authenticity.py` + `POST /api/v1/provenance/verify`. Reports four kinds of evidence separately (audio watermark, video
+watermark, signed manifest, audit record) and a verdict with its meaning: `authentic_original`, `ours_modified`,
+`manifest_for_another_file`, `tampered_manifest`, `foreign_manifest`, `no_evidence`. A tampered manifest outranks a present
+watermark (the forgery is the finding); `no_evidence` says in words that it proves nothing about whether the content is real, and
+the response always carries what the checks cannot do (heavy compression/cropping/speed changes, other systems' fakes).
+Uploads stream to a temp file outside the publicly served `outputs/` with a 200 MB cap and are removed afterwards; the report
+uses the upload's own filename; errors never show the temp path.
+
+Found while testing: (1) an audio-only `.m4a` crashed the reader (`soundfile` cannot open AAC); ffmpeg decodes everything, so all
+audio goes through it now. (2) the 422 message leaked the server's temp path and temp filename (ffprobe quotes the path it was given);
+scrubbed and covered by a test. (3) my own test expected the exact bytes to be "modified": same bytes have the same hash, so they are
+authentic; the test was wrong, the product right.
+
+Verified: ruff clean, pyrefly 0 errors, **784 tests OK**; four plants caught (watermark outranking a tampered manifest, no-marks
+reported as authentic, temp file not removed, no upload limit). **Live, real models, 10 files** (CPU, 2.5-6.5 s each):
+exact render + manifest `authentic_original` (video 128/128 bits, audio 16/16); CRF 26 re-encode, a 1 s trim, a 320 px downscale
+all `ours_modified` (video mark 127, 127 and 124 of 128 bits; audio 16/16); the AAC soundtrack alone `ours_modified`; an old
+unmarked render `no_evidence`; someone else's video beside our manifest `manifest_for_another_file`; our video with an edited
+manifest `tampered_manifest`; our speech `ours_modified` (16/16), a real human recording `no_evidence` (6/16). **Through a real
+server:** render via the SDK, CRF 27 re-encode, upload: `ours_modified`, traced to job `t53-live` with 0 bit errors and "issued hash
+differs: a modified copy"; exact file + manifest and a path under `outputs/` with its sidecar: `authentic_original`;
+`GET /api/v1/audit` shows `manifest_issued` and `face_use`, `GET /api/v1/audit/verify` valid.
+
+Not done / not claimed: the audio-mark false-positive and video-mark false-positive rates over many unmarked videos (audio: 0/55 earlier;
+video: only the chance-level sweep and the unit-test arithmetic); detecting other systems' deepfakes (not built: R-46); a person using
+the endpoint from the UI (no UI for it yet).
