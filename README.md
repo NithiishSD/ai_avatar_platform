@@ -149,10 +149,11 @@ target was measured and missed.
 | Identity preservation > 90% | 96-97% (SFace) | met |
 | 50+ concurrent jobs, no loss | 60 jobs, none lost or duplicated | met |
 | First frame within 200 ms of first audio (live) | 1.4-1.8 ms; text to first audio ~0.43 s | met |
-| 60 s of video in < 30 s | 44 s unmarked, 134 s with watermarks | **not met** on CPU |
-| Speech < 2 s per 30 s of audio | 8.0 s unmarked, 13.1 s marked | **not met** on CPU |
+| 60 s of video in < 30 s | GPU: 13.7 s with watermarks (CPU: 134 s) | met on GPU |
+| Speech < 2 s per 30 s of audio | GPU: 0.94 s with the watermark (CPU: 13.1 s) | met on GPU |
+| 30 s video render < 5 s | GPU: 4.2 s unmarked, 7.2 s with the watermark | **not met** with the watermark |
 | 50+ appearance parameters | 10 verified | **not met** |
-| Peak VRAM < 6 GB | needs a GPU run | not measured |
+| Peak VRAM < 6 GB | 3.3 GB allocated, 4.7 GB reserved (RTX 4050 Laptop) | met |
 
 ## Limits
 

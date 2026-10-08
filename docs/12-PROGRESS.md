@@ -1400,3 +1400,10 @@ Part B (`scripts/gpu_benchmark.py`, JSON in `docs/benchmarks/gpu_run1_20261008.j
 34.7 s marked; 60 s end to end, marked, 75.8 s; peak VRAM 2,980 MiB allocated / 4,480 MiB reserved (N-10 met); Wav2Lip on CUDA: offset 0, LSE-C 8.92, 3/3 seconds within
 one frame, 7.6 s for 3.25 s. **The log showed `Loaded VideoSeal ... on cpu`:** both watermark models were hard-wired to the CPU. Fixed (D-57) with a test of the device
 rule; `scripts/check.sh` 866 tests OK. The owner re-runs the same command to measure the marked numbers on the GPU.
+
+### 2026-10-08 — owner's GPU run 2 (after D-57): three speed targets met on the GPU
+
+`docs/benchmarks/gpu_run2_20261008.json`. Log: `Loaded VideoSeal 1.0 (256-bit) on cuda`. Speech 0.74 s per 30 s unmarked / **0.94 s marked (N-17 met on GPU)**;
+30 s render 4.17 s unmarked / **7.2 s marked (N-20 not met with the mark)**; **60 s video end to end, marks on, 13.7 s (N-06 met on GPU)**; peak 3,288 MiB allocated,
+4,712 MiB reserved (**N-10 met**); Wav2Lip on CUDA offset 0, LSE-C 9.03, 3/3 seconds within one frame. README results table updated (GPU and CPU both stated).
+Remaining for N-20: the video mark costs 2.45 s per 24 s on this GPU on top of a 3.36 s render; not claimed. Remaining for M-04: the owner watching the Wav2Lip video.

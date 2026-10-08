@@ -1,0 +1,74 @@
+{
+  "date": "2026-10-08T17:11:30+00:00",
+  "environment": {
+    "torch": "2.5.1+cu121",
+    "torchCuda": "12.1",
+    "cudaAvailable": true,
+    "device": "NVIDIA GeForce RTX 4050 Laptop GPU",
+    "vramTotalMiB": 5772,
+    "nvidiaSmi": "Failed to initialize NVML: Driver/library version mismatch\nNVML library version: 595.99"
+  },
+  "note": "GPU run",
+  "speech_N17": {
+    "model": "kokoro",
+    "target": "< 2 s per 30 s of audio",
+    "unmarked": {
+      "audioSeconds": 24.2,
+      "seconds": 0.6,
+      "secondsPer30s": 0.74,
+      "peakAllocMiB": 2288,
+      "peakReservedMiB": 2540
+    },
+    "marked": {
+      "audioSeconds": 24.2,
+      "seconds": 0.76,
+      "secondsPer30s": 0.94,
+      "peakAllocMiB": 2292,
+      "peakReservedMiB": 2636
+    }
+  },
+  "render30_N20": {
+    "engine": "blendshape",
+    "target": "< 5 s per 30 s of video",
+    "unmarked": {
+      "videoSeconds": 24.2,
+      "renderSeconds": 3.36,
+      "secondsPer30s": 4.17,
+      "peakAllocMiB": 1849,
+      "peakReservedMiB": 3326
+    },
+    "marked": {
+      "videoSeconds": 24.2,
+      "renderSeconds": 5.81,
+      "secondsPer30s": 7.2,
+      "peakAllocMiB": 2618,
+      "peakReservedMiB": 3332
+    }
+  },
+  "video60_N06": {
+    "target": "< 30 s for 60 s of video",
+    "videoSeconds": 48.4,
+    "wallSeconds": 11.04,
+    "secondsPer60s": 13.68,
+    "watermarks": "on",
+    "peakAllocMiB": 3288,
+    "peakReservedMiB": 4710,
+    "nvidiaSmiAfter": "Failed to initialize NVML: Driver/library version mismatch\nNVML library version: 595.99"
+  },
+  "wav2lip_N10": {
+    "target": "peak VRAM < 6144 MiB",
+    "renderSeconds": 3.32,
+    "peakAllocMiB": 2068,
+    "peakReservedMiB": 4712,
+    "rendererPeakVramMiB": 2068,
+    "nvidiaSmiAfter": "Failed to initialize NVML: Driver/library version mismatch\nNVML library version: 595.99",
+    "video": "/home/nithiish/Projects/ai_avatar_plateform/outputs/renders/gpu-w2l.mp4",
+    "offsetFrames": 0,
+    "lseC": 9.027,
+    "secondsWithinOneFrame": {
+      "within": 3,
+      "of": 3,
+      "percent": 100.0
+    }
+  }
+}
