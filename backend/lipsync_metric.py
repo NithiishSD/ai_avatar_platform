@@ -74,9 +74,16 @@ class LipSyncScore:
     method: str = METHOD
     face_box: Tuple[int, int, int, int] = (0, 0, 0, 0)
     warnings: List[str] = field(default_factory=list)
+    # D-12: how many of the clip's 1-second blocks have their own best offset within +/-1 frame.
+    seconds_within_one: int = 0
+    seconds_scored: int = 0
 
     def to_dict(self) -> Dict[str, object]:
         return {
+            "secondsWithinOneFrame": {
+                "within": self.seconds_within_one, "of": self.seconds_scored,
+                "percent": round(100.0 * self.seconds_within_one / self.seconds_scored, 1) if self.seconds_scored else None,
+            },
             "lseC": round(self.lse_c, 3),
             "lseD": round(self.lse_d, 3),
             "offsetFrames": self.offset_frames,
@@ -177,6 +184,16 @@ def crop_padded(frame: np.ndarray, box: Tuple[int, int, int, int]) -> np.ndarray
     return out
 
 
+def shift_distances(lip: np.ndarray, audio: np.ndarray, max_shift: int = MAX_SHIFT) -> np.ndarray:
+    """(windows, 2*max_shift+1): distance between each lip window and the audio window that many windows away."""
+    windows = lip.shape[0]
+    padded = np.pad(audio, ((max_shift, max_shift), (0, 0)))
+    distances = np.empty((windows, 2 * max_shift + 1), dtype=np.float64)
+    for shift in range(2 * max_shift + 1):
+        distances[:, shift] = np.linalg.norm(lip - padded[shift : shift + windows], axis=1)
+    return distances
+
+
 def sync_scores(
     lip: np.ndarray, audio: np.ndarray, max_shift: int = MAX_SHIFT
 ) -> Tuple[float, float, int]:
@@ -188,14 +205,33 @@ def sync_scores(
     clip per shift. LSE-D is the smallest mean, LSE-C how far it sits below
     the median, and the offset where it occurred.
     """
-    windows = lip.shape[0]
-    padded = np.pad(audio, ((max_shift, max_shift), (0, 0)))
-    distances = np.empty((windows, 2 * max_shift + 1), dtype=np.float64)
-    for shift in range(2 * max_shift + 1):
-        distances[:, shift] = np.linalg.norm(lip - padded[shift : shift + windows], axis=1)
-    mean = distances.mean(axis=0)
+    mean = shift_distances(lip, audio, max_shift).mean(axis=0)
     best = int(mean.argmin())
     return float(np.median(mean) - mean[best]), float(mean[best]), max_shift - best
+
+
+def second_agreement(
+    lip: np.ndarray, audio: np.ndarray, block: int = SYNCNET_FPS, tolerance: int = 1, max_shift: int = MAX_SHIFT
+) -> Tuple[int, int]:
+    """
+    ``(blocks within tolerance, blocks scored)``: the D-12 "% of 1-second windows" figure.
+
+    The clip is cut into consecutive blocks of ``block`` windows (one window per frame, so 25 is one
+    second); each block gets its own best offset, and counts when that offset is within
+    ``tolerance`` frames of zero. A trailing block shorter than half a block is dropped: too few
+    windows to say anything. A block is noisier than the whole clip, so this figure is stricter
+    than the clip-level offset.
+    """
+    distances = shift_distances(lip, audio, max_shift)
+    within = scored = 0
+    for start in range(0, distances.shape[0], block):
+        rows = distances[start : start + block]
+        if rows.shape[0] < block // 2:
+            continue
+        scored += 1
+        if abs(max_shift - int(rows.mean(axis=0).argmin())) <= tolerance:
+            within += 1
+    return within, scored
 
 
 class SyncNetScorer:
@@ -360,6 +396,7 @@ def score_video(
     mfcc = mfcc_features(video_io.read_audio(video_path, SYNCNET_SAMPLE_RATE))
     lip, audio = scorer.embed(crops, mfcc)
     lse_c, lse_d, offset = sync_scores(lip, audio)
+    within, scored = second_agreement(lip, audio)
 
     warnings: List[str] = []
     if abs(offset) > 2:
@@ -375,4 +412,6 @@ def score_video(
         frames=count,
         face_box=tuple(int(v) for v in face_box),  # type: ignore[arg-type]
         warnings=warnings,
+        seconds_within_one=within,
+        seconds_scored=scored,
     )

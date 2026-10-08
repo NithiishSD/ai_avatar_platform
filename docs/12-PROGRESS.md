@@ -53,7 +53,8 @@ records what was verified live, with the real command and result.
 | T8.1 | Done | 5f7fc25 |
 | T8.10 | Done | 2cf36b4 |
 | T8.3 | Done | ea59957 |
-| T8.9 | Done | (this commit) |
+| T8.9 | Done | 3faafde |
+| T8.4 | Done — Wav2Lip meets the lip-sync percentage on 13 languages, blendshape does not; N-20 not met | (this commit) |
 | T8.7 | Built and measured; the Stable Diffusion words wait on M-08 | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
 
@@ -1231,3 +1232,18 @@ Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **821 tests OK** (12 
 refused at similarity 0.988 with `voice_refused` + `abuse_alert` in the trail; a different (synthetic) reference cloned; after DELETE the first reference cloned again.
 
 Not done / not claimed: detecting other systems' deepfakes; usage-rate alerts; whether 0.4 holds on a large population of real voices (35 synthetic-and-one-human pairs only).
+
+### 2026-10-08 — T8.4 lip sync over 13 languages, the D-12 percentage, 30 s render time
+
+`lipsync_metric.second_agreement` + `secondsWithinOneFrame` on every score: each 1-second block of a clip gets its own best offset, counted when within +/-1 frame
+(D-12). `scripts/measure_lipsync_languages.py` speaks one sentence per language (XTTS-v2 cloning the consented LJSpeech reference, or MMS-TTS), aligns, renders with
+both engines and scores. No new downloads: the MMS checkpoints already on disk (hin, spa, swh, tam) and XTTS-v2's built-in languages.
+
+Result (CPU, marks off, evidence `docs/benchmarks/lipsync_languages_20261008.json`): 13 languages, 14 clips, 0 failures. Both engines offset 0 on every clip.
+**Wav2Lip 100% of 1-second blocks within +/-1 frame; blendshape 62.9%** (25% Swahili, 30% English ... 100% Polish and MMS Hindi). The clip-level offset hides this: the
+blendshape mouth is weak (LSE-C ~3), so a 1-second block often has no clear best shift. Wav2Lip's score is partly circular (it was trained against SyncNet).
+
+N-20 (30 s video < 5 s): 26.8 s of video rendered in 4.96 s unmarked (~5.6 s per 30 s), 39.6 s with the marks; 27.7 s / 65.3 s for the whole command. Not met.
+
+Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **826 tests OK** (5 new; the tolerance off-by-one plant caught).
+Not done: more than one sentence per language; native-speaker judgement (R-53, not planned); Wav2Lip timing at 30 s.

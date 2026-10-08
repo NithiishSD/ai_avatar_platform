@@ -15,6 +15,7 @@ from lipsync_metric import (
     SyncNetScorer,
     SyncNetUnavailable,
     crop_padded,
+    second_agreement,
     sync_scores,
     syncnet_crop_box,
 )
@@ -47,6 +48,40 @@ class SyncScoreTests(unittest.TestCase):
 
     def test_search_window(self):
         self.assertEqual(MAX_SHIFT, 15)  # the published protocol; changing it changes the metric
+
+
+class SecondAgreementTests(unittest.TestCase):
+    """The D-12 figure: the share of 1-second blocks whose own best offset is within +/-1 frame."""
+
+    def test_in_sync_audio_gives_every_block(self):
+        lip = embeddings(125)
+        self.assertEqual(second_agreement(lip, lip.copy()), (5, 5))
+
+    def test_audio_late_by_three_frames_gives_no_block(self):
+        lip = embeddings(125)
+        self.assertEqual(second_agreement(lip, np.roll(lip, 3, axis=0))[0], 0)
+
+    def test_blocks_are_judged_separately(self):
+        lip = embeddings(100)
+        audio = lip.copy()
+        audio[50:] = np.roll(lip, 4, axis=0)[50:]   # the second half drifts four frames
+        within, scored = second_agreement(lip, audio)
+        self.assertEqual(scored, 4)
+        self.assertEqual(within, 2)
+
+    def test_a_short_trailing_block_is_dropped_and_tolerance_is_honoured(self):
+        lip = embeddings(60)                            # two full blocks + 10 windows (less than half a block)
+        self.assertEqual(second_agreement(lip, lip.copy())[1], 2)
+        late = np.roll(lip, 1, axis=0)                   # one frame off: inside the default tolerance of 1
+        self.assertEqual(second_agreement(lip, late)[0], 2)
+        self.assertEqual(second_agreement(lip, late, tolerance=0)[0], 0)
+
+    def test_score_reports_the_percentage(self):
+        payload = LipSyncScore(lse_c=1, lse_d=1, offset_frames=0, windows=100, frames=105,
+                               seconds_within_one=3, seconds_scored=4).to_dict()
+        self.assertEqual(payload["secondsWithinOneFrame"], {"within": 3, "of": 4, "percent": 75.0})
+        empty = LipSyncScore(lse_c=1, lse_d=1, offset_frames=0, windows=1, frames=1).to_dict()
+        self.assertIsNone(empty["secondsWithinOneFrame"]["percent"])
 
 
 class CropTests(unittest.TestCase):
