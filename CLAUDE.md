@@ -23,6 +23,7 @@ pushes to it except when the owner asks for a release (see Git rules).
 | **Where work stopped — read first when resuming** | `docs/12-PROGRESS.md` |
 | Things only the owner can answer, and manual checks for the owner | `docs/13-OPEN-QUESTIONS.md` |
 | Dated history before this plan existed | `docs/context.md` |
+| **The development journey**: the solution, the problems met and how each was solved, the models, the lessons | `docs/15-DEVELOPMENT-JOURNEY.md` |
 
 ---
 
