@@ -1144,3 +1144,10 @@ match") and `no_evidence` for silent audio, with "does NOT show the content is r
 `scripts/check.sh` 784 tests OK, ruff clean, pyrefly 0 errors; `npm run lint` clean, `npm run build` clean.
 
 Not done: a person looking at how the panel reads (add to M-07's visual pass); the full Playwright suite for the M5 gate has not been run yet.
+
+### 2026-10-08 — M5 gate run (not passed: two manual checks open)
+
+`scripts/check.sh all`: ruff clean, pyrefly 0 errors, 784 tests OK, frontend lint and build clean, `npx playwright test` **14 passed** (1.9 min).
+An earlier run showed `live.spec.js` failing after 17 minutes against a 240 s timeout while the machine was stalled; the spec alone passed
+(2 passed, 27 s) and the full rerun passed, so this was the stall, not the code. The gate is **not** declared passed: T5.1 waits on M-06
+(listening) and T5.2 on M-07 (looking at the marked video; the Verify panel and the watermark line in the studio are part of that look).
