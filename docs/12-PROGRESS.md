@@ -38,10 +38,11 @@ records what was verified live, with the real command and result.
 | T3.3 | Done — voice carries over only partly (43–49%) | 3b43262 |
 | T3.4 | Done | 0b43bca |
 | **M3 gate** | **Passed 8 Oct** (= roadmap Gate 3): `check.sh` 620 tests green, `npx playwright test` 11 passed, `npm run build` clean. Targets inside it: N-02 not met (62.0% English, 43–49% cross-lingual), N-09 met | |
-| T6.3 | Next | |
+| T6.3 | Done | (this commit) |
+| T6.4 | Next | |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
-T6.3 load test -> T6.4 concurrency test (50+ jobs) -> T6.5 security review ->
+T6.4 concurrency test (50+ jobs) -> T6.5 security review ->
 M4 live: T4.1 streaming TTS (`WS /api/v1/live`) -> T4.2 live frames -> T4.3 live UI + E2E -> T4.4 latency ->
 M5: T5.1 audio watermark -> T5.2 video watermark + signed manifest -> T5.3 verify endpoint -> T5.4 audit trail ->
 T6.6 re-run benchmarks (incl. the unexplained blendshape offset -4, see the T7.1 entry) ->
@@ -887,3 +888,21 @@ frame. New regression test (3.25 s at 25 fps; fails with the old line, passes wi
 Live, same command on CPU: 82 frames, video 3.28 s, audio 3.25 s (uncut), no warning, offset 0,
 LSE-C 9.301, LSE-D 6.545; **jitter on the Wav2Lip render: mean 0.354%, p95 0.834%, max 1.093%**
 (< 2%, closes the "Wav2Lip not measured" gap in T3.5). `check.sh`: 621 tests OK.
+
+### 2026-10-08 — T6.3 load test against a running server
+
+`scripts/load_test.py` (stdlib, keep-alive connections, writes `outputs/benchmarks/load-test-*.json`).
+Real uvicorn on this CPU box, queue `in_memory`. Run A, default limiter (120 rpm, burst 30):
+- render-job initiation, 20 jobs: all **202**, mean **4.5 ms**, p50 3.1, p95 6.6, max 20.8 ms.
+- synthesis POST: 7,211 ms first (cold), 287 and 296 ms warm. In `in_memory` mode the
+  synthesis task runs inside the request, so this is the whole synthesis, not an acknowledgement.
+- capacity, 8 clients, 30 s: **138 requests/min accepted**, 79,785 refused 429 (the limiter
+  answers a refusal quickly: 160k attempts/min), accepted p50 10.4 ms, p99 14.4 ms.
+Run B, limiter lifted (`RATE_LIMIT_RPM=10000000`), 20 s each: 1 client 56,033 /min, 8 clients
+48,422, 32 clients 46,542; latency p50/p95/p99 at 32 clients 36/105/116 ms.
+
+Reading it honestly: N-03 is met for render jobs and **not** for synthesis in this queue mode
+(N-03 for synthesis needs Celery + Redis, which was not run). N-04 is met by policy (138/min)
+but the default of 120 is barely above the target of 100, and a UI session rendering continuously
+polls ~60/min (D-42). Raw capacity of a trivial read is ~50k/min from one process, which says
+nothing about heavy endpoints. Not measured: Celery mode, multiple uvicorn workers, auth enabled.
