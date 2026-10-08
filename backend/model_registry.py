@@ -60,6 +60,8 @@ WAV2LIP_CHECKPOINTS = (WAV2LIP_DIR / "wav2lip_gan.pth", WAV2LIP_DIR / "wav2lip.p
 
 SYNCNET_MODEL = LOCAL_MODEL_DIR / "syncnet" / "syncnet_v2.model"
 SFACE_MODEL = LOCAL_MODEL_DIR / "sface" / "face_recognition_sface_2021dec.onnx"
+# Real-ESRGAN compact general model: enlarges a small photo for 1080p renders (super_resolution.py).
+SUPER_RESOLUTION_MODEL = LOCAL_MODEL_DIR / "realesrgan" / "realesr-general-x4v3.pth"
 
 # Overridable so a team with more VRAM, or a preferred checkpoint, can swap
 # the generator without touching code. Must be a Stable Diffusion 1.x layout.
@@ -581,6 +583,12 @@ def audit_vision_weights() -> List[ModelWeightStatus]:
             "SFace (identity preservation metric)",
             SFACE_MODEL,
             min_bytes=10_000_000,
+        ),
+        check_local_file(
+            "realesrgan",
+            "Real-ESRGAN general x4v3 (super-resolution for 1080p renders)",
+            SUPER_RESOLUTION_MODEL,
+            min_bytes=4_000_000,
         ),
         sd,
     ]

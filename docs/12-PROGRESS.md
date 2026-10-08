@@ -55,7 +55,8 @@ records what was verified live, with the real command and result.
 | T8.3 | Done | ea59957 |
 | T8.9 | Done | 3faafde |
 | T8.5 | Done | b4643a7 |
-| T8.2 | Done | (this commit) |
+| T8.2 | Done | 0a74a50 |
+| T8.8 | Done — 1080p met by super-resolving the photo; a person's look waits on M-09 | (this commit) |
 | T8.4 | Done — Wav2Lip meets the lip-sync percentage on 13 languages, blendshape does not; N-20 not met | 0eb03a9 |
 | T8.7 | Built and measured; the Stable Diffusion words wait on M-08 | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
@@ -1277,3 +1278,16 @@ correctly, rendered, video mark 128/128, manifest `origin: supplied`, SyncNet of
 `npm run lint` and `npm run build` clean.
 
 Not done: Whisper's own word timestamps (a second alignment pass is used instead); a person checking the UI form (add to the M-07 look).
+
+### 2026-10-08 — T8.8 super-resolution for 1080p renders
+
+`backend/super_resolution.py` (Real-ESRGAN compact x4 network defined in the file, weights via `fetch_vision_models.py --only realesrgan`, SHA-256 pinned, BSD-3) and
+`render_engine._maybe_super_resolve`: for `1080P_HQ`, a photo that would give less than 720p is enlarged once, in 256 px tiles, before animation; the result field
+`superResolution`, the manifest and a warning say the detail is synthesised. D-54. `parameters.py`: `renderQuality` now measured working.
+
+Found while building: the first rule (enlarge any photo smaller than the box) made a unit test run the real network on a 1024 px photo for a 5% gain; the rule is now "below 720p".
+
+Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **849 tests OK** (7 new, plant caught). Live, CPU: `demo` (512 px) at 1080P_HQ -> 1080x1080, SR 1.9 s, render 4.3 s
+unmarked / 16.2 s marked for 5.15 s of video, mark 128/128, identity 96.2%, LPIPS 0.297 vs the photo (smoothing). A person's look is M-09.
+
+Not done: lighting correction (R-44 second half); 4K; per-frame enhancement of Wav2Lip's mouth region.

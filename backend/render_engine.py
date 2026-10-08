@@ -182,6 +182,8 @@ class RenderResult:
     unknown_visemes: Dict[str, int] = field(default_factory=dict)
     peak_vram_mb: Optional[int] = None
     background: Optional[str] = None
+    # Set when a small photo was enlarged with super-resolution to reach the 1080P_HQ box (T8.8).
+    super_resolution: Optional[Dict[str, object]] = None
     # What the invisible video watermark did and where the signed manifest is (both always present).
     watermark: Optional[Dict[str, object]] = None
     manifest: Optional[Dict[str, object]] = None
@@ -212,6 +214,7 @@ class RenderResult:
             "unknownVisemes": self.unknown_visemes,
             "peakVramMb": self.peak_vram_mb,
             "background": self.background,
+            "superResolution": self.super_resolution,
             "watermark": self.watermark,
             "manifest": self.manifest,
             "warnings": self.warnings,
@@ -379,6 +382,43 @@ def _issue_manifest(manifest_id: bytes, video: Path, audio: Path, avatar: Dict[s
     return {"manifestId": manifest_id.hex(), "path": str(path), "url": url, "videoSha256": document["content"]["videoSha256"]}
 
 
+MIN_HD_SIDE = 720  # a 1080P_HQ render below this short side gets the photo super-resolved first
+
+
+def _maybe_super_resolve(
+    image: np.ndarray, quality: RenderQuality, warnings: List[str]
+) -> Tuple[np.ndarray, Optional[Dict[str, object]]]:
+    """
+    For 1080P_HQ, enlarge a photo that would give less than 720p with super-resolution (once, before animation).
+
+    A photo is still never stretched by plain resizing: either the network enlarges it, and the
+    result says the added detail is synthesised, or the video stays at the photo's size and a
+    warning says why and how to fix it. PREVIEW never enlarges.
+    """
+    import super_resolution
+
+    height, width = image.shape[:2]
+    # Only photos that would otherwise give less than 720p are enlarged: lifting a 1024 px photo to
+    # 1080 is a 5% gain for a 4x network pass, and not worth inventing detail for.
+    if quality != RenderQuality.HD_1080P or min(output_size(width, height, quality)) >= MIN_HD_SIDE:
+        return image, None
+    resolver = super_resolution.shared_resolver()
+    if not resolver.available:
+        warnings.append(
+            f"1080P_HQ was asked for but the photo is {width}x{height} and the super-resolution weights are missing, "
+            "so the video stays at the photo's size. Fetch them with: "
+            "PYTHONPATH=backend backend/.conda/bin/python scripts/fetch_vision_models.py --only realesrgan"
+        )
+        return image, None
+    started = time.perf_counter()
+    enlarged = resolver.upscale(image)
+    warnings.append("the photo was enlarged with super-resolution; the added fine detail is synthesised, not recovered")
+    return enlarged, {
+        "method": super_resolution.METHOD, "photo": [width, height], "enlarged": [enlarged.shape[1], enlarged.shape[0]],
+        "seconds": round(time.perf_counter() - started, 2),
+    }
+
+
 def _stamp_label(frame: np.ndarray) -> np.ndarray:
     """Burn the disclosure label into the bottom-left corner (task FD-03)."""
     import cv2
@@ -420,6 +460,7 @@ def render_job(
     warnings: List[str] = []
 
     image = store.load_image(job.avatar_id)
+    image, super_res = _maybe_super_resolve(image, job.render_quality, warnings)
     width, height = output_size(image.shape[1], image.shape[0], job.render_quality)
     if (width, height) != (image.shape[1], image.shape[0]):
         image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
@@ -532,6 +573,7 @@ def render_job(
             "width": width, "height": height, "fps": job.target_fps, "frameCount": total,
             "durationSeconds": round(duration, 3), "engine": engine_name, "quality": job.render_quality.value,
             "background": _describe_background(job.background), "label": bool(label),
+            "superResolution": super_res,
         },
     )
 
@@ -564,6 +606,7 @@ def render_job(
         unknown_visemes=track.unknown_visemes,
         peak_vram_mb=peak_vram,
         background=_describe_background(job.background),
+        super_resolution=super_res,
         watermark=watermark_result,
         manifest=manifest_info,
         warnings=warnings,

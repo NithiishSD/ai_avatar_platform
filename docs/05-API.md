@@ -25,7 +25,7 @@ Auth: `X-API-Key` header when `AUTH_ENABLED=true`. Rate limit: 429 with
 | GET | `/api/v1/avatar/faces/{avatarId}/image` | the image | 200 |
 | DELETE | `/api/v1/avatar/faces/{avatarId}` | remove a face | 204 |
 | POST | `/api/v1/avatar/face/analyze` | landmarks, pose, blendshapes, quality | 200 |
-| POST | `/api/v1/avatar/render-job` | queue a render (`AvatarRenderJob`, `?engine=`) | 202 |
+| POST | `/api/v1/avatar/render-job` | queue a render (`AvatarRenderJob`, `?engine=`); with `renderQuality: 1080P_HQ` a photo that would give less than 720p is first enlarged by Real-ESRGAN and the result's `superResolution` says so | 202 |
 | GET | `/api/v1/avatar/render-job/{jobId}` | poll a render | 200 / 404 |
 | POST | `/api/v1/avatar/render-job/{jobId}/lipsync-score` | SyncNet score of the result | 200 |
 | POST | `/api/v1/avatar/render-batch` | queue up to 50 render jobs (`{"jobs": [AvatarRenderJob, ...]}`, `?engine=`); each item is checked on its own; returns `batchId` and, per item, `accepted` or `httpStatus` + `detail`; over 50 or empty is a 422 | 202 |

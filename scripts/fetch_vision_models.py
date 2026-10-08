@@ -159,6 +159,15 @@ def _fetch_sface() -> None:
     )
 
 
+def _fetch_realesrgan() -> None:
+    download_file(
+        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth",
+        model_registry.SUPER_RESOLUTION_MODEL,
+        min_bytes=4_000_000,
+        sha256="8dc7edb9ac80ccdc30c3a5dca6616509367f05fbc184ad95b731f05bece96292",
+    )
+
+
 def _fetch_wav2lip() -> None:
     download_file(
         "https://huggingface.co/numz/wav2lip_studio/resolve/main/Wav2lip/wav2lip_gan.pth",
@@ -250,6 +259,15 @@ SPECS: List[VisionSpec] = [
         licence="Apache-2.0 (OpenCV Zoo)",
         note="identity-preservation score for stylised avatars",
         fetch=_fetch_sface,
+    ),
+    VisionSpec(
+        key="realesrgan",
+        name="Real-ESRGAN general x4v3",
+        approx_gb=0.005,
+        default=True,
+        licence="BSD-3-Clause (xinntao/Real-ESRGAN)",
+        note="enlarges a small photo once so a 1080P_HQ render can reach 1080p",
+        fetch=_fetch_realesrgan,
     ),
     VisionSpec(
         key="avatar-diffusion",
