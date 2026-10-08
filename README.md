@@ -137,8 +137,9 @@ Before exposing it, set in `.env`:
 
 ## Measured results
 
-Measured on a laptop CPU (no GPU visible to the test machine), October 2026. "Not met" means the
-target was measured and missed.
+Measured in October 2026 on a laptop: rows marked "GPU" on its RTX 4050 Laptop GPU (6 GB) with
+`scripts/gpu_benchmark.py`, the rest on its CPU. Watermarks are on unless a row says otherwise.
+"Not met" means the target was measured and missed.
 
 | Target | Result | |
 |---|---|---|
