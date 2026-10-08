@@ -58,6 +58,7 @@ records what was verified live, with the real command and result.
 | T8.2 | Done | 0a74a50 |
 | T8.8 | Done — 1080p met by super-resolving the photo; a person's look waits on M-09 | 3980a94 |
 | T8.6 | Done — built and measured; a person's look waits on M-10 | 79dd00f |
+| T7.4 | **Partial, paused by the owner**: 48 files documented (comment-only, proven); 17 files still below 35% | (this commit) |
 | T8.4 | Done — Wav2Lip meets the lip-sync percentage on 13 languages, blendshape does not; N-20 not met | 0eb03a9 |
 | T8.7 | Built and measured; the Stable Diffusion words wait on M-08 | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
@@ -1325,3 +1326,17 @@ The panel says the mouth follows loudness and is an estimate. Nothing is played 
 
 Verified: `npm run lint`, `npm run build` clean; E2E `live-mic.spec.js` (Chromium's fake capture device, a periodic beep) passed: > 60 frames for streamed audio, `done`
 labelled `audio-energy`, no error; `live.spec.js` 2 passed alongside. A person speaking into a real microphone is part of M-05's live look.
+
+### 2026-10-08 — T7.4 documentation pass: partial, paused by the owner
+
+Teaching comments and docstrings added to 48 application files (backend, scripts, SDK) by parallel workers on disjoint file sets, then paused on the owner's
+instruction and committed as they stood. **Proof that no code changed:** `scripts/check_comment_only.py` (new: compares each file's syntax tree with `HEAD`
+after removing docstrings) -> "48 of 48 files are comment/docstring-only changes"; `ruff` clean; `scripts/check.sh` 865 tests OK. 47 of the 48 files are now
+at >= 35% explanation density; `fetch_vision_models.py` 34%. `docs/14-CODE-GUIDE.md` written (one request followed module by module + a concepts index).
+
+**Still below 35%, not reached:** app.py 17%, voice_engine 29%, face_engine 22%, alignment_engine 21%, lipsync_metric 21%, wav2lip_engine 24%, mms_engine 24%,
+bark_engine 29%, watermark_engine 27%, render_avatar.py 12%, check_comment_only.py 26%, and the frontend (App.jsx 6%, AvatarPanel.jsx 5%, LivePanel.jsx 12%,
+ProvenancePanel.jsx 9%, main.jsx 0%). The JSX check is "the production bundle keeps the same content hashes" (`index-cBSS5Ccu.js`, `index-ADfQLI06.css`).
+
+Found by a worker while reading `scripts/live_client.py`: the per-frame RMS `... or 0.0` never applies (the mean of an empty slice is NaN, which is truthy); harmless
+today because every frame window has samples, but the guard does nothing. Left as is (comment-only pass).

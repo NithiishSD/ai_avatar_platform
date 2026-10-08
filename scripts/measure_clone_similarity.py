@@ -19,6 +19,27 @@ refuses a synthetic one. Results are written to ``outputs/benchmarks/``.
 
     PYTHONPATH=backend backend/.conda/bin/python scripts/measure_clone_similarity.py \\
         --engine xtts-v2 --reference inputs/ljspeech_reference.wav
+
+Add ``--language es`` (or ``fr``, ``hi``) for the cross-lingual case (R-04). The
+report file is ``clone-similarity-<engine>-<language>-<timestamp>.json``; it
+holds the mean, spread, ceiling, whether the 85% and 90% N-02 targets were met,
+and one row per sentence. The code below computes and stores the ceiling; the
+base-voice anchor is not part of this script's output.
+
+Concepts used here, explained once:
+
+**Speaker embedding.** A neural network (here ECAPA-TDNN) turns a clip into a
+fixed-length vector that describes *who* is speaking, not *what* is said. Two
+clips of the same voice give vectors pointing the same way.
+
+**Cosine similarity.** The cosine of the angle between two vectors: 1.0 means
+the same direction, 0 means unrelated. It ignores vector length, so a louder or
+longer clip does not score higher just for that. The report shows it as a
+percentage.
+
+**Held-out audio.** Comparing a clone with the very sample it was cloned from
+would reward copying. Scoring against audio the cloner never saw measures
+whether it learnt the voice.
 """
 
 from __future__ import annotations
@@ -31,7 +52,10 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
+# The repository root; every path argument is resolved against it.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+# Six phonetically varied English sentences. The score is averaged over them so
+# one easy or hard sentence does not decide the result.
 SENTENCES = [
     "The quick brown fox jumps over the lazy dog near the river bank.",
     "She sells sea shells by the sea shore every single summer morning.",
@@ -73,19 +97,34 @@ SENTENCES_BY_LANGUAGE = {
 
 
 def main(argv: List[str] | None = None) -> int:
+    """
+    Run the measurement and write the report; return the process exit code.
+
+    ``argv`` defaults to the real command line. Passing a list instead lets a
+    test call ``main([...])`` without spawning a process.
+    """
+    # argparse turns the declarations below into parsing, validation and --help.
+    # description=__doc__ shows the module docstring; RawDescriptionHelpFormatter
+    # keeps its line breaks instead of re-wrapping them.
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    # choices= makes argparse reject any other engine name with a usage error.
     parser.add_argument("--engine", required=True, choices=["xtts-v2", "openvoice-v2"])
     parser.add_argument("--reference", default="inputs/ljspeech_reference.wav")
+    # 30 s of prompt is the default sample handed to the cloner.
     parser.add_argument("--prompt-seconds", type=float, default=30.0)
     parser.add_argument("--language", default="en")
+    # None lets the voice engine choose (GPU when there is one).
     parser.add_argument("--device", default=None)
     args = parser.parse_args(argv)
+    # Checked before the heavy imports below, so a typo fails in milliseconds.
     if args.language not in SENTENCES_BY_LANGUAGE:
         print(f"error: no test sentences for {args.language!r}; add them to SENTENCES_BY_LANGUAGE "
               f"(have {sorted(SENTENCES_BY_LANGUAGE)})", file=sys.stderr)
         return 1
     sentences = SENTENCES_BY_LANGUAGE[args.language]
 
+    # Imported here, not at the top: these pull in torch and the backend, which
+    # is slow, and the argument checks above should not pay for that.
     import numpy as np
     import soundfile as sf
 
@@ -94,13 +133,17 @@ def main(argv: List[str] | None = None) -> int:
     from voice_engine import VoiceEngineRouter
 
     reference = (PROJECT_ROOT / args.reference).resolve()
+    # The provenance sidecar says whether this clip is a consented human
+    # recording. Anything else would not count as evidence for N-02.
     described = provenance.describe(reference)
     if not described["admissible"]:
         print(f"error: reference is not admissible evidence: {described['reason']}", file=sys.stderr)
         return 1
 
     audio, rate = sf.read(str(reference), dtype="float32")
+    # Seconds -> sample index: the split point between prompt and held-out audio.
     cut = int(args.prompt_seconds * rate)
+    # At least 5 s must remain, or the held-out embedding is too short to compare.
     if len(audio) < cut + 5 * rate:
         print("error: the reference must be at least prompt-seconds + 5 s long to leave a held-out part", file=sys.stderr)
         return 1
@@ -111,6 +154,8 @@ def main(argv: List[str] | None = None) -> int:
     work = PROJECT_ROOT / "inputs" / ".measure"
     work.mkdir(exist_ok=True)
     prompt_path, held_path = work / "prompt.wav", work / "heldout.wav"
+    # try/finally: the working copies are deleted even if a model fails midway,
+    # so no stray copy of a voice is left in inputs/.
     try:
         sf.write(str(prompt_path), audio[:cut], rate)
         sf.write(str(held_path), audio[cut:], rate)
@@ -119,27 +164,36 @@ def main(argv: List[str] | None = None) -> int:
 
         router = VoiceEngineRouter(device=args.device)
         auditor = SpeechQualityAuditor(device=args.device)
+        # The ceiling: real speech against real speech of the same person.
         ceiling = auditor.speaker_similarity(held_path, prompt_path)
 
         rows: List[Dict[str, Any]] = []
         for index, sentence in enumerate(sentences):
             started = time.perf_counter()
+            # return_alignment=False skips phoneme timing, which this
+            # measurement does not use.
             result = router.synthesize(
                 sentence, mode="clone", speaker_wav=str(prompt_path), language=args.language,
                 output_filename=f"benchmark/sim-{args.engine}-{args.language}-{index}.wav", clone_engine=args.engine,
                 return_alignment=False,
             )
+            # Clone vs held-out, never clone vs prompt (see the docstring).
             report = auditor.speaker_similarity(held_path, PROJECT_ROOT / result.output_path)
+            # result.model is recorded per row: if the router fell back to
+            # another engine, the row shows it instead of hiding it.
             rows.append({
                 "sentence": sentence, "model": result.model, "seconds": round(time.perf_counter() - started, 1),
                 "audioSeconds": round(result.duration_seconds, 2), "similarityPercent": round(100 * (report.similarity or 0), 1),
             })
             print(f"  {rows[-1]['similarityPercent']:5.1f}%  {result.model}  {sentence[:50]}", flush=True)
     finally:
+        # ignore_errors: cleanup must not mask the original exception.
         shutil.rmtree(work, ignore_errors=True)
 
     values = np.array([r["similarityPercent"] for r in rows])
     summary = {
+        # The method string names the embedding model the auditor actually used
+        # (ECAPA-TDNN, or a labelled fallback) plus how the clone was scored.
         "engine": args.engine,
         "language": args.language,
         "method": ceiling.method + "; clone of the first "
@@ -154,6 +208,8 @@ def main(argv: List[str] | None = None) -> int:
         "minPercent": float(values.min()),
         "maxPercent": float(values.max()),
         "ceilingPercent": round(100 * (ceiling.similarity or 0), 1),
+        # N-02: above 85% at Milestone 1, above 90% as the final target. bool()
+        # turns numpy's bool_ into a plain bool that json can write.
         "target85Met": bool(values.mean() >= 85),
         "target90Met": bool(values.mean() >= 90),
         "rows": rows,
@@ -162,6 +218,7 @@ def main(argv: List[str] | None = None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     destination = out / f"clone-similarity-{args.engine}-{args.language}-{time.strftime('%Y%m%d-%H%M%S')}.json"
     destination.write_text(json.dumps(summary, indent=2))
+    # The per-sentence rows were printed as they ran; only the summary repeats.
     print(json.dumps({k: v for k, v in summary.items() if k != "rows"}, indent=2))
     print(f"written: {destination}")
     return 0

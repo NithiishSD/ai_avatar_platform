@@ -18,6 +18,17 @@ it was chosen from measured same-speaker / different-speaker / clone similaritie
 
 What this cannot do: it only knows the voices someone registered; it does not detect a clone of
 anyone else, and a determined user can change a voice enough to slip under a threshold.
+
+Concepts, explained once:
+
+* A **speaker embedding** is a fixed-length vector that a speaker-recognition
+  network (here ECAPA-TDNN) produces from a recording. It describes *how the
+  voice sounds*, not what was said, so two clips of the same person land close
+  together and different people land further apart. It cannot be turned back
+  into audio.
+* **Cosine similarity** compares two vectors by the angle between them: 1.0
+  means the same direction, 0 means unrelated. Loudness and clip length change
+  a vector's length, not its direction, which is why the angle is used.
 """
 
 from __future__ import annotations
@@ -34,19 +45,26 @@ import numpy as np
 import audit_log
 from job_store import JobStore
 
+# The ``kind`` these records use in the shared SQLite JobStore.
 KIND = "protected_voice"
+# Measured (D-51 in docs/11-DECISIONS.md): above the highest different-voice
+# pair seen (0.308) and below the weakest English clone (0.55).
 DEFAULT_THRESHOLD = 0.4
 
 
 def threshold() -> float:
+    """The match threshold: ``$PROTECTED_VOICE_THRESHOLD`` or ``DEFAULT_THRESHOLD``."""
     return float(os.getenv("PROTECTED_VOICE_THRESHOLD", DEFAULT_THRESHOLD))
 
 
 def cosine(a: np.ndarray, b: np.ndarray) -> float:
+    """Cosine similarity of two vectors, in [-1, 1]."""
+    # The tiny epsilon keeps an all-zero vector from dividing by zero.
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12))
 
 
 class ProtectedVoices:
+    """The registered voices, stored as embeddings in SQLite, and the checks against them."""
     def __init__(self, store: Optional[JobStore] = None, embed: Any = None) -> None:
         self._store = store or JobStore()
         # ``embed(path) -> np.ndarray``; injected so tests do not load ECAPA, and shared with the auditor in the app.
@@ -54,6 +72,7 @@ class ProtectedVoices:
         self._lock = threading.Lock()
 
     def _embedder(self):
+        """The embedding function, loading ECAPA through the quality auditor on first use."""
         if self._embed is None:
             from quality_auditor import SpeechQualityAuditor
 
@@ -61,15 +80,18 @@ class ProtectedVoices:
         return self._embed
 
     def list(self) -> List[Dict[str, Any]]:
+        """Active protected voices as ``{id, added}``; embeddings are never returned."""
         return [{"id": voice_id, "added": rec["added"]} for voice_id, rec in self._store.all(KIND) if not rec.get("removed")]
 
     def _embeddings(self) -> List[Tuple[str, np.ndarray]]:
+        """``(id, embedding)`` for every active protected voice; removed ones are skipped."""
         return [(voice_id, np.asarray(rec["embedding"], dtype=np.float32))
                 for voice_id, rec in self._store.all(KIND) if not rec.get("removed")]
 
     def register(self, audio_path: Path | str) -> str:
         """Keep the speaker embedding of this recording and return its opaque id. The audio is not kept."""
         embedding = self._embedder()(audio_path)
+        # Random and short: the id must not reveal who the voice belongs to.
         voice_id = uuid.uuid4().hex[:12]
         with self._lock:
             self._store.put(KIND, voice_id, {"embedding": [float(x) for x in embedding], "added": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
@@ -77,6 +99,7 @@ class ProtectedVoices:
         return voice_id
 
     def remove(self, voice_id: str) -> bool:
+        """Withdraw a protected voice. False if it was unknown or already removed."""
         record = self._store.get(KIND, voice_id)
         if record is None or record.get("removed"):
             return False
@@ -111,6 +134,7 @@ _shared: Optional[ProtectedVoices] = None
 
 
 def shared() -> ProtectedVoices:
+    """The process-wide list, created on first use."""
     global _shared
     if _shared is None:
         _shared = ProtectedVoices()

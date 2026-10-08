@@ -20,6 +20,20 @@ mapping is in ``five_points``.
 
 A comparison with a **different person's** face is always computed as a negative control, so a
 similarity number is never read without knowing what "not the same person" scores on this model.
+
+Where it sits: ``scripts/measure_visual.py`` calls :meth:`VisualScorer.score_video` after a render to
+measure N-12 and N-13, and ``style_transfer.py`` uses :meth:`VisualScorer.embedding` and
+:meth:`VisualScorer.cosine` to report how much of the person survives a restyle.
+
+Concepts used here:
+  * A *face embedding* is a fixed-length vector a recognition network outputs for a face crop. The
+    network is trained so crops of the same person land close together and different people far apart.
+  * *Cosine similarity* compares two vectors by the angle between them: 1.0 points the same way,
+    0 is unrelated. Only direction matters; the vectors' lengths are divided out.
+  * *LPIPS* runs both images through a pretrained network (AlexNet here), compares their internal
+    feature maps layer by layer, and weights the differences with weights fitted to human judgements.
+    It tracks "looks different" better than a per-pixel error does: a one-pixel shift scores near 0
+    in LPIPS but high in mean squared error.
 """
 
 from __future__ import annotations
@@ -49,7 +63,10 @@ class VisualMetricError(RuntimeError):
 
 
 def five_points(landmarks_px: List[Tuple[int, int]]) -> np.ndarray:
-    """The five SFace landmarks, shape (5, 2), from the mesh in pixel coordinates."""
+    """The five SFace landmarks, shape (5, 2), from the mesh in pixel coordinates.
+
+    SFace uses these points to rotate and scale the face to a standard pose before embedding it.
+    """
     pts = np.asarray(landmarks_px, dtype=np.float32)
     mid = lambda a, b: (pts[a] + pts[b]) / 2.0  # noqa: E731 - a one-line helper reads better inline
     return np.stack([
@@ -58,7 +75,11 @@ def five_points(landmarks_px: List[Tuple[int, int]]) -> np.ndarray:
 
 
 def detection_row(landmarks_px: List[Tuple[int, int]]) -> np.ndarray:
-    """A YuNet-style detection row ``[x, y, w, h, 5 x (px, py), score]`` as ``alignCrop`` expects."""
+    """A YuNet-style detection row ``[x, y, w, h, 5 x (px, py), score]`` as ``alignCrop`` expects.
+
+    The box is the bounding box of all mesh points. The score is set to 1.0 because the face was
+    already found by MediaPipe; there is no detector confidence to pass on.
+    """
     pts = np.asarray(landmarks_px, dtype=np.float32)
     x0, y0 = pts.min(axis=0)
     x1, y1 = pts.max(axis=0)
@@ -71,12 +92,14 @@ class VisualScorer:
     def __init__(self, sface_path: Optional[Union[str, Path]] = None) -> None:
         from model_registry import SFACE_MODEL
 
+        # Both models start as None and load on first use (golden rule 5: lazy loading).
         self._sface_path = Path(sface_path) if sface_path else SFACE_MODEL
         self._recognizer: Any = None
         self._lpips: Any = None
 
     # -- loading -------------------------------------------------------------------------------
     def _sface(self):
+        """The OpenCV SFace recognizer, created on first call; raises VisualMetricError if the weights are missing."""
         if self._recognizer is None:
             import cv2
 
@@ -85,15 +108,18 @@ class VisualScorer:
                     f"SFace weights not found at {self._sface_path}. Fetch them with: "
                     "PYTHONPATH=backend backend/.conda/bin/python scripts/fetch_vision_models.py --only sface"
                 )
+            # The second argument is a backend config path; "" means none, as for an ONNX model.
             self._recognizer = cv2.FaceRecognizerSF.create(str(self._sface_path), "")
         return self._recognizer
 
     def _lpips_net(self):
+        """The LPIPS AlexNet model, created on first call; raises VisualMetricError if ``lpips`` is absent."""
         if self._lpips is None:
             try:
                 import lpips
             except ImportError as err:
                 raise VisualMetricError("the 'lpips' package is not installed: pip install lpips") from err
+            # .eval() switches off training-only behaviour such as dropout, so results are repeatable.
             self._lpips = lpips.LPIPS(net="alex", verbose=False).eval()
         return self._lpips
 
@@ -104,16 +130,20 @@ class VisualScorer:
 
         from face_engine import FACE_ENGINE_LOCK, shared_face_engine
 
+        # The face engine is shared with the renderer and is not thread-safe, so every caller holds its lock.
         with FACE_ENGINE_LOCK:
             faces = shared_face_engine().analyze_faces(rgb)
         if not faces:
             return None
+        # faces[0] is the largest face: analyze_faces returns them largest first.
         row = detection_row(faces[0].pixel_landmarks())
+        # OpenCV models expect BGR channel order; the rest of this project works in RGB.
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         recognizer = self._sface()
         return recognizer.feature(recognizer.alignCrop(bgr, row))
 
     def cosine(self, a: np.ndarray, b: np.ndarray) -> float:
+        """Cosine similarity of two SFace embeddings (1.0 identical; compare with ``SFACE_SAME_PERSON_COSINE``)."""
         import cv2
 
         return float(self._sface().match(a, b, cv2.FaceRecognizerSF_FR_COSINE))
@@ -126,6 +156,7 @@ class VisualScorer:
             # LPIPS wants NCHW floats in [-1, 1].
             return torch.from_numpy(image).permute(2, 0, 1).float().unsqueeze(0) / 127.5 - 1.0
 
+        # no_grad: only a forward pass is needed, so no gradient memory is kept.
         with torch.no_grad():
             return float(self._lpips_net()(to_tensor(a), to_tensor(b)).item())
 
@@ -138,7 +169,13 @@ class VisualScorer:
         every: int = 5,
         max_frames: int = 60,
     ) -> Dict[str, Any]:
-        """Score every ``every``-th frame (at most ``max_frames``) of ``video`` against the source photo."""
+        """Score every ``every``-th frame (at most ``max_frames``) of ``video`` against the source photo.
+
+        Sampling keeps the cost bounded, since LPIPS and SFace both run once per scored frame.
+        ``other_person_rgb`` is the negative control from the module docstring.
+        Returns the ``lpips`` and ``identity`` blocks, each with its method, target and ``meetsTarget``.
+        Raises VisualMetricError when the photo has no face or the video has no frames.
+        """
         import cv2
 
         import video_io
@@ -152,6 +189,7 @@ class VisualScorer:
         sampled = 0
         reference: Optional[np.ndarray] = None
         for index, frame in enumerate(video_io.read_frames(video)):
+            # A non-zero remainder means "not on the sampling grid".
             if index % every:
                 continue
             if sampled >= max_frames:
@@ -163,6 +201,7 @@ class VisualScorer:
             lpips_values.append(self.lpips_distance(reference, frame))
             embedding = self.embedding(frame)
             if embedding is None:
+                # Counted, not dropped silently: many faceless frames would mean the render lost the face.
                 no_face += 1
             else:
                 cosines.append(self.cosine(source_embedding, embedding))
@@ -185,6 +224,7 @@ class VisualScorer:
         if other_person_rgb is not None:
             other = self.embedding(other_person_rgb)
             report["identity"]["differentPersonCosine"] = None if other is None else round(self.cosine(source_embedding, other), 3)
+        # Targets are judged on the mean; "bool(...) and" makes an empty list read as not met.
         report["lpips"]["meetsTarget"] = bool(lpips_values) and float(np.mean(lpips_values)) < LPIPS_TARGET
         report["identity"]["meetsTarget"] = bool(cosines) and float(np.mean(cosines)) >= IDENTITY_TARGET
         return report
@@ -194,6 +234,7 @@ _shared: Optional[VisualScorer] = None
 
 
 def shared_scorer() -> VisualScorer:
+    """The process-wide scorer, so its models are loaded at most once."""
     global _shared
     if _shared is None:
         _shared = VisualScorer()

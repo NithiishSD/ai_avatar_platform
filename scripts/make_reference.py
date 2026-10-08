@@ -25,6 +25,15 @@ licence.
         --human ~/Downloads/LJ001-0001.wav \
         --speaker "LJSpeech (Linda Johnson)" \
         --licence "Public domain" --consent open-licence
+
+What it writes: the clip under ``inputs/`` and, beside it, a provenance
+sidecar (``provenance.sidecar_path`` names it). The sidecar is what every
+later consent and admissibility check reads (golden rule 3: no voice without
+one). It does not download anything and loads no model.
+
+**Provenance sidecar.** A small file stored next to a recording that says where
+it came from, who is speaking, under what licence and on what consent basis.
+Keeping it beside the audio means the record travels with the file.
 """
 
 from __future__ import annotations
@@ -36,16 +45,21 @@ from pathlib import Path
 from typing import List
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+# Make backend/ importable without PYTHONPATH; must run before the import below.
 sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 
+# noqa: E402 silences "import not at top of file": it has to follow the path set-up.
 import provenance  # noqa: E402
 
+# The cloner only reads references from inputs/; Kokoro output lives in outputs/.
 INPUTS_DIR = PROJECT_ROOT / "inputs"
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 
 # XTTS-v2 wants a clean 24 kHz mono reference; audio_utils converts anything
 # else, but writing it correctly here keeps the smoke path free of surprises.
 TARGET_SR = 24000
+# Middle of the 30-60 s range the assignment asks for; collection stops once
+# this much audio is gathered.
 TARGET_SECONDS = 45.0
 
 # Kokoro clips only. Mixing MMS output would blend speakers and produce a
@@ -57,13 +71,24 @@ def collect_smoke_sources() -> List[Path]:
     """Same-voice Kokoro clips, longest first so fewer joins are needed."""
     found: List[Path] = []
     for pattern in SMOKE_GLOBS:
+        # glob() matches shell-style wildcards in one directory (not recursive).
         found.extend(OUTPUTS_DIR.glob(pattern))
         found.extend((OUTPUTS_DIR / "benchmark").glob(pattern))
+    # A set of resolved paths drops duplicates (two patterns can match one
+    # file); sorting first makes the order repeatable between runs.
     unique = sorted({p.resolve() for p in found if p.is_file()})
+    # File size stands in for duration: same format, so bigger means longer.
     return sorted(unique, key=lambda p: p.stat().st_size, reverse=True)
 
 
 def build_smoke_reference(dest: Path) -> int:
+    """
+    Concatenate Kokoro clips into a synthetic reference at ``dest``; return the exit code.
+
+    The sidecar marks it SYNTHETIC, so it can prove the pipeline runs but can
+    never count as evidence for a similarity threshold.
+    """
+    # Imported here so --human, which needs neither, starts without them.
     import numpy as np
     import soundfile as sf
 
@@ -88,9 +113,12 @@ def build_smoke_reference(dest: Path) -> int:
             break
         try:
             data, sr = sf.read(path, dtype="float32", always_2d=False)
+        # BLE001 is the lint rule against catching bare Exception. Any unreadable
+        # file is skipped with its reason printed, not fatal to the whole build.
         except Exception as err:  # noqa: BLE001
             print(f"  skip {path.name}: {err}")
             continue
+        # Stereo -> mono by averaging the channels.
         if data.ndim > 1:
             data = data.mean(axis=1)
         if sr != TARGET_SR:
@@ -108,8 +136,10 @@ def build_smoke_reference(dest: Path) -> int:
 
     audio = np.concatenate(chunks)
     INPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    # PCM_16 is the ordinary 16-bit WAV format every tool reads.
     sf.write(dest, audio, TARGET_SR, subtype="PCM_16")
 
+    # The notes list every source file, so the clip can be traced back.
     sidecar = provenance.write(
         dest,
         source=provenance.SYNTHETIC,
@@ -137,10 +167,18 @@ def build_smoke_reference(dest: Path) -> int:
 
 
 def register_human_reference(args: argparse.Namespace) -> int:
+    """
+    Copy a real recording into ``inputs/`` and write its HUMAN provenance sidecar.
+
+    Returns the exit code. The recording is not modified; the consent basis
+    must be one ``provenance`` knows, or nothing is written.
+    """
+    # expanduser() turns "~/Downloads" into the real home directory path.
     source = Path(args.human).expanduser()
     if not source.is_file():
         print(f"Not a file: {source}", file=sys.stderr)
         return 1
+    # Checked before any copy, so an invalid consent leaves no file behind.
     if args.consent not in provenance.CONSENT_BASES:
         print(
             f"--consent must be one of {sorted(provenance.CONSENT_BASES)}",
@@ -150,6 +188,8 @@ def register_human_reference(args: argparse.Namespace) -> int:
 
     INPUTS_DIR.mkdir(parents=True, exist_ok=True)
     dest = INPUTS_DIR / source.name
+    # Skip the copy when the file is already in inputs/: copying a file onto
+    # itself raises shutil.SameFileError. copy2 also keeps the timestamps.
     if dest.resolve() != source.resolve():
         shutil.copy2(source, dest)
 
@@ -161,6 +201,8 @@ def register_human_reference(args: argparse.Namespace) -> int:
         consent_basis=args.consent,
         notes=args.notes,
     )
+    # Read the record back through the same function the benchmarks use, so
+    # the printed verdict is the one they will reach.
     info = provenance.describe(dest)
     print(f"Registered {dest.relative_to(PROJECT_ROOT)}")
     print(f"Wrote {sidecar.relative_to(PROJECT_ROOT)}")
@@ -169,7 +211,10 @@ def register_human_reference(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    """Parse the command line and run the chosen mode; return the exit code."""
     parser = argparse.ArgumentParser(description=__doc__)
+    # A mutually exclusive group: argparse refuses both --smoke and --human
+    # together, and required=True refuses neither.
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument(
         "--smoke",
@@ -198,4 +243,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # raise SystemExit(code) exits with main()'s return value, like sys.exit().
     raise SystemExit(main())

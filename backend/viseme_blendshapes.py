@@ -17,12 +17,24 @@ a puppet; slightly under-driven reads as calm speech.
 
 Left/right follow ARKit: they are the *subject's* left and right, so ``Left``
 shapes appear on the right-hand side of the image.
+
+Terms, explained once:
+
+* A **phoneme** is a unit of sound ("p", "ah"). A **viseme** is what the mouth
+  looks like while making it. Several phonemes share one viseme: "p", "b" and
+  "m" all look like closed lips, which is why 15 visemes cover English.
+* A **blendshape** is one named facial movement (``jawOpen``,
+  ``mouthPucker``) with a weight from 0.0 (absent) to 1.0 (fully applied). A
+  face pose is a dictionary of these weights; poses are blended by adding or
+  interpolating the numbers.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional, Tuple
 
+# The 15 viseme names in the Oculus/ARKit lip-sync convention. A tuple, not a
+# list, because it is a fixed vocabulary that nothing should append to.
 CANONICAL_VISEMES: Tuple[str, ...] = (
     "viseme_sil",
     "viseme_PP",
@@ -89,6 +101,8 @@ def _expand(shapes: Mapping[str, float]) -> Dict[str, float]:
     return expanded
 
 
+# ``fmt: off`` tells the code formatter to leave the aligned tables below as
+# written; reflowing them would make the rows harder to compare.
 # fmt: off
 _VISEME_SHORTHAND: Dict[str, Dict[str, float]] = {
     # Rest. Lips together, jaw closed.
@@ -140,6 +154,7 @@ _EMOTION_SHORTHAND: Dict[str, Dict[str, float]] = {
 _HAPPY_SHORTHAND: Dict[str, float] = {"mouthSmile": 0.50, "cheekSquint": 0.30}
 # fmt: on
 
+# Expanded once at import time, so per-frame lookups are plain dict reads.
 VISEME_BLENDSHAPES: Dict[str, Dict[str, float]] = {
     viseme: _expand(shapes) for viseme, shapes in _VISEME_SHORTHAND.items()
 }
@@ -160,6 +175,8 @@ OPENING_SHAPES: Tuple[str, ...] = (
 )
 
 # Visemes whose defining feature is the lips meeting, with how completely.
+# FF is 0.6, not 1.0: the lower lip meets the teeth, so the mouth is only
+# partly closed. face_animation multiplies the opening shapes by (1 - value).
 CLOSURE_VISEMES: Dict[str, float] = {"viseme_PP": 1.0, "viseme_FF": 0.6}
 
 
@@ -183,6 +200,7 @@ def resolve_viseme(name: str) -> Tuple[str, bool]:
 def viseme_weights(name: str) -> Dict[str, float]:
     """ARKit weights for a viseme name (aliases resolved, unknown -> rest)."""
     canonical, _ = resolve_viseme(name)
+    # A copy, so a caller that scales the weights cannot corrupt the shared table.
     return dict(VISEME_BLENDSHAPES[canonical])
 
 
@@ -199,6 +217,8 @@ def emotion_weights(emotion_vector: Optional[Mapping[str, Any]]) -> Dict[str, fl
         return {}
 
     def value(key: str) -> float:
+        # Clamp to [0, 1] and treat junk as 0: one bad field in a payload must not
+        # raise mid-render or push a blendshape past its full weight.
         raw = emotion_vector.get(key)
         try:
             return max(0.0, min(1.0, float(raw))) if raw is not None else 0.0
@@ -213,6 +233,8 @@ def emotion_weights(emotion_vector: Optional[Mapping[str, Any]]) -> Dict[str, fl
             continue
         named_total += amount
         for shape, weight in shapes.items():
+            # Emotions add up: joy plus excitement both raise mouthSmile. The final
+            # min(1.0, ...) below caps the sum at the blendshape's full weight.
             weights[shape] = weights.get(shape, 0.0) + weight * amount
 
     if named_total <= 0:

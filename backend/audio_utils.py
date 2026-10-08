@@ -15,6 +15,14 @@ XTTS-v2 requirements:
   - Channels : mono (1) — stereo is down-mixed
   - Rate     : 22 050 Hz or 24 000 Hz (we always output 24 000)
   - Duration : at least 3 s; 30–60 s recommended for best cloning quality
+
+Concepts used below:
+  * **Sample rate** is how many amplitude values describe one second of sound.
+    A model trained at 24 kHz expects exactly that many per second; feed it
+    another rate and speech plays at the wrong pitch and speed.
+  * **Resampling** recomputes the waveform at a new rate (librosa filters and
+    interpolates), so 44.1 kHz audio becomes 24 kHz without changing pitch.
+  * **Down-mixing** averages the channels of a stereo file into one mono track.
 """
 
 import logging
@@ -36,6 +44,8 @@ XTTS_WARN_MIN_DURATION: float = 10.0      # warn if shorter than this
 XTTS_IDEAL_MIN_DURATION: float = 30.0     # ideal for good speaker similarity
 XTTS_MAX_DURATION_SECONDS: float = 300.0  # 5 min — reject obviously wrong files
 
+# A set so the per-file extension check is a constant-time lookup. Matching is
+# done on the lower-cased suffix, so ".WAV" and ".wav" are treated the same.
 SUPPORTED_EXTENSIONS = {
     ".wav", ".flac", ".ogg", ".mp3",
     ".m4a", ".aac", ".mp4", ".webm", ".aif", ".aiff", ".au",
@@ -68,6 +78,7 @@ class AudioInfo:
 
     @property
     def duration_label(self) -> str:
+        """Human-readable length such as ``"1m 5s"``, or ``"42s"`` under a minute."""
         mins = int(self.duration_seconds // 60)
         secs = int(self.duration_seconds % 60)
         return f"{mins}m {secs}s" if mins else f"{secs}s"
@@ -93,6 +104,7 @@ def list_voice_samples(input_dir: Path) -> List[AudioInfo]:
         return []
 
     results: List[AudioInfo] = []
+    # sorted() gives a stable order, so the UI list does not reshuffle between calls.
     for path in sorted(input_dir.iterdir()):
         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
@@ -186,6 +198,8 @@ def validate_and_convert_for_cloning(
     # ---- Load audio (universal path via librosa) -------------------------
     try:
         import librosa
+        # sr=None keeps the file's own rate (resampling happens below, only if needed);
+        # mono=False keeps the channels so the stereo check below can see them.
         audio, original_sr = librosa.load(str(input_path), sr=None, mono=False)
     except Exception as exc:
         raise AudioValidationError(
@@ -227,6 +241,7 @@ def validate_and_convert_for_cloning(
     if audio.ndim > 1:
         # Multi-channel — need to down-mix to mono
         needs_conversion = True
+        # Averaging, not picking one channel, keeps speech that is panned to one side.
         audio = np.mean(audio, axis=0)  # shape: (samples,)
     elif audio.ndim == 1:
         pass  # already mono
@@ -251,6 +266,8 @@ def validate_and_convert_for_cloning(
     stem = input_path.stem
     out_path = converted_dir / f"{stem}_converted.wav"
 
+    # PCM_16 is 16-bit integer samples: the most widely readable WAV encoding.
+    # soundfile scales the float32 values in [-1, 1] to that integer range.
     sf.write(str(out_path), audio.astype(np.float32), XTTS_OUTPUT_SAMPLE_RATE, subtype="PCM_16")
 
     logger.info(

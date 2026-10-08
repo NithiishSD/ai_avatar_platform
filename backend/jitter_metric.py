@@ -18,6 +18,16 @@ The target is met when the mean over the clip is below ``TARGET_PCT``.
 
 Golden rule 2: the result carries its method; nothing here is a MOS-style
 number that could be quoted without saying how it was obtained.
+
+Terms, explained once:
+
+* A **landmark** is one numbered point a face detector places on a face (the
+  tip of the nose, the outer corner of an eye). MediaPipe's face mesh places
+  478 of them, in coordinates normalised to 0..1 of the image size.
+* **Inter-ocular distance** is the pixel distance between the outer eye
+  corners, used as a ruler for face size.
+* **p95** is the 95th percentile: 95 % of frame steps moved less than this,
+  which shows bursts of shake that the mean would average away.
 """
 
 from __future__ import annotations
@@ -27,9 +37,12 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+# The N-09 threshold, in percent of inter-ocular distance per frame step.
 TARGET_PCT = 2.0
 
 # MediaPipe face-mesh indices of points the render never moves.
+# The indices are positions in MediaPipe's fixed mesh topology, so index 33 is
+# always the same spot on every face.
 LM_LEFT_EYE_OUTER = 33
 LM_RIGHT_EYE_OUTER = 263
 ANCHORS = (
@@ -40,13 +53,14 @@ ANCHORS = (
     234, 454,                 # ears' edge
 )
 
+# Formatted with the anchor count and stored on every result (golden rule 2).
 METHOD = (
     "mean frame-to-frame displacement of {n} static anchor landmarks (forehead, nose bridge, "
     "temples, ears; MediaPipe Face Landmarker per frame) divided by inter-ocular distance. "
     "Upper bound on renderer jitter: video compression and detector noise are included."
 )
 
-# Maps an RGB frame to (landmarks (N,2+) normalised 0..1, width, height), or None if no face.
+# Maps an RGB frame to its landmarks, shape (N, 2+) normalised 0..1, or None if no face.
 LandmarkFn = Callable[[np.ndarray], Optional[np.ndarray]]
 
 
@@ -56,6 +70,13 @@ class JitterError(RuntimeError):
 
 @dataclass
 class JitterScore:
+    """
+    One clip's jitter figures, in percent of inter-ocular distance per frame step.
+
+    ``frames`` counts every frame read; ``frames_without_face`` how many of them
+    could not be measured. ``method`` says how the numbers were obtained.
+    """
+
     frames: int
     mean_pct: float
     p95_pct: float
@@ -66,9 +87,11 @@ class JitterScore:
 
     @property
     def meets_target(self) -> bool:
+        """True when the mean step is below ``TARGET_PCT`` (strictly)."""
         return self.mean_pct < TARGET_PCT
 
     def to_dict(self) -> Dict[str, object]:
+        """The camelCase JSON shape used by the API and reports, rounded to 3 places."""
         return {
             "frames": self.frames,
             "meanPct": round(self.mean_pct, 3),
@@ -100,14 +123,19 @@ def score_landmark_track(tracks: Sequence[Optional[np.ndarray]], width: int, hei
             missing += 1
             previous = None
             continue
+        # Keep x, y only (MediaPipe also gives depth) and convert to pixels, so the
+        # distance is measured in the same units horizontally and vertically.
         points = np.asarray(landmarks, dtype=np.float64)[:, :2] * scale
         eye_gap = float(np.linalg.norm(points[LM_LEFT_EYE_OUTER] - points[LM_RIGHT_EYE_OUTER]))
+        # A zero eye gap means a degenerate detection; dividing by it would blow up.
         if eye_gap <= 0:
             missing += 1
             previous = None
             continue
         anchors = points[list(ANCHORS)]
         if previous is not None:
+            # Per-anchor Euclidean distance, averaged over anchors, then divided by the
+            # previous frame's eye gap to make it a share of face size.
             moved = np.linalg.norm(anchors - previous[0], axis=1).mean()
             steps.append(100.0 * float(moved) / previous[1])
         previous = (anchors, eye_gap)
@@ -130,6 +158,13 @@ def score_landmark_track(tracks: Sequence[Optional[np.ndarray]], width: int, hei
 
 
 def _face_landmarks(frame: np.ndarray) -> Optional[np.ndarray]:
+    """
+    Landmarks of the first face in an RGB frame, or None when there is none.
+
+    Imported lazily so the pure arithmetic above runs in tests without MediaPipe.
+    The shared landmarker is not documented as thread-safe and is used by the API
+    and the render worker, hence the lock around the call.
+    """
     from face_engine import FACE_ENGINE_LOCK, shared_face_engine
 
     with FACE_ENGINE_LOCK:
@@ -141,6 +176,7 @@ def score_video(path, landmark_fn: Optional[LandmarkFn] = None, frames: Optional
     """Measure the jitter of a rendered MP4 (``frames``/``landmark_fn`` are test seams)."""
     import video_io
 
+    # Real use reads the video from disk; tests pass in-memory ``frames`` instead.
     if frames is None:
         info = video_io.probe(path)
         width, height = info.width, info.height

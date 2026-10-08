@@ -33,14 +33,20 @@ REQUEST_ID_HEADER = "X-Request-ID"
 # The caller controls this value and it is written into logs, so only a short
 # token of safe characters is accepted: no spaces or newlines (log forging).
 _SAFE_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+# Placeholder shown in log lines written outside any request (startup, timers).
 NO_REQUEST = "-"
 
+# A ContextVar is declared once at module level; each task or thread then sees
+# its own value. ``set`` returns a Token that ``reset`` uses to restore the old one.
 _request_id: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default=NO_REQUEST)
 
+# ``%(request_id)s`` only works because install_logging() adds that attribute
+# to every record; without it each log line would fail to format.
 LOG_FORMAT = "%(asctime)s %(levelname)s [%(request_id)s] %(name)s: %(message)s"
 
 
 def current_request_id() -> str:
+    """The id of the request being handled, or ``"-"`` outside a request."""
     return _request_id.get()
 
 
@@ -53,6 +59,8 @@ def new_request_id(incoming: str | None) -> str:
 
 def run_in_context(fn: Callable[..., object]) -> Callable[..., object]:
     """Wrap ``fn`` so a thread-pool worker runs it with the *caller's* request id."""
+    # copy_context() snapshots every ContextVar now, on the caller's thread, so the
+    # lambda can replay that snapshot later on whichever pool thread runs it.
     context = contextvars.copy_context()
     return lambda *args, **kwargs: context.run(fn, *args, **kwargs)
 
@@ -66,6 +74,8 @@ def install_logging() -> None:
     if _installed:
         return
     _installed = True
+    # Chain to the factory already installed (by a library or a test) instead of
+    # replacing it, so their additions to the record still happen.
     previous_factory = logging.getLogRecordFactory()
 
     def factory(*args, **kwargs):
@@ -93,12 +103,15 @@ def bind_request_id(request_id: str) -> contextvars.Token:
 
 
 def unbind_request_id(token: contextvars.Token) -> None:
+    """Restore the request id that was current before ``bind_request_id``."""
     _request_id.reset(token)
 
 
 async def request_id_middleware(request: Request, call_next):
     """Assign the id, expose it to the logs for this request, return it in the header."""
     request_id = new_request_id(request.headers.get(REQUEST_ID_HEADER))
+    # set() before the call, reset() in ``finally``: the id never leaks into the
+    # next request that reuses this task, even when the endpoint raises.
     token = _request_id.set(request_id)
     try:
         try:
