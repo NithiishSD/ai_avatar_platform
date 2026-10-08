@@ -40,6 +40,7 @@ import gpu_utils
 import manifest
 import language_registry
 import model_registry
+import protected_voices
 import provenance
 from emotion_engine import EmotionProsodyEngine
 from mms_engine import MMSTTSEngine, MMSRomanizationRequired
@@ -118,6 +119,13 @@ def require_voice_consent(speaker_wav: str) -> None:
     usable, reason = record.usability()  # type: ignore[union-attr]
     if not usable:
         _refuse_voice(path, reason, VoiceConsentRequired(f"'{path.name}' may not be cloned: {reason}."))
+    # Consent exists, but the voice may still belong to someone on the protected list (T8.9).
+    alert = protected_voices.shared().check(path, kind="reference", subject=manifest.sha256_file(path))
+    if alert:
+        _refuse_voice(path, f"matches protected voice {alert['protectedId']} (similarity {alert['similarity']})", VoiceConsentRequired(
+            f"'{path.name}' sounds like a voice on the protected list (similarity {alert['similarity']} >= {alert['threshold']}), "
+            "so it may not be cloned. The match is recorded in the audit trail as abuse_alert."
+        ))
 
 
 def _refuse_voice(path: Path, reason: str, error: Exception) -> None:
@@ -822,6 +830,13 @@ class VoiceEngineRouter:
                 )
             except Exception as audit_err:  # noqa: BLE001 - auditing is advisory
                 logger.warning("Quality audit failed: %s", audit_err)
+
+        # A consented reference can still yield a voice that sounds like a protected person: check the clip too.
+        if model_key in REFERENCE_ENGINES and speaker_wav:
+            output_alert = protected_voices.shared().check(output_path, kind="output", subject=manifest.sha256_file(output_path))
+            if output_alert:
+                logger.warning("ABUSE ALERT: the cloned clip %s sounds like protected voice %s (similarity %s); recorded in the audit trail",
+                               Path(output_path).name, output_alert["protectedId"], output_alert["similarity"])
 
         # A reference recording was used: that goes on the consent trail with the basis it was used under.
         if model_key in REFERENCE_ENGINES and speaker_wav:

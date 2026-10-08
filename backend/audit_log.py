@@ -25,6 +25,8 @@ Events (the ``event`` column):
     face_generated    a synthetic face was generated              (avatar, seed)
     audio_supplied    a caller's own audio drove an avatar        (audio hash, basis)
     manifest_issued   a signed manifest was issued for a video    (manifest id, video hash, job)
+    abuse_alert       a clone request or its output matched a protected voice (kind, similarity, protected id)
+    protected_voice_added / protected_voice_removed   the opt-out list changed (id only)
 """
 
 from __future__ import annotations
@@ -42,7 +44,8 @@ from request_context import current_request_id
 
 EVENTS = (
     "voice_use", "voice_refused", "face_use", "face_refused", "face_registered",
-    "face_generated", "audio_supplied", "manifest_issued",
+    "face_generated", "audio_supplied", "manifest_issued", "abuse_alert", "protected_voice_added",
+    "protected_voice_removed",
 )
 GENESIS = "0" * 64
 

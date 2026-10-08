@@ -42,3 +42,32 @@ Not fixed, by design or out of scope: the rate limiter is per process (the `.env
 note already says so; N workers multiply the limit); `TrustedHost`/TLS belong to the
 deployment in front of uvicorn; S-16 and S-18 wait for T7.2 and M5.
 
+
+## Abuse prevention: the layers that exist (T8.9, R-46)
+
+What stops or exposes misuse of a voice or a face, in the order a request meets them. Each row names the test that pins it and what it cannot do.
+
+| # | Layer | What it stops | Pinned by | Limit |
+|---|---|---|---|---|
+| 1 | Rate limit + optional `X-API-Key` (`AUTH_ENABLED`) | anonymous bulk use | `test_security.py`, `test_security_probes.py` | per process; with auth off the client IP is the key |
+| 2 | **Voice consent gate** (`require_voice_consent`) | cloning a recording with no provenance sidecar or no recorded consent basis | `test_audit_log.py`, `test_voice_engine.py` | trusts the sidecar: it records a claim, it cannot prove the speaker agreed |
+| 3 | **Face consent gate** (`AvatarStore.require_usable`) | animating a photo with no provenance or consent basis; real-person photos are never fetched by this project | `test_avatar_store.py`, `test_app_vision.py` | same: a recorded claim |
+| 4 | **Protected-voice list** (new) | cloning a voice someone asked to protect, by reference (refused) and by output (alert) | `test_protected_voices.py` (12, 2 plants caught); live below | only voices someone registered; a changed voice can slip under the threshold (0.4) |
+| 5 | Audio watermark (AudioSeal) + video watermark (VideoSeal) | passing our output off as unmarked; survives re-encoding to a measured degree | `test_watermark.py`, `test_video_watermark.py` | live-session frames are not marked; heavy compression, cropping and speed changes defeat it |
+| 6 | Signed manifest (Ed25519) bound to the video's SHA-256 | editing the record of what was used; swapping the video | `test_manifest.py` | proves origin and integrity, not consent |
+| 7 | Hash-chained audit trail (`GET /api/v1/audit`, `/audit/verify`) | silent rewriting of who used which voice or face | `test_audit_log.py` | deleting the newest rows is undetectable without keeping the head hash elsewhere |
+| 8 | Verify endpoint (`POST /api/v1/provenance/verify`) | a third party checking whether a file came from this platform | `test_authenticity.py` | `no_evidence` proves nothing about a file we did not make |
+
+### Protected voices
+
+`POST /api/v1/abuse/protected-voices` (a recording; `GET` lists, `DELETE` removes). Only the ECAPA-TDNN speaker embedding is stored, under an opaque id; the audio is discarded and no name is kept. Before a clone, the reference is compared with every protected voice; at or above the threshold (`PROTECTED_VOICE_THRESHOLD`, default **0.4**) it is refused (403 with the reason) and `voice_refused` + `abuse_alert` are written to the audit trail. After a clone, the output is compared too, and a match is an `abuse_alert` plus a logged warning. With an empty list nothing is computed. If the encoder is unavailable while the list is not empty, the clone fails with the fix; it is never allowed through unchecked.
+
+**Threshold, measured (`scripts/measure_voice_threshold.py`, ECAPA-TDNN, 8 Oct):** the same speaker's two halves of one recording 0.917; XTTS-v2 clones of that speaker against held-out speech 0.55-0.67 in English, about 0.43-0.49 cross-lingual; 35 pairs of different voices (Kokoro, Bark, MMS Hindi / Tamil / Swahili, pitch-shifted and emotion-shifted Kokoro, the human speaker) **at most 0.308, mean 0.075**. 0.4 sits above every different pair seen and below the clones; it still misses a weak clone and may flag a voice that merely resembles another, which is why it is configurable and why a refusal says so.
+
+**Live (real server, real ECAPA and XTTS-v2, CPU):** 30 s of the LJSpeech voice registered -> cloning `ljspeech_reference.wav` refused, similarity 0.988, audit trail shows `voice_refused` (reason names the protected id) and `abuse_alert`; cloning the synthetic Kokoro reference ran (SUCCESS, no alert); after `DELETE` (204) the first reference cloned again.
+
+### Not built, stated plainly
+
+- **Detecting other systems' deepfakes** (a classifier for fakes we did not make): not built. The verify endpoint answers "did we make this", and says `no_evidence` otherwise.
+- Rate-of-use alerts (one reference cloned many times, repeated refusals from one caller): the audit trail has the data; no alerting rule reads it.
+- Proof that a photo or voice belongs to the person who consented: out of reach of software here; the consent basis is a recorded claim.

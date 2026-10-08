@@ -306,6 +306,26 @@ class SpeechQualityAuditor:
             self._ecapa = None
         return self._ecapa
 
+    def embed_speaker(self, audio_path: Path | str) -> np.ndarray:
+        """
+        The ECAPA-TDNN speaker embedding of a recording (192 numbers), for comparing voices.
+
+        There is no fallback: an abuse check built on a spectral proxy would look like it protected
+        someone and not do it, so a missing encoder is an error that says how to fix it.
+        """
+        path = Path(audio_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Audio file not found: {path}")
+        encoder = self._load_ecapa()
+        if encoder is None:
+            raise RuntimeError("ECAPA-TDNN is not available; install speechbrain (pip install speechbrain) to compare voices")
+        wave, _ = _load_mono(path, target_sr=SQUIM_SAMPLE_RATE)
+        if wave.size == 0:
+            raise ValueError("the recording is empty")
+        with torch.inference_mode():
+            embedding = encoder.encode_batch(torch.from_numpy(wave).unsqueeze(0).to(self.device)).squeeze()
+        return embedding.flatten().cpu().numpy().astype(np.float32)
+
     def speaker_similarity(
         self,
         reference_path: Path | str,

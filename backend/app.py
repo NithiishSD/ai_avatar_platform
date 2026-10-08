@@ -53,6 +53,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 import audit_log
 import metrics
 import parameters
+import protected_voices
 import avatar_generator
 import live_engine
 import manifest
@@ -910,6 +911,37 @@ def score_render_job(job_id: str) -> LipSyncScoreResponse:
     # Keep the score with the job so /api/v1/metrics can report it.
     job_queue.update(job_id, result={**queued_job.result, "lipsync": score.to_dict()})
     return LipSyncScoreResponse(jobId=job_id, score=score.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# Protected voices (T8.9): an opt-out list of voices that must not be cloned
+# ---------------------------------------------------------------------------
+MAX_VOICE_UPLOAD_BYTES = 25 * 1024 * 1024
+
+
+@app.get("/api/v1/abuse/protected-voices")
+def list_protected_voices() -> dict:
+    """Opaque ids of the protected voices. No audio and no names are kept; matching uses a speaker embedding."""
+    return {"voices": protected_voices.shared().list(), "threshold": protected_voices.threshold()}
+
+
+@app.post("/api/v1/abuse/protected-voices", status_code=status.HTTP_201_CREATED)
+async def add_protected_voice(file: UploadFile = File(...)) -> dict:
+    """Protect a voice: upload a recording of it; only its speaker embedding is kept and the audio is discarded."""
+    path = await _spool_upload(file, MAX_VOICE_UPLOAD_BYTES)
+    try:
+        voice_id = await run_in_threadpool(protected_voices.shared().register, path)
+    except (RuntimeError, ValueError, OSError) as err:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"could not use that recording: {err}") from err
+    finally:
+        path.unlink(missing_ok=True)  # the audio is not kept, only the embedding
+    return {"id": voice_id}
+
+
+@app.delete("/api/v1/abuse/protected-voices/{voice_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_protected_voice(voice_id: str) -> None:
+    if not protected_voices.shared().remove(voice_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="protected voice not found")
 
 
 @app.get("/api/v1/parameters")

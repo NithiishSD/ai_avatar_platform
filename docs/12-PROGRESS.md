@@ -53,6 +53,7 @@ records what was verified live, with the real command and result.
 | T8.1 | Done | 5f7fc25 |
 | T8.10 | Done | 2cf36b4 |
 | T8.3 | Done | ea59957 |
+| T8.9 | Done | (this commit) |
 | T8.7 | Built and measured; the Stable Diffusion words wait on M-08 | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
 
@@ -1218,3 +1219,15 @@ Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **809 tests OK** (6 n
 Evidence file: `docs/benchmarks/parameters_20261008.json`. **N-15: 10 verified visual parameters (15 listed) against 50+: not met.**
 
 Not done: the four Stable Diffusion words (M-08, a person judges); a hair/glasses classifier; whether `seed`/`steps`/`attempts` do what they say.
+
+### 2026-10-08 — T8.9 abuse prevention: protected voices
+
+`backend/protected_voices.py`, `POST/GET/DELETE /api/v1/abuse/protected-voices`, hooks in `voice_engine` (reference checked before a clone, output after), new audit events
+`abuse_alert`, `protected_voice_added/removed`, `SpeechQualityAuditor.embed_speaker` (no fallback to a spectral proxy). The eight layers that exist are tabulated with their tests and
+limits in `09-SECURITY.md`; D-51 records the choices. Threshold 0.4 chosen from measured ECAPA similarities (`scripts/measure_voice_threshold.py`): different voices <= 0.308 over 35
+pairs, XTTS clones 0.43-0.67, same speaker 0.917.
+
+Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **821 tests OK** (12 new, 2 plants caught). Live, real server + ECAPA + XTTS-v2, CPU: protected voice registered; cloning it
+refused at similarity 0.988 with `voice_refused` + `abuse_alert` in the trail; a different (synthetic) reference cloned; after DELETE the first reference cloned again.
+
+Not done / not claimed: detecting other systems' deepfakes; usage-rate alerts; whether 0.4 holds on a large population of real voices (35 synthetic-and-one-human pairs only).
