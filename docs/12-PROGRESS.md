@@ -52,7 +52,8 @@ records what was verified live, with the real command and result.
 | T6.6 | Measured on CPU (8 Oct): offset -4 not reproduced, N-06 **not met**, MOS 4.894; N-10 and the GPU timing wait on M-04; the 10+ language percentage is T8.4 | (this commit) |
 | T8.1 | Done | 5f7fc25 |
 | T8.10 | Done | 2cf36b4 |
-| T8.3 | Done | (this commit) |
+| T8.3 | Done | ea59957 |
+| T8.7 | Built and measured; the Stable Diffusion words wait on M-08 | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
@@ -1204,3 +1205,16 @@ Live, CPU, 3 fresh renders (`render_avatar.py`, default background): LPIPS 0.065
 
 Not claimed: real faces (rule 3 forbids fetching an identifiable person's photo; both faces here are synthetic); frames rendered with a changed background (the
 reference would differ, not handled); more than one negative-control pair; style-transfer identity numbers (T8.6 will use this module).
+
+### 2026-10-08 — T8.7 customisation parameters, counted by measurement (N-15 still not met)
+
+`backend/parameters.py` + `GET /api/v1/parameters`: 31 customisation parameters read from the request models, each with a measured status. `scripts/measure_parameters.py`
+changes one parameter at a time against a baseline and compares a number from the output (duration, median F0, loudness, blink count, frame count, picture difference),
+with a repeat-run control. Result, CPU: 28 of 32 checks moved the output as asked. **Found, not hidden:** `emotionVector.neutral` is accepted but never read by the face rig;
+`style` `expressive`/`narration` and `quality` `fast` do not change Kokoro's output; `quality` `high` needs Higgs, which cannot run on this stack; `1080P_HQ` does nothing on a
+512 px photo because photos are never enlarged (T8.8). Kokoro is not bit-for-bit repeatable (repeat distance 0.08 mel), so audio effects are judged against that floor.
+
+Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **809 tests OK** (6 new: every model field has a row, a removed row is caught, ranges are read from the models, the endpoint).
+Evidence file: `docs/benchmarks/parameters_20261008.json`. **N-15: 10 verified visual parameters (15 listed) against 50+: not met.**
+
+Not done: the four Stable Diffusion words (M-08, a person judges); a hair/glasses classifier; whether `seed`/`steps`/`attempts` do what they say.

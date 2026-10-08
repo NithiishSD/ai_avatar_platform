@@ -1,0 +1,319 @@
+{
+  "date": "2026-10-08T11:48:51+00:00",
+  "device": "cpu",
+  "results": [
+    {
+      "parameter": "(control) repeat",
+      "setting": "same input",
+      "metric": "mel distance",
+      "baseline": 0.0,
+      "value": 0.082,
+      "changesOutput": true,
+      "note": "noise floor; durations 4.975 vs 4.975"
+    },
+    {
+      "parameter": "speed",
+      "setting": "1.5",
+      "metric": "duration s",
+      "baseline": 4.975,
+      "value": 3.3167,
+      "changesOutput": true,
+      "note": "faster = shorter"
+    },
+    {
+      "parameter": "speed",
+      "setting": "0.7",
+      "metric": "duration s",
+      "baseline": 4.975,
+      "value": 7.1071,
+      "changesOutput": true,
+      "note": "faster = shorter"
+    },
+    {
+      "parameter": "pitch",
+      "setting": "1.5",
+      "metric": "median f0 Hz",
+      "baseline": 193.5484,
+      "value": 285.7143,
+      "changesOutput": true,
+      "note": "higher = higher"
+    },
+    {
+      "parameter": "pitch",
+      "setting": "0.7",
+      "metric": "median f0 Hz",
+      "baseline": 193.5484,
+      "value": 153.8462,
+      "changesOutput": true,
+      "note": "higher = higher"
+    },
+    {
+      "parameter": "emotion",
+      "setting": "joy",
+      "metric": "dur/rms/f0",
+      "baseline": 4.975,
+      "value": 4.5227,
+      "changesOutput": true,
+      "note": "rms x1.15, f0 x1.15"
+    },
+    {
+      "parameter": "emotion",
+      "setting": "anger",
+      "metric": "dur/rms/f0",
+      "baseline": 4.975,
+      "value": 4.364,
+      "changesOutput": true,
+      "note": "rms x1.35, f0 x1.12"
+    },
+    {
+      "parameter": "emotion",
+      "setting": "sorrow",
+      "metric": "dur/rms/f0",
+      "baseline": 4.975,
+      "value": 5.7849,
+      "changesOutput": true,
+      "note": "rms x0.82, f0 x0.93"
+    },
+    {
+      "parameter": "emotion",
+      "setting": "authority",
+      "metric": "dur/rms/f0",
+      "baseline": 4.975,
+      "value": 5.3495,
+      "changesOutput": true,
+      "note": "rms x1.12, f0 x1.00"
+    },
+    {
+      "parameter": "emotion",
+      "setting": "calm",
+      "metric": "dur/rms/f0",
+      "baseline": 4.975,
+      "value": 5.4076,
+      "changesOutput": true,
+      "note": "rms x0.92, f0 x1.00"
+    },
+    {
+      "parameter": "emotion",
+      "setting": "excitement",
+      "metric": "dur/rms/f0",
+      "baseline": 4.975,
+      "value": 4.2161,
+      "changesOutput": true,
+      "note": "rms x1.28, f0 x1.15"
+    },
+    {
+      "parameter": "emotionIntensity",
+      "setting": "0.3 vs 1.0",
+      "metric": "rms",
+      "baseline": 0.0547,
+      "value": 0.0669,
+      "changesOutput": true,
+      "note": "weaker emotion sits between neutral and full"
+    },
+    {
+      "parameter": "style",
+      "setting": "dialogue",
+      "metric": "mel distance",
+      "baseline": 0.082,
+      "value": 5.0131,
+      "changesOutput": true,
+      "note": "vs noise floor"
+    },
+    {
+      "parameter": "style",
+      "setting": "expressive",
+      "metric": "mel distance",
+      "baseline": 0.082,
+      "value": 0.0815,
+      "changesOutput": false,
+      "note": "vs noise floor"
+    },
+    {
+      "parameter": "style",
+      "setting": "narration",
+      "metric": "mel distance",
+      "baseline": 0.082,
+      "value": 0.0829,
+      "changesOutput": false,
+      "note": "vs noise floor"
+    },
+    {
+      "parameter": "quality",
+      "setting": "fast",
+      "metric": "mel distance",
+      "baseline": 0.082,
+      "value": 0.0844,
+      "changesOutput": false,
+      "note": "vs 'balanced', vs noise floor"
+    },
+    {
+      "parameter": "quality",
+      "setting": "high",
+      "metric": "-",
+      "baseline": null,
+      "value": null,
+      "changesOutput": null,
+      "note": "cannot run here: ModelWeightsMissing: higgs-tts-2 is not available: cannot run on this stack: its config declares model type 'higgs_audio_v2', which the pinned transformers (<4.48, required by Coqui"
+    },
+    {
+      "parameter": "language",
+      "setting": "es",
+      "metric": "duration s",
+      "baseline": 4.975,
+      "value": 4.912,
+      "changesOutput": true,
+      "note": "different language, different speech"
+    },
+    {
+      "parameter": "(control) repeat",
+      "setting": "same job",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 0.0,
+      "changesOutput": true,
+      "note": "rendering is deterministic"
+    },
+    {
+      "parameter": "emotionVector.happy",
+      "setting": "{'happy': 1.0}",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 0.6978,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "emotionVector.neutral",
+      "setting": "{'neutral': 0.0}",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 0.0,
+      "changesOutput": false,
+      "note": ""
+    },
+    {
+      "parameter": "emotionVector.joy",
+      "setting": "{'joy': 1.0}",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 0.9201,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "emotionVector.anger",
+      "setting": "{'anger': 1.0}",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 1.3098,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "emotionVector.sorrow",
+      "setting": "{'sorrow': 1.0}",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 1.3937,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "emotionVector.authority",
+      "setting": "{'authority': 1.0}",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 0.7275,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "emotionVector.calm",
+      "setting": "{'calm': 1.0}",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 0.4812,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "emotionVector.excitement",
+      "setting": "{'excitement': 1.0}",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 1.2343,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "emotionVector.eyeblinkRate",
+      "setting": "0.0",
+      "metric": "blink count",
+      "baseline": 2.0,
+      "value": 0.0,
+      "changesOutput": true,
+      "note": "more rate = more blinks"
+    },
+    {
+      "parameter": "emotionVector.eyeblinkRate",
+      "setting": "5.0",
+      "metric": "blink count",
+      "baseline": 2.0,
+      "value": 6.0,
+      "changesOutput": true,
+      "note": "more rate = more blinks"
+    },
+    {
+      "parameter": "background.color",
+      "setting": "#0b3d91",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 32.9805,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "background.imageUrl",
+      "setting": "gradient png",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 36.8416,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "renderQuality",
+      "setting": "1080P_HQ on 512 px photo",
+      "metric": "width px",
+      "baseline": 512.0,
+      "value": 512.0,
+      "changesOutput": null,
+      "note": "no effect: a photo is never enlarged (see T8.8)"
+    },
+    {
+      "parameter": "renderQuality",
+      "setting": "1080P_HQ on 1536 px photo",
+      "metric": "width px",
+      "baseline": 512.0,
+      "value": 1536.0,
+      "changesOutput": true,
+      "note": "effective only for photos larger than 512 px"
+    },
+    {
+      "parameter": "targetFps",
+      "setting": "12",
+      "metric": "frame count",
+      "baseline": 125.0,
+      "value": 60.0,
+      "changesOutput": true,
+      "note": "fewer fps = fewer frames"
+    }
+  ],
+  "notMeasured": [
+    "age",
+    "presentation",
+    "hair",
+    "glasses (Stable Diffusion; judged by a person, see M-08)",
+    "seed, steps, attempts (generation controls, not appearance)"
+  ]
+}

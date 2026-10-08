@@ -52,6 +52,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import audit_log
 import metrics
+import parameters
 import avatar_generator
 import live_engine
 import manifest
@@ -909,6 +910,12 @@ def score_render_job(job_id: str) -> LipSyncScoreResponse:
     # Keep the score with the job so /api/v1/metrics can report it.
     job_queue.update(job_id, result={**queued_job.result, "lipsync": score.to_dict()})
     return LipSyncScoreResponse(jobId=job_id, score=score.to_dict())
+
+
+@app.get("/api/v1/parameters")
+def get_parameters() -> dict:
+    """Every customisation parameter with its range and what measuring it found, and the count against the 50+ target (N-15)."""
+    return parameters.catalogue()
 
 
 @app.get("/api/v1/metrics")
