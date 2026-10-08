@@ -46,7 +46,7 @@ AUDIOSEAL_REPO = "facebook/audioseal"
 GENERATOR_FILE = "generator_base.pth"
 DETECTOR_FILE = "detector_base.pth"
 AUDIOSEAL_FILES = (GENERATOR_FILE, DETECTOR_FILE)
-AUDIOSEAL_PIP = "pip install --no-deps audioseal==0.2.0 omegaconf"
+AUDIOSEAL_PIP = "pip install --no-deps audioseal==0.2.0 omegaconf antlr4-python3-runtime==4.9.3"
 MESSAGE_BITS = 16
 MODEL_RATE = 16000  # AudioSeal's working rate; other rates are resampled around it
 

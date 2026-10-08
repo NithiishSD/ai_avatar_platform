@@ -1417,12 +1417,22 @@ def create_synthesis_job(request: AudioSynthesisRequest) -> SynthesisJobResponse
         result = task.result if hasattr(task, "result") else None
         if task_status == "SUCCESS" and isinstance(result, dict):
             return _job_response(task.id, task_status, result)
-        return SynthesisJobResponse(taskId=task.id, status=task_status)
+        return SynthesisJobResponse(taskId=task.id, status=_SYNTH_STATES.get(task_status, task_status), error=_task_error(task))
     except Exception as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Synthesis service unavailable: {str(error)}",
         ) from error
+
+
+_SYNTH_STATES = {"FAILURE": "FAILED"}
+
+
+def _task_error(task: Any) -> Optional[str]:
+    """The exception a failed task raised, as ``Type: message`` with server paths removed; None otherwise."""
+    if getattr(task, "state", None) != "FAILURE" or not isinstance(getattr(task, "result", None), BaseException):
+        return None
+    return _scrub(f"{type(task.result).__name__}: {task.result}")
 
 
 @app.get("/api/v1/audio/synthesize/{task_id}", response_model=SynthesisJobResponse)
@@ -1440,7 +1450,7 @@ def get_synthesis_job(task_id: str) -> SynthesisJobResponse:
         task_status = state_mapping.get(task.state, task.state)
         if task.state == "SUCCESS" and isinstance(task.result, dict):
             return _job_response(task_id, task_status, task.result)
-        return SynthesisJobResponse(taskId=task_id, status=task_status)
+        return SynthesisJobResponse(taskId=task_id, status=task_status, error=_task_error(task))
     except Exception as error:  # noqa: BLE001 - a broken result backend must not 500 the poll
         # Reported as UNKNOWN so the client keeps a stable shape, but logged:
         # a status store that cannot be read is exactly the failure that would

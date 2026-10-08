@@ -7,6 +7,11 @@
 # Installed without their own pins, which would break numpy<2 (see requirements.txt):
 ./backend/.conda/bin/python -m pip install --no-deps TTS==0.22.0
 ./backend/.conda/bin/python -m pip install --no-deps "git+https://github.com/myshell-ai/OpenVoice.git@74a1d147b17a8c3092dd5430504bd83ef6c7eb23"
+# The watermarks (also --no-deps; the API refuses to produce unmarked media without them):
+./backend/.conda/bin/python -m pip install --no-deps audioseal==0.2.0 omegaconf antlr4-python3-runtime==4.9.3 videoseal==1.0.1
+./backend/.conda/bin/python -m pip install av lpips pytorch_msssim calflops decord pycocotools PyWavelets timm==0.9.16 "scikit-image<0.22" "networkx<3"
+# Kokoro's English front end needs this spaCy model (it tries to pip-install it on first use otherwise):
+./backend/.conda/bin/python -m pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 cd backend && PYTHONPATH=. ./.conda/bin/python -m uvicorn app:app --port 8000
 cd frontend && npm ci && npm run dev -- --port 5173
 ```

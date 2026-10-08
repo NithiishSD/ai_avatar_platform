@@ -1,0 +1,15 @@
+# Keep the build context small: no environments, weights, media, notes or history.
+.git
+backend/.conda
+**/__pycache__
+frontend/node_modules
+frontend/dist
+frontend/test-results
+frontend/playwright-report
+.models
+inputs
+outputs
+docs
+.claude
+*.wav
+*.mp4

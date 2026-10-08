@@ -230,6 +230,21 @@ class RenderJobApiTests(unittest.TestCase):
         self.assertEqual(body["status"], "QUEUED")
         self.assertIsNone(body.get("modelUsed"))
 
+    def test_a_failed_synthesis_says_why_on_submit_and_on_poll_without_server_paths(self):
+        home = str(Path.home())  # the scrubber removes this server's own locations
+        error = RuntimeError(f"could not load {home}/secret/model.pth: No module named 'antlr4'")
+        failed = type("Task", (), {"id": "T-F", "state": "FAILURE", "status": "FAILURE", "result": error})()
+        with patch("app.synthesize_audio.delay", return_value=failed), \
+             patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
+            submitted = self.client.post("/api/v1/audio/synthesize", json={"text": "Hi", "mode": "fast", "language": "en"}).json()
+        with patch("app.celery.AsyncResult", return_value=failed):
+            polled = self.client.get("/api/v1/audio/synthesize/T-F").json()
+        for body in (submitted, polled):
+            self.assertEqual(body["status"], "FAILED")
+            self.assertIn("RuntimeError: ", body["error"])
+            self.assertIn("No module named 'antlr4'", body["error"])
+            self.assertNotIn(home, body["error"])
+
     def test_celery_queue_persists_job_for_status_lookup(self):
         queue = CeleryJobQueue(redis_client=FakeRedis())
         job = __import__("contracts").AvatarRenderJob.model_validate(VALID_JOB)

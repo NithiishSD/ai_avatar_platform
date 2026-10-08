@@ -432,6 +432,9 @@ class SynthesisJobResponse(BaseModel):
     alignment_method: Optional[str] = Field(default=None, alias="alignmentMethod")
     emotion: Optional[Dict[str, Any]] = Field(default=None)
     quality_report: Optional[Dict[str, Any]] = Field(default=None, alias="qualityReport")
+    # Why a FAILED task failed (the engine's own message, server paths removed). Without it a
+    # client saw only "FAILED" and had to read the server log to learn what to fix.
+    error: Optional[str] = Field(default=None)
     language: Optional[Dict[str, Any]] = Field(default=None)
     latency_ms: Optional[float] = Field(default=None, alias="latencyMs")
     # Whether (and how verifiably) the audio carries this platform's watermark.

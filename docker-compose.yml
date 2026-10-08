@@ -1,0 +1,29 @@
+# The platform in one container: API + studio on http://localhost:8000 (T7.2).
+#   docker compose up --build -d && curl -fsS localhost:8000/health
+# Redis/Postgres for the Celery queue live in backend/docker-compose.yml (start-docker.sh).
+services:
+  api:
+    build: .
+    image: ai-avatar-platform:latest
+    container_name: avatar_api
+    restart: unless-stopped
+    ports:
+      # Bound to localhost: auth is off by default (set AUTH_ENABLED / API_KEYS before exposing it).
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    environment:
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      API_KEYS: ${API_KEYS:-}
+      # Without a key the watermark key is a file inside the container; set one so marks and
+      # manifests stay verifiable across rebuilds.
+      WATERMARK_KEY: ${WATERMARK_KEY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    volumes:
+      # Weights from the host (scripts/fetch_models.py, scripts/fetch_vision_models.py), never baked in.
+      - ./.models:/app/.models
+      - ${HF_CACHE:-~/.cache/huggingface}:/home/app/.cache/huggingface
+      - ${TORCH_CACHE:-~/.cache/torch}:/home/app/.cache/torch
+      # Coqui keeps XTTS-v2 here (only after the owner accepted its CPML licence; see fetch_models.py).
+      - ${TTS_DATA:-~/.local/share/tts}:/home/app/.local/share/tts
+      # Registered faces / voice references in, renders out.
+      - ./inputs:/app/inputs
+      - ./outputs:/app/outputs

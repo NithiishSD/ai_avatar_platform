@@ -116,6 +116,10 @@ diffusers>=0.32.0,<0.33.0
 # MFCC front end for the SyncNet LSE-C / LSE-D lip-sync metric. Pure Python.
 python_speech_features>=0.6
 
+# Signed provenance manifests (Ed25519, manifest.py, T5.2). Was installed but never listed here,
+# which the first Docker build found (D-49).
+cryptography>=44.0.0
+
 # Audio/Video Metric & Text Utilities
 requests>=2.31.0
 pyyaml>=6.0.1
