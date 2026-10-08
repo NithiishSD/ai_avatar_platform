@@ -14,6 +14,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
  *
  * Counters on the panel (`data-*` and the visible text) are the observable record of
  * what arrived; the E2E test reads them.
+ *
+ * Microphone (R-41): instead of text, the user's own voice can drive the face. The mic is
+ * captured with Web Audio, cut into 0.5 s PCM16 chunks and sent as binary messages after an
+ * `audio_start` that states the consent basis. Only frames come back (the user already hears
+ * themself); the mouth follows loudness, an estimate the panel says out loud.
  */
 
 const HEADER_BYTES = 13;
@@ -22,6 +27,8 @@ const KIND_FRAME = 2;
 // Scheduling lead: audio is booked this far ahead of "now" so the first chunk is
 // not already late by the time it is decoded.
 const LEAD_S = 0.15;
+// Microphone audio goes to the server in chunks of this length; frames for a chunk come back after it.
+const MIC_CHUNK_S = 0.5;
 
 const card = { background: "#0f172a", border: "1px solid #334155", borderRadius: "8px", padding: "12px 14px", marginBottom: "12px" };
 const small = { fontSize: "0.78rem", color: "#94a3b8" };
@@ -48,6 +55,10 @@ export default function LivePanel({ apiBase }) {
   const framesRef = useRef([]);        // decoded frames waiting for their time: {due, bitmap}
   const sayAtRef = useRef(0);
   const countersRef = useRef({ chunks: 0, frames: 0, audioBytes: 0, firstAudioMs: null, firstFrameMs: null });
+  const [micBasis, setMicBasis] = useState("");
+  const [micOn, setMicOn] = useState(false);
+  const micRef = useRef(null);          // {stream, source, processor, sink, pending: Float32Array[]}
+  const micAnchorRef = useRef(false);   // true until the first mic frame sets the drawing clock
 
   useEffect(() => {
     let ignore = false;
@@ -93,6 +104,11 @@ export default function LivePanel({ apiBase }) {
       c.audioBytes += payload.byteLength;
       if (c.firstAudioMs === null) c.firstAudioMs = Math.round(performance.now() - sayAtRef.current);
     } else if (kind === KIND_FRAME) {
+      // Mic frames have no audio to anchor to: the first one sets the clock, a little ahead of now.
+      if (micAnchorRef.current) {
+        anchorRef.current = audio.currentTime + 0.1 - presentationMs / 1000;
+        micAnchorRef.current = false;
+      }
       const due = anchorRef.current + presentationMs / 1000;
       createImageBitmap(new Blob([payload], { type: "image/jpeg" })).then((bitmap) => {
         framesRef.current.push({ due, bitmap });
@@ -137,6 +153,7 @@ export default function LivePanel({ apiBase }) {
   }, []);
 
   useEffect(() => () => {
+    micRef.current?.stream.getTracks().forEach((track) => track.stop());
     stop();
     audioRef.current?.close();
   }, [stop]);
@@ -202,6 +219,72 @@ export default function LivePanel({ apiBase }) {
     framesRef.current = [];
   };
 
+  /* Send the samples gathered so far as one PCM16 binary message. */
+  const flushMic = (socket, mic) => {
+    const total = mic.pending.reduce((n, part) => n + part.length, 0);
+    if (!total) return;
+    const pcm = new Int16Array(total);
+    let offset = 0;
+    for (const part of mic.pending) {
+      for (let i = 0; i < part.length; i += 1) pcm[offset + i] = Math.max(-1, Math.min(1, part[i])) * 32767;
+      offset += part.length;
+    }
+    mic.pending = [];
+    socket.send(pcm.buffer);
+  };
+
+  const startMic = async () => {
+    const socket = socketRef.current;
+    const audio = audioRef.current;
+    if (!socket || !audio) return;
+    setError("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true } });
+      socket.send(JSON.stringify({ type: "audio_start", sampleRate: audio.sampleRate, consentBasis: micBasis }));
+      const source = audio.createMediaStreamSource(stream);
+      // ScriptProcessor is old but everywhere and enough for 0.5 s chunks; a silent gain keeps it
+      // running without playing the user's own voice back to them.
+      const processor = audio.createScriptProcessor(4096, 1, 1);
+      const sink = audio.createGain();
+      sink.gain.value = 0;
+      const mic = { stream, source, processor, sink, pending: [] };
+      const chunkSamples = Math.round(audio.sampleRate * MIC_CHUNK_S);
+      processor.onaudioprocess = (event) => {
+        mic.pending.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+        if (mic.pending.reduce((n, part) => n + part.length, 0) >= chunkSamples) flushMic(socket, mic);
+      };
+      source.connect(processor);
+      processor.connect(sink);
+      sink.connect(audio.destination);
+      micRef.current = mic;
+      micAnchorRef.current = true;
+      countersRef.current = { chunks: 0, frames: 0, audioBytes: 0, firstAudioMs: null, firstFrameMs: null };
+      publish();
+      sayAtRef.current = performance.now();
+      audio.resume();
+      setMicOn(true);
+      setState("speaking");
+    } catch (err) {
+      setError(`Microphone unavailable: ${err.message}`);
+    }
+  };
+
+  const stopMic = () => {
+    const mic = micRef.current;
+    const socket = socketRef.current;
+    if (!mic) return;
+    mic.processor.disconnect();
+    mic.source.disconnect();
+    mic.sink.disconnect();
+    mic.stream.getTracks().forEach((track) => track.stop());
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      flushMic(socket, mic);
+      socket.send(JSON.stringify({ type: "audio_end" }));
+    }
+    micRef.current = null;
+    setMicOn(false);
+  };
+
   const live = state === "ready" || state === "speaking";
 
   return (
@@ -243,11 +326,24 @@ export default function LivePanel({ apiBase }) {
           </button>
           <button type="button" id="live-interrupt" className="secondary" disabled={state !== "speaking"} onClick={interrupt}>Interrupt</button>
         </div>
+        <div style={{ ...small, marginTop: "10px" }}>
+          …or speak into your microphone. The mouth follows how loud you are: it is an estimate, not lip-read.
+          <select id="live-mic-consent" style={field} value={micBasis} disabled={micOn} onChange={(e) => setMicBasis(e.target.value)}>
+            <option value="">whose voice is it?</option>
+            <option value="speaker-recorded">my own voice</option>
+            <option value="written-consent">someone who consented in writing</option>
+          </select>
+        </div>
+        <button type="button" id="live-mic" style={{ marginTop: "8px" }}
+          disabled={micOn ? false : state !== "ready" || !micBasis} onClick={micOn ? stopMic : startMic}>
+          {micOn ? "Stop microphone" : "Speak with my microphone"}
+        </button>
         <div id="live-stats" style={{ ...small, marginTop: "8px" }}>
           audio chunks {stats.chunks} · frames {stats.frames}
           {stats.firstAudioMs !== null ? ` · first audio ${stats.firstAudioMs} ms` : ""}
           {stats.firstFrameMs !== null ? ` · first frame ${stats.firstFrameMs} ms` : ""}
-          {stats.done ? ` · finished: ${stats.done.chunks} sentences in ${Math.round(stats.done.totalMs)} ms` : ""}
+          {stats.done && stats.done.drive ? ` · microphone: ${stats.done.chunks} chunks (${stats.done.drive})` : ""}
+          {stats.done && !stats.done.drive ? ` · finished: ${stats.done.chunks} sentences in ${Math.round(stats.done.totalMs)} ms` : ""}
         </div>
       </div>
     </div>

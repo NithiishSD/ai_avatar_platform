@@ -1316,3 +1316,12 @@ Found: the four styled avatars left in the local `inputs/faces/` by the T8.6 liv
 on it. They were copied to `outputs/style-samples/` for M-10 and unregistered; the specs pass.
 
 Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **864 tests OK** (3 new SDK tests); `npm run lint`, `npm run build` clean; E2E `restyle.spec.js` + `generate.spec.js` 2 passed.
+
+### 2026-10-08 — microphone input in the live panel (R-41 UI)
+
+The live panel can now take the user's own voice: a consent choice ("my own voice" / "written consent"), then "Speak with my microphone" captures with Web Audio, sends
+0.5 s PCM16 chunks after `audio_start`, and draws the returned frames on the audio clock (the first mic frame sets the clock, as there is no returned audio to anchor to).
+The panel says the mouth follows loudness and is an estimate. Nothing is played back.
+
+Verified: `npm run lint`, `npm run build` clean; E2E `live-mic.spec.js` (Chromium's fake capture device, a periodic beep) passed: > 60 frames for streamed audio, `done`
+labelled `audio-energy`, no error; `live.spec.js` 2 passed alongside. A person speaking into a real microphone is part of M-05's live look.
