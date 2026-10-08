@@ -98,6 +98,47 @@ class RenderTests(unittest.TestCase):
             client._poll("/api/v1/avatar/render-job/j", ("COMPLETED",), "render")
 
 
+class NewerEndpointTests(unittest.TestCase):
+    def test_render_batch_polls_until_done_and_keeps_per_item_refusals(self):
+        refused = {"index": 1, "jobId": "b", "accepted": False, "httpStatus": 404, "detail": "not registered"}
+        client, server, sleeps = client_for({
+            ("POST", "/api/v1/avatar/render-batch"): [(202, {"batchId": "B1", "accepted": 1, "rejected": 1, "jobs": [refused]})],
+            ("GET", "/api/v1/avatar/render-batch/B1"): [(200, {"done": False, "counts": {"QUEUED": 1}}),
+                                                       (200, {"done": True, "counts": {"COMPLETED": 1, "REJECTED": 1}})],
+        })
+        state = client.render_batch([{"jobId": "a"}, {"jobId": "b"}], engine="wav2lip")
+        self.assertEqual(state["counts"], {"COMPLETED": 1, "REJECTED": 1})
+        self.assertEqual(json.loads(server.requests[0].content)["jobs"][1], {"jobId": "b"})
+        self.assertEqual(server.requests[0].url.params["engine"], "wav2lip")
+        self.assertEqual(len(sleeps), 1)
+
+    def test_voice_to_avatar_uploads_the_file_with_its_consent_basis_and_returns_the_render(self):
+        import tempfile
+
+        client, server, _ = client_for({
+            ("POST", "/api/v1/avatar/voice-to-avatar"): [(202, {"jobId": "v2a-1", "status": "QUEUED", "speech": {"transcript": "hi", "transcriptSource": "asr"}})],
+            ("GET", "/api/v1/avatar/render-job/v2a-1"): [(200, {"status": "COMPLETED", "videoUrl": "/outputs/renders/v2a-1.mp4", "result": {"engine": "blendshape"}})],
+        })
+        with tempfile.NamedTemporaryFile(suffix=".wav") as audio:
+            audio.write(b"RIFFfake")
+            audio.flush()
+            result = client.voice_to_avatar(audio.name, "demo", "speaker-recorded")
+        body = server.requests[0].content
+        self.assertIn(b'name="consentBasis"', body)
+        self.assertIn(b"speaker-recorded", body)
+        self.assertIn(b"RIFFfake", body)
+        self.assertNotIn(b'name="transcript"', body)              # left out: the server will recognise the words
+        self.assertEqual((result.video_url, result.result["speech"]["transcriptSource"]), ("http://api/outputs/renders/v2a-1.mp4", "asr"))
+
+    def test_stylize_waits_and_a_failed_task_raises_its_reason(self):
+        client, _, _ = client_for({
+            ("POST", "/api/v1/avatar/stylize"): [(202, {"taskId": "s1", "status": "QUEUED"})],
+            ("GET", "/api/v1/avatar/generate/s1"): [(200, {"taskId": "s1", "status": "FAILED", "error": "InsufficientRAM: close other programs"})],
+        })
+        with self.assertRaisesRegex(JobFailed, "InsufficientRAM"):
+            client.stylize("demo", "cartoon", "demo-cartoon")
+
+
 class ErrorAndLimitTests(unittest.TestCase):
     def test_errors_carry_the_servers_detail_status_and_request_id(self):
         client, *_ = client_for({("GET", "/health"): [(403, {"detail": "no consent"}, {"X-Request-ID": "abc123"})]})

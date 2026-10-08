@@ -122,6 +122,10 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
   const [genOptions, setGenOptions] = useState(null);
   const [gen, setGen] = useState({ avatarId: "", age: "adult", presentation: "person", hair: "short-dark", glasses: false });
   const [genTask, setGenTask] = useState(null);
+  // Style transfer (T8.6): restyle the selected face; polled through the same generation task as above.
+  const [showStyle, setShowStyle] = useState(false);
+  const [styles, setStyles] = useState(null);
+  const [restyle, setRestyle] = useState({ style: "painting", newAvatarId: "" });
 
   /* Fetching and applying are separate so the mount effect can drop a
      response that arrives after the panel unmounts, while the registration
@@ -186,6 +190,32 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
     }, 3000);
     return () => clearInterval(timer);
   }, [apiBase, genTask, applyAvatarList, fetchAvatarList]);
+
+  useEffect(() => {
+    let ignore = false;
+    fetch(`${apiBase}/api/v1/avatar/styles`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((payload) => { if (!ignore && payload) setStyles(payload); })
+      .catch(() => {});
+    return () => { ignore = true; };
+  }, [apiBase]);
+
+  const handleRestyle = async (event) => {
+    event.preventDefault();
+    setError("");
+    try {
+      const res = await fetch(`${apiBase}/api/v1/avatar/stylize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ avatarId, ...restyle }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(detailOf(body, "Restyling was rejected"));
+      setGenTask(body);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
   const handleGenerate = async (event) => {
     event.preventDefault();
@@ -430,6 +460,41 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
                 {genTask.status === "FAILED" && <div className="alert error">{genTask.error}</div>}
               </div>
             )}
+          </form>
+        )}
+        <button type="button" id="restyle-toggle" style={{ marginTop: "8px" }} disabled={!avatarId}
+          onClick={() => setShowStyle((v) => !v)}>
+          {showStyle ? "Cancel" : "Restyle this face"}
+        </button>
+        {showStyle && (
+          <form id="restyle-form" onSubmit={handleRestyle} style={{ marginTop: "10px" }}>
+            <div style={{ ...small, marginBottom: "6px" }}>
+              Makes a new avatar from “{avatarId}” in another style. It keeps the original&apos;s consent record, and
+              reports how much it still looks like the same person (stronger styles drift further).
+              {styles && !styles.available && <div style={{ color: "#fbbf24" }}>⚠ {styles.detail}</div>}
+            </div>
+            <label style={{ ...small, display: "block" }}>
+              Style
+              <select id="restyle-style" style={field} value={restyle.style} onChange={(e) => setRestyle({ ...restyle, style: e.target.value })}>
+                {Object.keys(styles?.styles ?? { [restyle.style]: null }).map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </label>
+            <label style={{ ...small, display: "block", marginTop: "6px" }}>
+              New avatar id
+              <input id="restyle-avatar-id" style={field} required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}"
+                value={restyle.newAvatarId} onChange={(e) => setRestyle({ ...restyle, newAvatarId: e.target.value })} />
+            </label>
+            <button type="submit" id="restyle-btn" style={{ marginTop: "10px" }}
+              disabled={styles?.available === false || ["QUEUED", "PROCESSING"].includes(genTask?.status)}>
+              {["QUEUED", "PROCESSING"].includes(genTask?.status) ? "Working…" : "Restyle"}
+            </button>
+            {genTask?.result?.identity && (
+              <div id="restyle-identity" style={{ ...small, marginTop: "6px" }}>
+                {genTask.result.style}: {genTask.result.identity.percent}% similar to the original
+                {genTask.result.identity.samePerson ? " (same person by SFace)" : " (no longer recognised as the same person)"}
+              </div>
+            )}
+            {genTask?.status === "FAILED" && <div className="alert error">{genTask.error}</div>}
           </form>
         )}
         {showUpload && (

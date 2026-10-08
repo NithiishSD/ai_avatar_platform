@@ -57,7 +57,7 @@ records what was verified live, with the real command and result.
 | T8.5 | Done | b4643a7 |
 | T8.2 | Done | 0a74a50 |
 | T8.8 | Done — 1080p met by super-resolving the photo; a person's look waits on M-09 | 3980a94 |
-| T8.6 | Done — built and measured; a person's look waits on M-10 | (this commit) |
+| T8.6 | Done — built and measured; a person's look waits on M-10 | 79dd00f |
 | T8.4 | Done — Wav2Lip meets the lip-sync percentage on 13 languages, blendshape does not; N-20 not met | 0eb03a9 |
 | T8.7 | Built and measured; the Stable Diffusion words wait on M-08 | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
@@ -1305,3 +1305,14 @@ Looking at them: cartoon is barely stylised. M-10 asks the owner.
 
 Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **861 tests OK** (12 new, incl. `test_container.py` for T7.2, committed with it).
 Not done: a style picker in the UI (API only); identity-preserving conditioning (IP-Adapter / ControlNet).
+
+### 2026-10-08 — SDK and UI for the milestone-8 endpoints
+
+SDK (`sdk/avatar_platform/client.py`): `render_batch` (polls until no job is running; per-item refusals kept), `voice_to_avatar` (multipart upload with the consent
+basis; the transcript is left out so the server recognises it), `stylize`, `metrics`, `parameters`, `protect_voice`. Studio: a "Restyle this face" form (styles from
+`GET /api/v1/avatar/styles`, identity shown when done, polled through the generation task like "Generate a synthetic face").
+
+Found: the four styled avatars left in the local `inputs/faces/` by the T8.6 live run made `demo-cartoon` the default face (`-` sorts before `.`), and two E2E specs failed
+on it. They were copied to `outputs/style-samples/` for M-10 and unregistered; the specs pass.
+
+Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **864 tests OK** (3 new SDK tests); `npm run lint`, `npm run build` clean; E2E `restyle.spec.js` + `generate.spec.js` 2 passed.

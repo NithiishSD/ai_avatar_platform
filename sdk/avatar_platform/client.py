@@ -215,3 +215,66 @@ class AvatarClient:
         if state["status"] != "COMPLETED":
             raise JobFailed(state.get("error") or "face generation failed")
         return state["result"]
+
+    # -- added with milestone 8 -------------------------------------------
+
+    def render_batch(self, jobs: List[Dict[str, Any]], engine: Optional[str] = None, wait: bool = True) -> Dict[str, Any]:
+        """
+        Queue up to 50 ``AvatarRenderJob`` payloads at once. Items the server refuses are reported by
+        index (``accepted: false`` with ``httpStatus`` and ``detail``) and do not stop the others.
+        With ``wait`` the call returns once no job is still queued or running.
+        """
+        batch = self._request("POST", "/api/v1/avatar/render-batch", json={"jobs": jobs}, params={"engine": engine} if engine else None)
+        if not wait:
+            return batch
+        waited = 0.0
+        while True:
+            state = self._request("GET", f"/api/v1/avatar/render-batch/{batch['batchId']}")
+            if state["done"]:
+                return state
+            if waited >= self.poll_timeout:
+                raise TimeoutError(f"batch {batch['batchId']} not finished after {self.poll_timeout:.0f}s: {state['counts']}")
+            self._sleep(self.poll_interval)
+            waited += self.poll_interval
+
+    def voice_to_avatar(
+        self, audio_file: str, avatar_id: str, consent_basis: str, transcript: Optional[str] = None,
+        language: Optional[str] = None, engine: Optional[str] = None, quality: str = "PREVIEW",
+    ) -> RenderResult:
+        """
+        Your own recording drives a face. ``consent_basis`` is whose voice it is (speaker-recorded,
+        written-consent, open-licence). Without a ``transcript`` the server recognises the words.
+        Returns the finished render; ``result["speech"]`` holds the transcript and its source.
+        """
+        form = {"avatarId": avatar_id, "consentBasis": consent_basis, "renderQuality": quality}
+        form.update({k: v for k, v in (("transcript", transcript), ("language", language), ("engine", engine)) if v})
+        with open(audio_file, "rb") as handle:
+            accepted = self._request("POST", "/api/v1/avatar/voice-to-avatar", data=form,
+                                     files={"file": (audio_file.rsplit("/", 1)[-1], handle, "application/octet-stream")})
+        state = self._poll(f"/api/v1/avatar/render-job/{quote(accepted['jobId'], safe='')}", ("COMPLETED", "FAILED"), "render")
+        if state["status"] != "COMPLETED":
+            raise JobFailed(state.get("error") or "render failed")
+        return RenderResult(job_id=accepted["jobId"], video_url=f"{self.base_url}{state['videoUrl']}", engine=state.get("engine"),
+                            result={**(state.get("result") or {}), "speech": accepted.get("speech")})
+
+    def stylize(self, avatar_id: str, style: str, new_avatar_id: str, seed: int = 0, steps: int = 30) -> Dict[str, Any]:
+        """Restyle a face (realistic, cartoon, painting, sketch) as a new avatar; the result carries its identity score."""
+        task = self._request("POST", "/api/v1/avatar/stylize",
+                             json={"avatarId": avatar_id, "style": style, "newAvatarId": new_avatar_id, "seed": seed, "steps": steps})
+        state = self._poll(f"/api/v1/avatar/generate/{task['taskId']}", ("COMPLETED", "FAILED"), "style transfer")
+        if state["status"] != "COMPLETED":
+            raise JobFailed(state.get("error") or "style transfer failed")
+        return state["result"]
+
+    def metrics(self) -> Dict[str, Any]:
+        """Queue depth, render timings and lip-sync scores so far."""
+        return self._request("GET", "/api/v1/metrics")
+
+    def parameters(self) -> Dict[str, Any]:
+        """Every customisation parameter with its range and measured status, and the count against the target."""
+        return self._request("GET", "/api/v1/parameters")
+
+    def protect_voice(self, recording: str) -> str:
+        """Put a voice on the protected list (only its speaker embedding is kept); returns its opaque id."""
+        with open(recording, "rb") as handle:
+            return self._request("POST", "/api/v1/abuse/protected-voices", files={"file": ("voice", handle, "application/octet-stream")})["id"]
