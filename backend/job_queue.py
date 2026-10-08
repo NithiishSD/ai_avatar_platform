@@ -22,7 +22,7 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 from contracts import AvatarRenderJob, JobStatus
 from job_store import JobStore
@@ -178,6 +178,11 @@ class InMemoryJobQueue:
         with self._lock:
             # .get() rather than [job_id]: an unknown id is a 404, not a crash.
             return self._jobs.get(job_id)
+
+    def jobs(self) -> List[QueuedJob]:
+        """A snapshot of every job this process knows, for the metrics endpoint."""
+        with self._lock:
+            return list(self._jobs.values())
 
     def update(self, job_id: str, **changes) -> None:
         # **changes collects arbitrary keyword arguments into a dict, so one

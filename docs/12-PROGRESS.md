@@ -50,7 +50,8 @@ records what was verified live, with the real command and result.
 | T5.4 | Done | 43c9c87 |
 | T5.3 | Done | caaf316 |
 | T6.6 | Measured on CPU (8 Oct): offset -4 not reproduced, N-06 **not met**, MOS 4.894; N-10 and the GPU timing wait on M-04; the 10+ language percentage is T8.4 | (this commit) |
-| T8.1 | Done | (this commit) |
+| T8.1 | Done | 5f7fc25 |
+| T8.10 | Done | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
@@ -1178,3 +1179,15 @@ Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **788 tests OK** (4 n
 `scripts/batch_test.py --jobs 10` -> 202 in 306 ms, 10 accepted + 3 refused with reasons, 10 COMPLETED in 48.6 s, 10 distinct video files.
 
 Not done: a batch UI, a Python SDK method for batches, Celery/Redis not run here.
+
+### 2026-10-08 — T8.10 metrics endpoint
+
+`GET /api/v1/metrics` (`backend/metrics.py`): queue depth by state, render time and real-time-factor spread (n, mean, p50, p95 nearest-rank, max),
+engines used, watermarked vs not, results with warnings, peak VRAM when a render ran on a GPU, lip-sync scores taken so far (the score endpoint now keeps
+its result on the job), and the audit trail's size and head. Computed on request from the queue; nothing sampled in the background. Fields with nothing
+to report are `null`/0, never invented. The Celery backend cannot list jobs, and the endpoint says so instead of returning zeros.
+
+Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **795 tests OK** (7 new, 2 plants caught). Live: 123 finished renders in the job store:
+render time mean 1.63 s, p95 6.84 s; after scoring one render `lipSyncScored` 1, LSE-C 4.928, offset 0.
+
+Not done: Prometheus-format output, time-windowed rates, speech-quality (MOS) scores in the report (audits are not stored per clip).

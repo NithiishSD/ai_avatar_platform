@@ -51,6 +51,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import audit_log
+import metrics
 import avatar_generator
 import live_engine
 import manifest
@@ -905,7 +906,23 @@ def score_render_job(job_id: str) -> LipSyncScoreResponse:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(err)
         ) from err
+    # Keep the score with the job so /api/v1/metrics can report it.
+    job_queue.update(job_id, result={**queued_job.result, "lipsync": score.to_dict()})
     return LipSyncScoreResponse(jobId=job_id, score=score.to_dict())
+
+
+@app.get("/api/v1/metrics")
+def get_metrics() -> dict:
+    """Queue depth, render timings and lip-sync scores so far, and the size of the audit trail (R-51)."""
+    list_jobs = getattr(job_queue, "jobs", None)
+    body: Dict[str, Any] = {"queueBackend": queue_backend}
+    if list_jobs is None:
+        body["queue"] = body["renders"] = body["quality"] = {
+            "available": False, "reason": f"the {queue_backend} queue backend cannot list its jobs; use the in_memory backend or inspect Redis"}
+    else:
+        body.update(metrics.summarise(list_jobs()))
+    body["audit"] = audit_log.shared_audit().head()
+    return body
 
 
 @app.post(

@@ -80,7 +80,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-46 | consent, rate limit, watermark, manifest exist; T8.9 adds the rest | partial |
 | R-47 | emotion, speed, pitch only | partial |
 | R-48 | WebSocket used instead, D-46 | not built |
-| R-51 | T8.10 | gap |
+| R-51 | `test_metrics.py` (6: empty case reports `None` not 0, nearest-rank percentiles are observed values, counts/timings/watermark/score aggregation, a result missing fields does not break the report) and `test_app_vision.py` (the endpoint, and that a lip-sync score is kept on the job); **2 plants caught** (percentile rank off by one, score not stored). Live (T8.10), real server: `GET /api/v1/metrics` over 123 finished renders: render time mean 1.63 s / p95 6.84 s, real-time factor mean 0.73 / p95 3.0, 22 watermarked and 101 not (older renders), no peak VRAM (CPU); after `POST .../lipsync-score` on one render: `lipSyncScored` 1, LSE-C 4.928, offset 0 | pass |
 | R-52 | docs 01-15 exist; README and contribution guide T7.6 | partial |
 | R-53 | cannot be done from here | not possible |
 | N-12 | LPIPS < 0.1: T8.3 | gap |

@@ -423,6 +423,26 @@ class RenderRouteTests(VisionApiCase):
             missing = self.client.post("/api/v1/avatar/render-job/R1/lipsync-score")
         self.assertEqual(missing.status_code, 503)
 
+    def test_metrics_endpoint_reports_the_queue_and_a_score_once_taken(self):
+        empty = self.client.get("/api/v1/metrics").json()
+        self.assertEqual(empty["queueBackend"], "in_memory")
+        self.assertEqual(empty["renders"]["finished"], 0)
+        self.assertIn("entries", empty["audit"])
+
+        self.client.post("/api/v1/avatar/render-job", json=self.payload())
+        self.wait("R1")
+        score = mock.Mock()
+        score.to_dict.return_value = {"lseC": 6.1, "lseD": 7.2, "offsetFrames": 0}
+        with mock.patch("lipsync_metric.score_video", return_value=score):
+            self.client.post("/api/v1/avatar/render-job/R1/lipsync-score")
+        body = self.client.get("/api/v1/metrics").json()
+        self.assertEqual(body["queue"]["jobsByState"], {"COMPLETED": 1})
+        self.assertEqual(body["renders"]["finished"], 1)
+        self.assertEqual(body["quality"]["lipSyncScored"], 1)
+        self.assertEqual(body["quality"]["lseC"]["mean"], 6.1)
+        # The score is also kept on the job's own result.
+        self.assertEqual(self.client.get("/api/v1/avatar/render-job/R1").json()["result"]["lipsync"]["lseC"], 6.1)
+
     @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg / ffprobe not installed")
     def test_real_render_through_the_api(self):
         import celery_app
