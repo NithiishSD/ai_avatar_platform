@@ -1446,3 +1446,26 @@ the stale-language-lookup race moved to the language search (same guard), synthe
 - Tests: E2E now pick the `demo` face explicitly (the owner's own faces, e.g. `cartoon`, sort first and became the default); 18 passed. `check.sh` 870 tests OK.
 - Owner chose the "alive photo" plan: **1** whole-portrait motion of our own (head tilt/nod/sway, brows, breathing), **then 2** SadTalker. `backend/head_motion.py`
   (motion maths, self-check) written; wiring into the warp is next.
+
+### 2026-10-09 — I-01 whole-portrait motion and I-02 microphone mouth shapes
+
+- **I-01** (`backend/head_motion.py`, `PortraitAnimator.apply_pose`, `AnimationTrack.head`, D-59): every render and the live avatar now move the head (tilt, nod,
+  sway), lift the brows on emphasis and breathe; `motionIntensity` 0-2 on render jobs, live sessions and voice-to-avatar, and a "Head movement" choice (Still /
+  Subtle / Natural / Lively) in the studio and live panel. Real render (`demo`, CPU): 120 frames in 2.9 s; head region changed 3.3 grey levels between frames vs
+  1.3 at the background corners; frame strip shows tilt and sway without tearing. SyncNet offset 0, LSE-C 2.65; seconds within one frame 40 % (was ~60 %): the
+  metric crops the face from the first frame, so a moving head lowers it; not claimed as a lip-sync loss or gain. A name clash (`_grid_x/_grid_y` used by the face
+  warp) broke the first build; the pose grid is `_pose_x/_pose_y`.
+- **I-02** (`backend/audio_visemes.py`, D-60): microphone audio now gets a mouth shape per 40 ms from the sound instead of one held shape. Measured: 45 % agreement
+  with forced alignment (chance ~20 %), 28-36 % while speaking (chance 25 %): the mouth varies with the sound, but it is a weak estimate and labelled as one.
+- Tests: `test_face_warp.py` (pose: zero pose changes nothing, a tilt moves the head and not the far corner, nod, pose after shapes), `test_face_animation.py`
+  (motion on by default, off at 0, deterministic), `test_contracts.py` (`motionIntensity` optional and bounded), `test_audio_visemes.py` (each sound family, the
+  noise gate, merged runs). `scripts/check.sh` 880 tests OK.
+
+### 2026-10-09 — the GPU became visible here; watermark models fixed for a shared card
+
+After the owner installed the NVIDIA user-space libraries, PyTorch in this environment sees the RTX 4050 too. With D-57 the watermark models load on CUDA,
+and the E2E run failed twice with `CUBLAS_STATUS_ALLOC_FAILED`: XTTS-v2 was still on the card from the previous test, and the watermarks neither asked for room
+nor let others free it. Worse, the failed load was cached, so every later synthesis in that server failed. Fixed: both watermark models call `ensure_vram`
+(1,500 MB VideoSeal, 400 MB AudioSeal) before loading on CUDA, a full card is not cached as a permanent failure, both register releasers, and every model call
+goes through `gpu_utils.retry_after_freeing` (free the other models, retry once). Tests: retry once on OOM, re-raise other errors and a second OOM, no cached
+failure on a full card. `scripts/check.sh` **883 tests OK**; **E2E 18 passed (1.4 min), 0 GPU memory errors**.

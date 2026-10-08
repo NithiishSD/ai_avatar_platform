@@ -155,6 +155,8 @@ class AnimationTrack:
     unknown_visemes: Dict[str, int] = field(default_factory=dict)
     blink_times: List[float] = field(default_factory=list)
     energy_gated: bool = False
+    # Whole-portrait motion per frame (head_motion.POSE_CHANNELS), or None for a still head.
+    head: Optional[np.ndarray] = None
 
     @property
     def frame_count(self) -> int:
@@ -170,6 +172,10 @@ class AnimationTrack:
             # Near-zero weights are dropped so callers and logs see only active shapes.
             if value > 1e-4
         }
+
+    def pose(self, index: int) -> Optional[Tuple[float, ...]]:
+        """This frame's head-and-shoulders pose for ``PortraitAnimator.render``, or None."""
+        return None if self.head is None else tuple(float(v) for v in self.head[index])
 
     def column(self, name: str) -> np.ndarray:
         """One blendshape's weight across all frames (zeros if unused)."""
@@ -303,6 +309,7 @@ def build_animation(
     seed: int = 0,
     energy_envelope: Optional[np.ndarray] = None,
     smoothing_ms: float = DEFAULT_SMOOTHING_MS,
+    motion_intensity: float = 1.0,
 ) -> AnimationTrack:
     """
     Build the per-frame blendshape track for a render job.
@@ -327,6 +334,7 @@ def build_animation(
         {shape for shapes in VISEME_BLENDSHAPES.values() for shape in shapes}
         | set(emotion)
         | set(BLINK_SHAPES)
+        | {"browInnerUp"}
     )
     index = {name: i for i, name in enumerate(names)}
 
@@ -373,6 +381,7 @@ def build_animation(
     smoothed[:, opening_columns] *= (1.0 - np.clip(closure, 0.0, 1.0))[:, None]
 
     energy_gated = False
+    envelope: Optional[np.ndarray] = None  # set when an energy envelope is given; also drives head motion
     if energy_envelope is not None and len(energy_envelope) > 0:
         # Optional energy gating. The envelope is padded to the grid length and lightly
         # smoothed (30 ms) so the gate does not flicker on single loud samples.
@@ -417,6 +426,20 @@ def build_animation(
             # Blinks take the larger of the existing eye weight and the blink curve.
             weights[:, index[shape]] = np.maximum(weights[:, index[shape]], curve)
 
+    # Whole-portrait motion (I-01): head drift and nods, brow lifts on emphasis, breathing. Loudness per
+    # frame drives it: the energy envelope when there is one, else how open the jaw is.
+    head = None
+    if motion_intensity > 0:
+        from head_motion import motion_track
+
+        if envelope is not None:
+            loudness = np.clip(envelope[sample], 0.0, 1.0)
+        else:
+            loudness = np.clip(weights[:, index["jawOpen"]] / 0.6, 0.0, 1.0) if "jawOpen" in index else None
+        motion = motion_track(frames, fps, seed, loudness=loudness, intensity=motion_intensity)
+        head = motion.pose
+        weights[:, index["browInnerUp"]] += motion.brow
+
     np.clip(weights, 0.0, 1.0, out=weights)
     return AnimationTrack(
         fps=fps,
@@ -425,4 +448,5 @@ def build_animation(
         unknown_visemes=unknown,
         blink_times=blinks,
         energy_gated=energy_gated,
+        head=head,
     )

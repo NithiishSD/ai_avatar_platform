@@ -141,3 +141,56 @@ class HeapTrimTests(unittest.TestCase):
     def test_a_system_without_glibc_is_not_an_error(self):
         with mock.patch("ctypes.CDLL", side_effect=OSError("no libc.so.6")):
             gpu_utils.empty_cache()  # must not raise
+
+
+class RetryAfterFreeingTests(unittest.TestCase):
+    """GPU out-of-memory mid-call (the E2E finding of 9 Oct): free the other models, try once more."""
+
+    def test_an_out_of_memory_error_is_retried_once_after_freeing(self):
+        from unittest import mock
+
+        import gpu_utils
+
+        calls = []
+
+        def work():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("CUDA error: CUBLAS_STATUS_ALLOC_FAILED when calling `cublasCreate(handle)`")
+            return "ok"
+
+        with mock.patch.object(gpu_utils, "release_others", return_value=["xtts-v2"]) as release:
+            self.assertEqual(gpu_utils.retry_after_freeing(work, keep="video-watermark"), "ok")
+        release.assert_called_once_with(keep="video-watermark")
+        self.assertEqual(len(calls), 2)
+
+    def test_other_errors_and_a_second_failure_are_raised(self):
+        from unittest import mock
+
+        import gpu_utils
+
+        with self.assertRaisesRegex(ValueError, "bad input"):
+            gpu_utils.retry_after_freeing(lambda: (_ for _ in ()).throw(ValueError("bad input")))
+        always_full = mock.Mock(side_effect=RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB"))
+        with mock.patch.object(gpu_utils, "release_others", return_value=[]):
+            with self.assertRaisesRegex(RuntimeError, "out of memory"):
+                gpu_utils.retry_after_freeing(always_full)
+        self.assertEqual(always_full.call_count, 2)
+
+
+class WatermarkFullCardTests(unittest.TestCase):
+    def test_a_full_card_is_not_cached_as_a_permanent_watermark_failure(self):
+        from unittest import mock
+
+        import gpu_utils
+        import video_watermark
+        import watermark_engine
+
+        for cls, error in ((video_watermark.VideoWatermarker, video_watermark.VideoWatermarkUnavailable),
+                           (watermark_engine.AudioWatermarker, watermark_engine.WatermarkUnavailable)):
+            with self.subTest(cls=cls.__name__):
+                marker = cls(device="cuda")
+                with mock.patch.object(gpu_utils, "ensure_vram", side_effect=gpu_utils.InsufficientVRAM("card full")):
+                    with self.assertRaises(error):
+                        marker._load()
+                self.assertIsNone(marker._failure)  # the next call tries again instead of failing for good

@@ -62,6 +62,7 @@ _ROWS: List[Tuple[Any, str, str, str, str]] = [
     (contracts.BackgroundSpec, "color", "appearance", M, "a #RRGGBB background replaced the old one"),
     (contracts.BackgroundSpec, "imageUrl", "appearance", M, "an image under outputs/ or inputs/ replaced the old background"),
     (contracts.AvatarRenderJob, "renderQuality", "render", M, "PREVIEW caps at 512 px; 1080P_HQ fits 1920x1080, and a photo that would give less than 720p is first enlarged with Real-ESRGAN (T8.8: a 512 px photo renders at 1080x1080, its added detail synthesised)"),
+    (contracts.AvatarRenderJob, "motionIntensity", "appearance", NM, "head tilt / nod / sway and breathing while talking (I-01); 0 still, 1 natural, 2 lively; measured once in a real render, not yet by the parameter script"),
     (contracts.AvatarRenderJob, "targetFps", "render", M, "12 fps gave 60 frames against 125 at 25 fps"),
     (contracts.AvatarGenerateRequest, "age", "appearance", NM, "Stable Diffusion prompt word; SD 1.5 follows it only approximately"),
     (contracts.AvatarGenerateRequest, "presentation", "appearance", NM, "Stable Diffusion prompt word; not measured"),

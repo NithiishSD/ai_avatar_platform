@@ -93,7 +93,7 @@ MAX_CHUNK_CHARS = 220
 # follows it. There is no transcript, so there are no phonemes to align: the mouth opens and
 # closes with the loudness of the audio. That is an estimate, and every message about it says so.
 AUDIO_DRIVE = "audio-energy"
-AUDIO_DRIVE_NOTE = "mouth estimated from the audio's loudness; not phoneme-aligned"
+AUDIO_DRIVE_NOTE = "mouth shape estimated from the sound and its loudness; not phoneme-aligned"
 MAX_PCM_SECONDS = 2.0       # one binary message carries at most this much audio
 # The quietest level treated as speech when nothing louder has been heard yet (about -34 dBFS);
 # below it a stream of room noise keeps the mouth shut instead of being normalised up to "talking".
@@ -210,9 +210,11 @@ class LiveSession:
         speaker_wav: Optional[str] = None,
         clone_engine: Optional[str] = None,
         voice: Optional[str] = None,
+        motion_intensity: float = 1.0,
     ) -> None:
         self.router = router
         self.voice = voice
+        self.motion_intensity = motion_intensity
         self.store = store
         self.avatar_id = avatar_id
         self.language = language
@@ -328,6 +330,7 @@ class LiveSession:
             emotion_vector=chunk.emotion_vector,
             seed=seed_from_job_id(f"{self.session_id}-{chunk.index}"),
             energy_envelope=chunk.energy,
+            motion_intensity=self.motion_intensity,
         )
 
     def render_jpeg(self, track: AnimationTrack, index: int) -> bytes:
@@ -336,7 +339,7 @@ class LiveSession:
 
         # open() must have run first; the assert also narrows the Optional type for the type checker.
         assert self.animator is not None
-        frame = self.animator.render(track.frame(index))
+        frame = self.animator.render(track.frame(index), track.pose(index))
         # OpenCV encodes BGR, so the RGB frame is converted first or the colours come out swapped.
         ok, encoded = cv2.imencode(".jpg", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
         if not ok:
@@ -359,16 +362,20 @@ class LiveSession:
         envelope = np.clip(rms / self.audio_reference, 0.0, 1.0).astype(np.float32)
         # Boolean-mask assignment: every step whose RMS is under the gate is set to 0 (mouth closed).
         envelope[rms < NOISE_GATE] = 0.0
-        # One open-vowel shape held for the whole chunk; the energy gate in build_animation opens and
-        # shuts it with the loudness. Without phonemes there is nothing better to pick.
-        held = [{"phoneme": "AA", "viseme": "viseme_aa", "startMs": 0, "endMs": duration * 1000.0}]
+        # The mouth shape per 40 ms is estimated from the sound (audio_visemes: spectral centroid and
+        # zero-crossing rate -> closed / teeth / rounded / open / wide), and the energy gate in
+        # build_animation scales how far it opens. Before I-02 one open shape was held for every word.
+        from audio_visemes import estimate_timestamps
+
+        held = estimate_timestamps(mono, sample_rate) or [{"phoneme": "EST", "viseme": "viseme_sil", "startMs": 0, "endMs": duration * 1000.0}]
         emotion = None
         if self.emotion:
             from emotion_engine import to_render_emotion_vector
 
             emotion = to_render_emotion_vector({self.emotion: self.emotion_intensity})
         return build_animation(held, duration_seconds=duration, fps=self.fps, emotion_vector=emotion,
-                               seed=seed_from_job_id(f"{self.session_id}-a{index}"), energy_envelope=envelope)
+                               seed=seed_from_job_id(f"{self.session_id}-a{index}"), energy_envelope=envelope,
+                               motion_intensity=self.motion_intensity)
 
     def cleanup(self) -> None:
         """Delete any of this session's WAV files that were left behind (e.g. a cancelled synthesis)."""

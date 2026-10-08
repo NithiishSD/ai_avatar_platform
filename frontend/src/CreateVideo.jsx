@@ -84,6 +84,7 @@ export default function CreateVideo({ apiBase }) {
   // Video
   const [quality, setQuality] = useState("PREVIEW");
   const [engine, setEngine] = useState("blendshape");
+  const [motion, setMotion] = useState(1.0); // head-and-shoulder movement: 0 still .. 1.5 lively
   const [background, setBackground] = useState(false);
   const [backgroundColor, setBackgroundColor] = useState("#0b3d91");
 
@@ -166,7 +167,7 @@ export default function CreateVideo({ apiBase }) {
     const payload = {
       jobId: `JOB-${Date.now()}`, avatarId, audioUrl: speechResult.audioUrl, sampleRate: 24000,
       durationSeconds: Math.max(speechResult.durationSeconds, 0.5), phonemeTimestamps: speechResult.phonemeTimestamps,
-      emotionVector: faceEmotion(speechResult.emotion), renderQuality: quality, targetFps: 25,
+      emotionVector: faceEmotion(speechResult.emotion), renderQuality: quality, targetFps: 25, motionIntensity: motion,
       ...(background ? { background: { color: backgroundColor } } : {}),
     };
     const res = await fetch(`${apiBase}/api/v1/avatar/render-job?engine=${encodeURIComponent(engine)}`, {
@@ -214,6 +215,7 @@ export default function CreateVideo({ apiBase }) {
     form.append("consentBasis", own.consentBasis);
     form.append("engine", engine);
     form.append("renderQuality", quality);
+    form.append("motionIntensity", String(motion));
     if (own.transcript.trim()) form.append("transcript", own.transcript.trim());
     const res = await fetch(`${apiBase}/api/v1/avatar/voice-to-avatar`, { method: "POST", body: form });
     const accepted = await res.json();
@@ -383,6 +385,14 @@ export default function CreateVideo({ apiBase }) {
               </select>
             </label>
           </div>
+          <label className="field"><span>Head movement</span>
+            <select id="motion-select" value={motion} onChange={(e) => setMotion(Number(e.target.value))}>
+              <option value={0}>Still (lips and blinks only)</option>
+              <option value={0.6}>Subtle</option>
+              <option value={1}>Natural</option>
+              <option value={1.5}>Lively</option>
+            </select>
+          </label>
           <label className="check">
             <input id="background-toggle" type="checkbox" checked={background} onChange={(e) => setBackground(e.target.checked)} /> New background colour
             {background && <input id="background-color" type="color" aria-label="background colour" value={backgroundColor} onChange={(e) => setBackgroundColor(e.target.value)} />}

@@ -89,7 +89,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, Mapping, Optional, Tuple
+from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -313,6 +313,7 @@ class PortraitAnimator:
         self._build_eye_fields()
         self._build_brow_fields()
         self._sample_colours()
+        self._build_pose_fields(landmarks)
 
     # ------------------------------------------------------------------
     # Rig construction
@@ -784,7 +785,12 @@ class PortraitAnimator:
         image[self.n_landmarks :] = 0.0
         return image
 
-    def render(self, weights: Optional[Mapping[str, float]] = None) -> np.ndarray:
+    def render(self, weights: Optional[Mapping[str, float]] = None, pose: Optional[Sequence[float]] = None) -> np.ndarray:
+        """Render one frame: the face shapes in ``weights``, then the whole-portrait ``pose`` (head and shoulders, I-01)."""
+        frame = self._render_face(weights)
+        return self.apply_pose(frame, pose) if pose is not None else frame
+
+    def _render_face(self, weights: Optional[Mapping[str, float]] = None) -> np.ndarray:
         """
         Render one RGB frame at the photo's own resolution.
 
@@ -1124,3 +1130,69 @@ class PortraitAnimator:
         roi[by0:by1, bx0:bx1] = np.clip(
             region * (1 - alpha) + layer * alpha, 0, 255
         ).astype(np.uint8)
+
+    # ------------------------------------------------------------------
+    # Whole-portrait motion (I-01): head tilt / nod / sway and breathing
+    # ------------------------------------------------------------------
+
+    def _build_pose_fields(self, lm: np.ndarray) -> None:
+        """
+        Precompute what ``apply_pose`` needs: a pixel grid, the neck pivot, and two soft masks.
+
+        The head mask is 1 over the head (the face oval widened, and raised to take in the hair) and
+        fades to 0 over the neck and the background around it; the body mask is 1 over the shoulders
+        below the neck. Moving pixels by a mask-weighted amount keeps the edge of the photo and the
+        background far from the head still, which is what a 2-D photo can afford.
+        """
+        oval = lm[list(FACE_OVAL)]
+        centre = oval.mean(axis=0)
+        # Face height along the face's own vertical (ey points toward the chin): the unit for every motion.
+        heights = (oval - centre) @ self.ey
+        self.face_height = max(8.0, float(heights.max() - heights.min()))
+        widths = (oval - centre) @ self.ex
+        face_width = max(8.0, float(widths.max() - widths.min()))
+        # The head turns about the base of the neck, a little below the chin.
+        self.pivot = lm[LM_CHIN] + self.ey * 0.45 * self.face_height
+        ys, xs = np.mgrid[0:self.height, 0:self.width].astype(np.float32)
+        self._pose_x, self._pose_y = xs, ys
+        rel_x = xs - centre[0]
+        rel_y = ys - centre[1]
+        # Coordinates in the face's frame: u across, v down (negative v = toward the hair).
+        u = rel_x * self.ex[0] + rel_y * self.ex[1]
+        v = rel_x * self.ey[0] + rel_y * self.ey[1] + 0.12 * self.face_height
+        distance = np.sqrt((u / (0.95 * face_width)) ** 2 + (v / (0.85 * self.face_height)) ** 2)
+        # 1 inside the head ellipse, easing to 0 by 1.8x its size (smoothstep, so no visible seam).
+        t = np.clip((1.8 - distance) / 0.8, 0.0, 1.0)
+        self._head_mask = (t * t * (3 - 2 * t)).astype(np.float32)
+        # Shoulders: below the neck pivot, within a few face widths of the centre line.
+        below = (rel_x * self.ey[0] + rel_y * self.ey[1]) - float((self.pivot - centre) @ self.ey)
+        down = np.clip(below / (0.6 * self.face_height), 0.0, 1.0)
+        side = np.clip(1.0 - np.abs(u) / (2.5 * face_width), 0.0, 1.0)
+        self._body_mask = (down * side).astype(np.float32)
+
+    def apply_pose(self, frame: np.ndarray, pose: Sequence[float]) -> np.ndarray:
+        """
+        Move the head and shoulders of a rendered frame by one pose (``head_motion.POSE_CHANNELS``).
+
+        ``cv2.remap`` pulls each output pixel from a source position. For the head that position is the
+        inverse of "rotate by roll about the neck, scale, then shift", blended in by the head mask; the
+        shoulders are lifted by the breath and follow a quarter of the sideways sway.
+        """
+        import cv2
+
+        roll, dx, dy, scale, breath = (float(value) for value in pose)
+        unit = self.face_height
+        theta = np.deg2rad(roll)
+        cos_t, sin_t = np.cos(-theta), np.sin(-theta)
+        # Inverse transform: undo the shift, then the scale and rotation, about the pivot.
+        px = self._pose_x - self.pivot[0] - dx * unit
+        py = self._pose_y - self.pivot[1] - dy * unit
+        inv_scale = 1.0 / (1.0 + scale)
+        src_x = self.pivot[0] + inv_scale * (cos_t * px - sin_t * py)
+        src_y = self.pivot[1] + inv_scale * (sin_t * px + cos_t * py)
+        head = self._head_mask
+        body = self._body_mask
+        map_x = self._pose_x + head * (src_x - self._pose_x) - body * 0.25 * dx * unit
+        # Breathing lifts the shoulders up to 1 % of a face height (sample from slightly lower down).
+        map_y = self._pose_y + head * (src_y - self._pose_y) + body * breath * 0.010 * unit
+        return cv2.remap(frame, map_x.astype(np.float32), map_y.astype(np.float32), cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)

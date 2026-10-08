@@ -153,6 +153,9 @@ class AudioWatermarker:
         # GPU when there is one (AVATAR_DEVICE overrides). It was CPU-only on the theory that a small model
         # is cheap anywhere; on the owner's GPU host it still cost 2.2 s of a 2.7 s synthesis (4x Kokoro).
         self.device = device or _default_device()
+        import gpu_utils
+
+        gpu_utils.register_releaser("audio-watermark", self.release)
         self._generator: Any = None
         self._detector: Any = None
         self._failure: Optional[str] = None
@@ -169,6 +172,14 @@ class AudioWatermarker:
             return
         if self._failure is not None:
             raise WatermarkUnavailable(self._failure)
+        if self.device == "cuda":
+            import gpu_utils
+
+            # Room first; a full card is a passing condition, so it is not cached as a permanent failure.
+            try:
+                gpu_utils.ensure_vram(VRAM_MB, "AudioSeal audio watermark", keep="audio-watermark")
+            except gpu_utils.InsufficientVRAM as err:
+                raise WatermarkUnavailable(str(err)) from err
         try:
             import torch
 
@@ -193,7 +204,11 @@ class AudioWatermarker:
             raise WatermarkUnavailable(self._failure) from exc
 
     def release(self) -> None:
+        """Drop both models so other models can use the GPU; the next use reloads them."""
+        import gpu_utils
+
         self._generator = self._detector = None
+        gpu_utils.empty_cache()
 
     # -- embedding -----------------------------------------------------------
 
@@ -212,12 +227,18 @@ class AudioWatermarker:
         # AudioSeal 0.2+ does not resample for you: it must be fed 16 kHz. So the mark is made at 16 kHz
         # from a 16 kHz copy, brought back to the clip's rate, and added to the original untouched samples.
         model_input = _resample(signal, sample_rate, MODEL_RATE)
-        with self._lock:
-            self._load()
-            tag = torch.tensor([platform_tag()], dtype=torch.int32, device=self.device)
-            wave = torch.from_numpy(model_input).to(self.device)[None, None, :]
-            with torch.inference_mode():
-                mark = self._generator.get_watermark(wave, sample_rate=MODEL_RATE, message=tag)
+        import gpu_utils
+
+        def make() -> Any:
+            with self._lock:
+                self._load()
+                tag = torch.tensor([platform_tag()], dtype=torch.int32, device=self.device)
+                wave = torch.from_numpy(model_input).to(self.device)[None, None, :]
+                with torch.inference_mode():
+                    return self._generator.get_watermark(wave, sample_rate=MODEL_RATE, message=tag)
+
+        # A big model still on the GPU can leave too little room: free it and retry once.
+        mark = gpu_utils.retry_after_freeing(make, keep="audio-watermark")
         mark = _resample(mark.squeeze().detach().cpu().numpy().astype(np.float32), MODEL_RATE, sample_rate)
         mark = _fit(mark, signal.shape[0])
         out = signal + alpha * mark
@@ -242,11 +263,16 @@ class AudioWatermarker:
         if signal.size == 0 or float(np.max(np.abs(signal))) < 1e-4:
             return WatermarkReport(False, 0.0, 0, seconds=time.perf_counter() - started, warnings=warnings + ["the clip is silent"])
         model_input = _resample(signal, sample_rate, MODEL_RATE)
-        with self._lock:
-            self._load()
-            wave = torch.from_numpy(model_input).to(self.device)[None, None, :]
-            with torch.inference_mode():
-                probability, message = self._detector.detect_watermark(wave, sample_rate=MODEL_RATE)
+        import gpu_utils
+
+        def read() -> Any:
+            with self._lock:
+                self._load()
+                wave = torch.from_numpy(model_input).to(self.device)[None, None, :]
+                with torch.inference_mode():
+                    return self._detector.detect_watermark(wave, sample_rate=MODEL_RATE)
+
+        probability, message = gpu_utils.retry_after_freeing(read, keep="audio-watermark")
         probability = float(probability if not hasattr(probability, "item") else probability.item())
         bits = [int(round(float(b))) for b in message.squeeze().detach().cpu().tolist()]
         matching = sum(1 for got, want in zip(bits, platform_tag(), strict=False) if got == want)
@@ -280,6 +306,10 @@ def _mono(audio: np.ndarray) -> np.ndarray:
 
 _shared: Optional[AudioWatermarker] = None
 _shared_lock = threading.Lock()
+
+
+# GPU memory to free before loading AudioSeal's generator and detector (93 MB of weights) with headroom.
+VRAM_MB = 400
 
 
 def _default_device() -> str:

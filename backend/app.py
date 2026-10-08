@@ -993,6 +993,7 @@ async def voice_to_avatar_route(
     language: Optional[str] = Form(None),
     engine: Optional[str] = Form(None),
     render_quality: RenderQuality = Form(RenderQuality.PREVIEW, alias="renderQuality"),
+    motion_intensity: Optional[float] = Form(None, alias="motionIntensity", ge=0.0, le=2.0),
 ) -> dict:
     """
     Upload a recording (with the basis the voice is used under) and an avatar id; get a render job.
@@ -1026,6 +1027,7 @@ async def voice_to_avatar_route(
         "sampleRate": voice_to_avatar.OUTPUT_RATE, "durationSeconds": speech.duration_seconds,
         "phonemeTimestamps": speech.phoneme_timestamps, "emotionVector": {"happy": 0.0, "neutral": 1.0, "eyeblinkRate": 1.0},
         "renderQuality": render_quality, "targetFps": 25,
+        **({"motionIntensity": motion_intensity} if motion_intensity is not None else {}),
     })
     queued = _submit_render(job, engine)
     return {**_render_response(job.job_id, queued).model_dump(by_alias=True, exclude_none=True), "speech": speech.to_dict()}
@@ -1202,6 +1204,7 @@ async def live_avatar(ws: WebSocket) -> None:
                 router, faces, start.avatar_id, language=start.language, mode=start.mode,
                 emotion=start.emotion, emotion_intensity=start.emotion_intensity, fps=start.fps,
                 max_side=start.max_side, speaker_wav=speaker, clone_engine=start.clone_engine, voice=start.voice,
+                motion_intensity=start.motion_intensity,
             )
             info = await run_in_threadpool(session.open)
         except HTTPException as err:

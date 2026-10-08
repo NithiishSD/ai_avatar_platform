@@ -50,6 +50,7 @@ export default function LivePanel({ apiBase }) {
   // Speaker voice, matched to the face as on the create screen (voices.js).
   const [voices, setVoices] = useState([]);
   const [chosenSpeaker, setChosenSpeaker] = useState({});
+  const [motion, setMotion] = useState(1.0); // head-and-shoulder movement, as on the create screen
 
   const socketRef = useRef(null);
   const canvasRef = useRef(null);
@@ -208,7 +209,7 @@ export default function LivePanel({ apiBase }) {
     const socket = new WebSocket(wsUrl(apiBase));
     socket.binaryType = "arraybuffer";
     socketRef.current = socket;
-    socket.onopen = () => socket.send(JSON.stringify({ type: "start", avatarId, fps: 25, maxSide: 384, ...(voices.length ? { voice: speaker } : {}) }));
+    socket.onopen = () => socket.send(JSON.stringify({ type: "start", avatarId, fps: 25, maxSide: 384, motionIntensity: motion, ...(voices.length ? { voice: speaker } : {}) }));
     socket.onmessage = (event) => {
       if (typeof event.data !== "string") return handleMedia(event.data);
       const message = JSON.parse(event.data);
@@ -345,6 +346,15 @@ export default function LivePanel({ apiBase }) {
             </select>
           </label>
         )}
+        <label style={{ ...small, display: "block", marginTop: "8px" }}>
+          Head movement
+          <select id="live-motion-select" style={field} value={motion} disabled={live || state === "connecting"} onChange={(e) => setMotion(Number(e.target.value))}>
+            <option value={0}>Still</option>
+            <option value={0.6}>Subtle</option>
+            <option value={1}>Natural</option>
+            <option value={1.5}>Lively</option>
+          </select>
+        </label>
         <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
           <button type="button" id="live-start" disabled={!avatarId || live || state === "connecting"} onClick={start}>
             {state === "connecting" ? "Connecting…" : "Start live session"}

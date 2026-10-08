@@ -17,6 +17,7 @@ Auth: `X-API-Key` header when `AUTH_ENABLED=true`. Rate limit: 429 with
 | POST | `/api/v1/audio/align` | align existing audio to a transcript | 200 |
 | GET | `/api/v1/audio/languages` | MMS language catalogue, `?q=` search | 200 |
 | GET | `/api/v1/audio/languages/{code}` | one language | 200 / 404 |
+| GET | `/api/v1/audio/voices` | the Kokoro speakers (`id`, `gender`, `name`, `present`) and the default; pass `voice` to synthesis or the live `start` message so the voice can match the face | 200 |
 | GET | `/api/v1/audio/emotions` | emotion presets | 200 |
 | POST | `/api/v1/audio/quality-audit` | SQUIM scores for a clip | 200 |
 | POST | `/api/v1/audio/voice-similarity` | ECAPA similarity with admissibility | 200 |
@@ -71,8 +72,8 @@ when it is due on the session timeline, so a client plays by that, not by arriva
 written to the audit trail as `audio_supplied`) answers `audio_ready` with `drive: "audio-energy"`.
 Each following **binary** message is up to 2 s of 16-bit little-endian mono PCM; the server answers
 with that chunk's JPEG frames (kind 2, on the session's single 1000/fps ms grid) and a `chunk`
-message labelled `drive: "audio-energy"`, `note: "mouth estimated from the audio's loudness; not
-phoneme-aligned"`. No audio is sent back. `audio_end` answers `done`. Errors: `audio_not_started`
+message labelled `drive: "audio-energy"`, `note: "mouth shape estimated from the sound and its loudness;
+not phoneme-aligned"` (shape per 40 ms from the spectrum, `audio_visemes.py`). No audio is sent back. `audio_end` answers `done`. Errors: `audio_not_started`
 (PCM before `audio_start`), `bad_audio` (empty, odd length, longer than 2 s); the session carries on.
 
 ## Request ids
@@ -89,3 +90,9 @@ generation worker it queued, shows it as `[id]`. An unhandled error answers
 401 missing/invalid key · 403 consent not satisfied · 404 unknown id ·
 409 duplicate jobId · 413 upload too large · 422 schema violation ·
 429 rate limited · 503 required model weights missing (message names the fix).
+
+
+### Added 8-9 Oct (owner's feedback)
+
+- `voice` (optional) on `POST /api/v1/audio/synthesize` and the live `start` message: one of the ids from `GET /api/v1/audio/voices`; unknown or not installed -> 400 / `bad_request` with the fix.
+- `motionIntensity` (optional, 0-2) on `AvatarRenderJob`, the live `start` message and `POST /api/v1/avatar/voice-to-avatar`: head tilt / nod / sway, brow lifts on emphasis and breathing while talking; absent = 1 (natural), 0 = a still head.

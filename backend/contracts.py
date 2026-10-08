@@ -217,6 +217,9 @@ class AvatarRenderJob(BaseModel):
     target_fps: int = Field(alias="targetFps", ge=1, le=120)
     # Optional extension (T3.1). Absent = keep the photo's own background.
     background: Optional[BackgroundSpec] = None
+    # How much the head and shoulders move while talking (I-01): 0 = a still photo, 1 = natural, up to
+    # 2 = lively. Optional and absent by default (the renderer then uses 1), so older jobs are unchanged.
+    motion_intensity: Optional[float] = Field(default=None, alias="motionIntensity", ge=0.0, le=2.0)
 
     # A field_validator runs on one field. The @classmethod is required by
     # Pydantic v2 (the validator belongs to the class, not an instance - it runs
@@ -681,6 +684,8 @@ class LiveStartMessage(BaseModel):
     clone_engine: Optional[Literal["xtts-v2", "openvoice-v2"]] = Field(default=None, alias="cloneEngine")
     # The Kokoro speaker for fast mode, as for a file render (GET /api/v1/audio/voices).
     voice: Optional[str] = Field(default=None, max_length=32)
+    # Head-and-shoulder movement, as for a file render (0 still .. 2 lively).
+    motion_intensity: float = Field(default=1.0, alias="motionIntensity", ge=0.0, le=2.0)
 
 
 class LiveSayMessage(BaseModel):

@@ -532,7 +532,7 @@ def _warp_frames(
         weights = track.frame(index)
         if not include_mouth:
             weights = {k: v for k, v in weights.items() if not k.startswith(_MOUTH_PREFIXES)}
-        yield animator.render(weights)
+        yield animator.render(weights, track.pose(index))
 
 
 def render_job(
@@ -603,6 +603,9 @@ def render_job(
         emotion_vector=job.emotion_vector.model_dump(by_alias=True, exclude_none=True),
         seed=seed_from_job_id(job.job_id),
         energy_envelope=speech_energy_envelope(audio_path),
+        # Gentler head motion under Wav2Lip: it repaints the mouth inside a box found once on the still
+        # photo, so a large nod would carry the mouth out of that box.
+        motion_intensity=(1.0 if job.motion_intensity is None else job.motion_intensity) * (0.6 if engine_name == ENGINE_WAV2LIP else 1.0),
     )
     # A viseme the animator does not know is not fatal; it is counted and reported, not hidden.
     if track.unknown_visemes:

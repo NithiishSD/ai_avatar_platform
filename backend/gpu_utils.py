@@ -28,7 +28,9 @@ from __future__ import annotations
 
 import gc
 import logging
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, TypeVar
+
+T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
@@ -299,3 +301,28 @@ def peak_vram_mb() -> Optional[int]:
     # survives the tensors being freed, which is what makes it usable as
     # evidence that a render stayed under 6 GB (the Gate 2 criterion).
     return int(torch.cuda.max_memory_allocated() // (1024 * 1024))
+
+
+def is_cuda_oom(err: BaseException) -> bool:
+    """Whether ``err`` is the GPU running out of memory (PyTorch's own error, or cuBLAS failing to allocate)."""
+    text = str(err)
+    return type(err).__name__ == "OutOfMemoryError" or ("CUDA" in text and ("out of memory" in text or "ALLOC_FAILED" in text))
+
+
+def retry_after_freeing(work: Callable[[], T], keep: Optional[str] = None) -> T:
+    """
+    Run ``work``; if the GPU is out of memory, unload the other registered models and try once more.
+
+    Small models (the watermarks) do not reserve memory up front the way the big ones do, so when a big
+    model is still resident they can fail mid-call. One retry after freeing is enough: if it fails
+    again, the card really is full and the error is raised as it is.
+    """
+    try:
+        return work()
+    except Exception as err:  # noqa: BLE001 - re-raised unless it is a GPU out-of-memory
+        if not is_cuda_oom(err):
+            raise
+        released = release_others(keep=keep)
+        empty_cache()
+        logger.warning("GPU out of memory for %s; unloaded %s and retrying once", keep or "a model", released or "nothing")
+        return work()

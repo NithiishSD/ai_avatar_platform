@@ -175,6 +175,10 @@ class VideoWatermarker:
         # GPU when there is one (AVATAR_DEVICE overrides): the mark runs on every frame, and the
         # owner's RTX 4050 run showed it on the CPU cost 28 s of a 32 s render (8.5x the render itself).
         self.device = device or _default_device()
+        import gpu_utils
+
+        # Other models unload this one when they need the GPU (gpu_utils releasers), and vice versa.
+        gpu_utils.register_releaser("video-watermark", self.release)
         self._model: Any = None
         self._failure: Optional[str] = None
         self._lock = threading.Lock()
@@ -193,6 +197,15 @@ class VideoWatermarker:
             return self._model
         if self._failure is not None:
             raise VideoWatermarkUnavailable(self._failure)
+        if self.device == "cuda":
+            import gpu_utils
+
+            # Room for the model and a 32-frame batch, freed from other models first. A full card is a
+            # passing condition, so it is raised without being cached as a permanent failure.
+            try:
+                gpu_utils.ensure_vram(VRAM_MB, "VideoSeal video watermark", keep="video-watermark")
+            except gpu_utils.InsufficientVRAM as err:
+                raise VideoWatermarkUnavailable(str(err)) from err
         try:
             import torch
             import videoseal
@@ -225,7 +238,10 @@ class VideoWatermarker:
 
     def release(self) -> None:
         """Drop the model reference so its memory can be reclaimed; the next use reloads it."""
+        import gpu_utils
+
         self._model = None
+        gpu_utils.empty_cache()
 
     # -- embedding -----------------------------------------------------------
 
@@ -264,13 +280,19 @@ class VideoWatermarker:
         import torch
 
         # (frames, H, W, 3) uint8 -> (frames, 3, H, W) float 0..1, the layout the model takes.
-        batch = torch.from_numpy(np.stack(window)).permute(0, 3, 1, 2).float().div(255.0).to(self.device)
-        with self._lock:
-            model = self._load()
-            # inference_mode: like no_grad, and a little faster, for code that never needs gradients.
-            # is_video=True embeds into every 4th frame and propagates the mark to the frames between.
-            with torch.inference_mode():
-                marked = model.embed(batch, message, is_video=True, lowres_attenuation=True)["imgs_w"]
+        import gpu_utils
+
+        def mark() -> Any:
+            batch = torch.from_numpy(np.stack(window)).permute(0, 3, 1, 2).float().div(255.0).to(self.device)
+            with self._lock:
+                model = self._load()
+                # inference_mode: like no_grad, and a little faster, for code that never needs gradients.
+                # is_video=True embeds into every 4th frame and propagates the mark to the frames between.
+                with torch.inference_mode():
+                    return model.embed(batch, message, is_video=True, lowres_attenuation=True)["imgs_w"]
+
+        # A big model still on the GPU can leave too little room mid-render: free it and retry once.
+        marked = gpu_utils.retry_after_freeing(mark, keep="video-watermark")
         out = (marked.clamp(0, 1) * 255.0).round().byte().permute(0, 2, 3, 1).cpu().numpy()
         for original, frame in zip(window, out, strict=True):
             yield np.ascontiguousarray(frame.reshape(original.shape))
@@ -288,11 +310,16 @@ class VideoWatermarker:
         # Fewer frames means fewer logits to average, so a noisy frame weighs more.
         if len(frames) < 8:
             warnings.append("fewer than 8 frames were available, so the result is less reliable")
-        batch = torch.from_numpy(np.stack(frames)).permute(0, 3, 1, 2).float().div(255.0).to(self.device)
-        with self._lock:
-            model = self._load()
-            with torch.inference_mode():
-                preds = model.detect(batch, is_video=True)["preds"]
+        import gpu_utils
+
+        def read() -> Any:
+            batch = torch.from_numpy(np.stack(frames)).permute(0, 3, 1, 2).float().div(255.0).to(self.device)
+            with self._lock:
+                model = self._load()
+                with torch.inference_mode():
+                    return model.detect(batch, is_video=True)["preds"]
+
+        preds = gpu_utils.retry_after_freeing(read, keep="video-watermark")
         # Column 0 of preds is VideoSeal's detection bit (unused here); columns 1.. are the 256 message bits.
         logits = preds[:, 1:].float().mean(dim=0)              # one logit per message bit, averaged over frames
         bits = [int(v > 0) for v in logits.cpu().tolist()]
@@ -339,6 +366,11 @@ def _sha256(path: Path) -> str:
 
 _shared: Optional[VideoWatermarker] = None
 _shared_lock = threading.Lock()
+
+
+# GPU memory to free before loading VideoSeal: its 228 MB of weights plus a 32-frame batch, measured at
+# about 0.8 GB above an unmarked render on the owner's RTX 4050 (gpu_run2), with headroom.
+VRAM_MB = 1500
 
 
 def _default_device() -> str:
