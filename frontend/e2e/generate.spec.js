@@ -5,6 +5,7 @@ import { expect, test } from "@playwright/test";
 
 test("the generate form offers the API's fixed choices and shows its refusals", async ({ page }) => {
   await page.goto("/");
+  await page.locator('[data-avatar="demo"]').click(); // pick it explicitly: the user's own faces may sort first
   await expect(page.locator("#faces")).toHaveAttribute("data-selected", "demo");
 
   await page.locator("#generate-face-toggle").click();

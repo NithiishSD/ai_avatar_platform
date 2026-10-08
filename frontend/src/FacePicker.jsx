@@ -19,7 +19,7 @@ function detailOf(payload, fallback) {
 
 const RUNNING = ["QUEUED", "PROCESSING"];
 
-export default function FacePicker({ apiBase, avatarId, setAvatarId, onEngines }) {
+export default function FacePicker({ apiBase, avatarId, setAvatarId, onEngines, onFaces }) {
   const [avatars, setAvatars] = useState([]);
   const [consentBases, setConsentBases] = useState([]);
   const [error, setError] = useState("");
@@ -50,9 +50,10 @@ export default function FacePicker({ apiBase, avatarId, setAvatarId, onEngines }
     setAvatars(payload.avatars);
     setConsentBases(payload.consentBases);
     onEngines?.(payload.renderEngines);
+    onFaces?.(payload.avatars);
     setAvatarId((current) => (current && payload.avatars.some((a) => a.avatarId === current && a.usable)
       ? current : payload.avatars.find((a) => a.usable)?.avatarId || ""));
-  }, [setAvatarId, onEngines]);
+  }, [setAvatarId, onEngines, onFaces]);
 
   const refresh = useCallback(async () => apply(await fetchFaces()), [apply, fetchFaces]);
 

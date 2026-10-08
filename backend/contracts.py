@@ -372,6 +372,8 @@ class AudioSynthesisRequest(BaseModel):
         description="Cloning engine for mode='clone': 'xtts-v2' (default) or 'openvoice-v2'",
     )
     output_filename: str = Field(default="speech.wav", alias="outputFilename", min_length=1)
+    # Which Kokoro speaker (GET /api/v1/audio/voices), so a voice can match the face; Kokoro only.
+    voice: Optional[str] = Field(default=None, max_length=32)
 
     @field_validator("text")
     @classmethod
@@ -677,6 +679,8 @@ class LiveStartMessage(BaseModel):
     max_side: int = Field(default=384, alias="maxSide", ge=128, le=640)
     speaker_wav: Optional[str] = Field(default=None, alias="speakerWav", max_length=1024)
     clone_engine: Optional[Literal["xtts-v2", "openvoice-v2"]] = Field(default=None, alias="cloneEngine")
+    # The Kokoro speaker for fast mode, as for a file render (GET /api/v1/audio/voices).
+    voice: Optional[str] = Field(default=None, max_length=32)
 
 
 class LiveSayMessage(BaseModel):

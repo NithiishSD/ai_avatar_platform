@@ -93,8 +93,15 @@ def _fetch_hf(repo_id: str, allow_patterns: Optional[List[str]] = None) -> None:
 
 
 def _fetch_kokoro() -> None:
-    """Fetch the whole Kokoro-82M repository (small: about 0.4 GB)."""
-    _fetch_hf("hexgrad/Kokoro-82M")
+    """Fetch Kokoro-82M (about 0.4 GB) and, explicitly, every speaker voice the server offers."""
+    from huggingface_hub import hf_hub_download
+
+    from voice_engine import KOKORO_REPO, KOKORO_VOICES
+
+    _fetch_hf(KOKORO_REPO)
+    # Each voice is a separate small file; listing them makes sure none is fetched later, at request time.
+    for voice in KOKORO_VOICES:
+        hf_hub_download(KOKORO_REPO, f"voices/{voice}.pt")
 
 
 def _fetch_xtts() -> None:

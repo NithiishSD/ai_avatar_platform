@@ -17,6 +17,7 @@ function silentWav() {
 test("a render is marked and signed, and the Verify panel judges files correctly", async ({ page }) => {
   test.setTimeout(420_000);
   await page.goto("/");
+  await page.locator('[data-avatar="demo"]').click(); // pick it explicitly: the user's own faces may sort first
   await expect(page.locator("#faces")).toHaveAttribute("data-selected", "demo");
 
   await page.locator("#script").fill("This video carries a hidden mark and a signed record.");

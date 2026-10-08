@@ -1434,3 +1434,15 @@ create form) is invalid HTML, so the create screen is a plain container with a c
 Verified: one click in a headless browser against the running servers: COMPLETED in 18.3 s, "Voice: kokoro", watermark 128/128, manifest and download links, no console
 errors. `npm run lint` clean, `npm run build` clean. **E2E rewritten for the new layout: 17 passed (1.9 min)** — the landmark-overlay test became a face-picker test,
 the stale-language-lookup race moved to the language search (same guard), synthesis is checked through the create flow, and the live and verify tests open their tabs.
+
+### 2026-10-08 — owner's feedback on the redesign: voice matches the face, model choice, double click
+
+- **Double click started two videos:** the button's disabled state lags a render; a ref now locks `create` on the first click. E2E double-clicks and counts one request.
+- **Voice matches the face:** only `af_heart` (female) was installed, so every face spoke with a woman's voice. Added `voice` to synthesis and live requests
+  (`KOKORO_VOICES`: Heart, Bella female; Michael, Adam male; unknown or missing voices refused with the fetch command; `GET /api/v1/audio/voices`; fetch script
+  downloads all four). Gender is never guessed from the picture: it comes from the face's record (a generated face's prompt says man/woman); otherwise the studio
+  asks the user once and remembers the choice per face. Create screen and live panel both have the speaker choice.
+- **Model and quality choices:** "Voice model" (Auto, Kokoro, MMS-TTS, Bark) and clearer "Video quality" / "Lip-sync model" labels.
+- Tests: E2E now pick the `demo` face explicitly (the owner's own faces, e.g. `cartoon`, sort first and became the default); 18 passed. `check.sh` 870 tests OK.
+- Owner chose the "alive photo" plan: **1** whole-portrait motion of our own (head tilt/nod/sway, brows, breathing), **then 2** SadTalker. `backend/head_motion.py`
+  (motion maths, self-check) written; wiring into the warp is next.

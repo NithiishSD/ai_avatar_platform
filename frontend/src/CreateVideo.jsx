@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import FacePicker from "./FacePicker";
+import { recordedGender, rememberVoice, voiceForFace } from "./voices";
 
 /*
  * "Create video": the studio's main screen, one flow from words to a finished, watermarked video.
@@ -58,6 +59,12 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export default function CreateVideo({ apiBase }) {
   const [avatarId, setAvatarId] = useState("");
   const [engines, setEngines] = useState({ blendshape: true });
+  const [faces, setFaces] = useState([]);
+  // Speaker voices (GET /api/v1/audio/voices) and the speech model to use.
+  const [voices, setVoices] = useState([]);
+  // The user's explicit speaker choice per face; otherwise the speaker is derived from the face below.
+  const [chosenSpeaker, setChosenSpeaker] = useState({});
+  const [speechModel, setSpeechModel] = useState("auto"); // auto | kokoro | mms | bark
 
   // Script & voice
   const [text, setText] = useState("Hello! I am your AI avatar. Type anything here and I will say it.");
@@ -68,7 +75,6 @@ export default function CreateVideo({ apiBase }) {
   const [emotion, setEmotion] = useState("");
   const [speed, setSpeed] = useState(1.0);
   const [pitch, setPitch] = useState(1.0);
-  const [dialogue, setDialogue] = useState(false);
   const [samples, setSamples] = useState([]);
   const [sample, setSample] = useState("");
   const [cloneEngines, setCloneEngines] = useState([]);
@@ -87,6 +93,9 @@ export default function CreateVideo({ apiBase }) {
   const [job, setJob] = useState(null);
   const [error, setError] = useState("");
   const [score, setScore] = useState(null);
+  // Set synchronously on the first click. The button's disabled state only takes effect after React
+  // re-renders, so a fast double click used to start two videos (owner's report); this ref cannot lag.
+  const runningRef = useRef(false);
 
   /* Clone engines whose weights are on disk, from /health; never offer one that would be refused. */
   useEffect(() => {
@@ -100,6 +109,21 @@ export default function CreateVideo({ apiBase }) {
     }).catch(() => {});
     return () => { ignore = true; };
   }, [apiBase]);
+
+  useEffect(() => {
+    let ignore = false;
+    fetch(`${apiBase}/api/v1/audio/voices`).then((r) => r.json()).then((data) => !ignore && setVoices(data.voices ?? [])).catch(() => {});
+    return () => { ignore = true; };
+  }, [apiBase]);
+
+  /* The speaker for the chosen face: picked here in this session, else remembered, else the face's recorded gender, else the default. */
+  const face = faces.find((f) => f.avatarId === avatarId);
+  const speaker = chosenSpeaker[avatarId] || voiceForFace(face, voices, "af_heart");
+
+  const chooseSpeaker = (id) => {
+    setChosenSpeaker((current) => ({ ...current, [avatarId]: id }));
+    if (avatarId) rememberVoice(avatarId, id);
+  };
 
   /* Language search (1,077 languages): one request per pause in typing; a stale reply is dropped. */
   useEffect(() => {
@@ -159,7 +183,9 @@ export default function CreateVideo({ apiBase }) {
     const filename = `studio-${Date.now()}.wav`;
     const body = {
       text, language, returnAlignment: true, outputFilename: filename,
-      mode: voice === "clone" ? "clone" : dialogue ? "dialogue" : "fast",
+      // "auto" lets the server pick by language (Kokoro for English, MMS otherwise); the others force an engine.
+      mode: voice === "clone" ? "clone" : { auto: "fast", kokoro: "fast", mms: "multilingual", bark: "dialogue" }[speechModel],
+      ...(voice === "standard" && speechModel !== "mms" && speechModel !== "bark" ? { voice: speaker } : {}),
       ...(speed !== 1 ? { speed } : {}), ...(pitch !== 1 ? { pitch } : {}),
       ...(emotion ? { emotion } : {}),
       ...(voice === "clone" ? { speakerWav: sample, ...(cloneEngine ? { cloneEngine } : {}) } : {}),
@@ -199,6 +225,8 @@ export default function CreateVideo({ apiBase }) {
   };
 
   const create = async () => {
+    if (runningRef.current) return;
+    runningRef.current = true;
     setError("");
     setSpeech(null);
     setJob(null);
@@ -210,6 +238,8 @@ export default function CreateVideo({ apiBase }) {
     } catch (err) {
       setPhase("failed");
       setError(err.message);
+    } finally {
+      runningRef.current = false;
     }
   };
 
@@ -228,7 +258,7 @@ export default function CreateVideo({ apiBase }) {
     // A plain container, not a <form>: FacePicker has forms of its own, and forms cannot nest.
     <div className="create">
       <div>
-        <FacePicker apiBase={apiBase} avatarId={avatarId} setAvatarId={setAvatarId} onEngines={setEngines} />
+        <FacePicker apiBase={apiBase} avatarId={avatarId} setAvatarId={setAvatarId} onEngines={setEngines} onFaces={setFaces} />
 
         <div className="card">
           <h2><span className="step">2</span> Script &amp; voice</h2>
@@ -242,6 +272,29 @@ export default function CreateVideo({ apiBase }) {
             <label className="field"><span>What should the avatar say?</span>
               <textarea id="script" value={text} onChange={(e) => setText(e.target.value)} />
             </label>
+          )}
+
+          {voice === "standard" && (
+            <div className="row">
+              <label className="field"><span>Voice model</span>
+                <select id="speech-model-select" value={speechModel} onChange={(e) => setSpeechModel(e.target.value)}>
+                  <option value="auto">Auto (best for the language)</option>
+                  <option value="kokoro">Kokoro (English, most natural)</option>
+                  <option value="mms">MMS-TTS (1,100+ languages)</option>
+                  <option value="bark">Bark (two speakers: [S1] / [S2])</option>
+                </select>
+              </label>
+              {speechModel !== "mms" && speechModel !== "bark" && (
+                <label className="field"><span>Speaker{face && recordedGender(face) ? ` (this face: ${recordedGender(face)})` : ""}</span>
+                  <select id="speaker-select" value={speaker} onChange={(e) => chooseSpeaker(e.target.value)}>
+                    {voices.map((v) => <option key={v.id} value={v.id} disabled={!v.present}>{v.name} ({v.gender}){v.present ? "" : " - not installed"}</option>)}
+                  </select>
+                  {face && !recordedGender(face) && !chosenSpeaker[avatarId] && (
+                    <span className="hint" id="speaker-hint">This face has no recorded gender: pick the speaker that fits (remembered for this face).</span>
+                  )}
+                </label>
+              )}
+            </div>
           )}
 
           {voice === "clone" && (
@@ -309,10 +362,6 @@ export default function CreateVideo({ apiBase }) {
                     <input type="range" min="0.5" max="2" step="0.1" value={pitch} onChange={(e) => setPitch(Number(e.target.value))} />
                   </label>
                 </div>
-                {voice === "standard" && (
-                  <label className="check"><input id="dialogue-toggle" type="checkbox" checked={dialogue} onChange={(e) => setDialogue(e.target.checked)} />
-                    Two speakers (mark lines with [S1] and [S2]; slower)</label>
-                )}
               </details>
             </>
           )}
@@ -321,13 +370,13 @@ export default function CreateVideo({ apiBase }) {
         <div className="card">
           <h2><span className="step">3</span> Video</h2>
           <div className="row">
-            <label className="field"><span>Size</span>
+            <label className="field"><span>Video quality</span>
               <select id="quality-select" value={quality} onChange={(e) => setQuality(e.target.value)}>
                 <option value="PREVIEW">Preview (512 px, fastest)</option>
                 <option value="1080P_HQ">1080p</option>
               </select>
             </label>
-            <label className="field"><span>Lip sync</span>
+            <label className="field"><span>Lip-sync model</span>
               <select id="engine-select" value={engine} onChange={(e) => setEngine(e.target.value)}>
                 <option value="blendshape">Standard (fast)</option>
                 <option value="wav2lip" disabled={!engines.wav2lip}>High quality (Wav2Lip){engines.wav2lip ? "" : " - not installed"}</option>

@@ -15,6 +15,7 @@ test("an uploaded recording with no transcript becomes a lip-synced video record
   const recording = await (await request.get(`${API}/outputs/e2e-recording.wav`)).body();
 
   await page.goto("/");
+  await page.locator('[data-avatar="demo"]').click(); // pick it explicitly: the user's own faces may sort first
   await expect(page.locator("#faces")).toHaveAttribute("data-selected", "demo");
   await page.locator("#voice-own").click();
   await expect(page.locator("#create-btn")).toBeDisabled();          // no file, no consent basis yet

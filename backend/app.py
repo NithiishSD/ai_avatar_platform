@@ -55,6 +55,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import audit_log
+import voice_engine as voice_engine_module
 import metrics
 import parameters
 import protected_voices
@@ -1196,10 +1197,11 @@ async def live_avatar(ws: WebSocket) -> None:
                 text="", clone_engine=start.clone_engine,
             )
             router.preflight(model_key, speaker, start.language)
+            voice_engine_module.check_kokoro_voice(start.voice)
             session = live_engine.LiveSession(
                 router, faces, start.avatar_id, language=start.language, mode=start.mode,
                 emotion=start.emotion, emotion_intensity=start.emotion_intensity, fps=start.fps,
-                max_side=start.max_side, speaker_wav=speaker, clone_engine=start.clone_engine,
+                max_side=start.max_side, speaker_wav=speaker, clone_engine=start.clone_engine, voice=start.voice,
             )
             info = await run_in_threadpool(session.open)
         except HTTPException as err:
@@ -1402,6 +1404,7 @@ def create_synthesis_job(request: AudioSynthesisRequest) -> SynthesisJobResponse
             clone_engine=request.clone_engine,
         )
         router.preflight(model_key, request.speaker_wav, request.language)
+        voice_engine_module.check_kokoro_voice(request.voice)
     except VoiceConsentRequired as error:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
     except ModelWeightsMissing as error:
@@ -1484,6 +1487,13 @@ def list_languages(q: str = "", limit: int = 100) -> LanguagesResponse:
 def describe_language(code: str) -> LanguageEntry:
     """Resolve one code and report which backends can speak it."""
     return LanguageEntry.model_validate(language_registry.resolve(code).to_dict())
+
+
+@app.get("/api/v1/audio/voices")
+def list_voices() -> dict:
+    """The Kokoro speaker voices this server offers, with gender (so the studio can match the face) and whether each is on disk."""
+    return {"default": voice_engine_module.DEFAULT_KOKORO_VOICE, "voices": [
+        {"id": key, **info, "present": voice_engine_module.kokoro_voice_present(key)} for key, info in voice_engine_module.KOKORO_VOICES.items()]}
 
 
 @app.get("/api/v1/audio/emotions", response_model=EmotionPresetsResponse)

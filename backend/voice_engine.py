@@ -134,6 +134,37 @@ def _refuse_voice(path: Path, reason: str, error: Exception) -> None:
     raise error
 
 
+# Kokoro speaker voices this server offers (American English, the pipeline loaded here). Each is a
+# small file in the Hugging Face cache, fetched by scripts/fetch_models.py --only kokoro; a voice not on
+# disk is refused instead of being downloaded mid-request. The owner asked for the voice to match the
+# face, so the studio offers these by gender; "af_heart" stays the default.
+KOKORO_REPO = "hexgrad/Kokoro-82M"
+KOKORO_VOICES = {
+    "af_heart": {"gender": "female", "name": "Heart"},
+    "af_bella": {"gender": "female", "name": "Bella"},
+    "am_michael": {"gender": "male", "name": "Michael"},
+    "am_adam": {"gender": "male", "name": "Adam"},
+}
+DEFAULT_KOKORO_VOICE = "af_heart"
+
+
+def kokoro_voice_present(voice: str) -> bool:
+    """Whether this voice's file is already in the local Hugging Face cache (no network)."""
+    from huggingface_hub import try_to_load_from_cache
+
+    return isinstance(try_to_load_from_cache(KOKORO_REPO, f"voices/{voice}.pt"), str)
+
+
+def check_kokoro_voice(voice: Optional[str]) -> None:
+    """Refuse an unknown voice, or one whose file is missing, with how to fix it (raises ValueError)."""
+    if voice is None:
+        return
+    if voice not in KOKORO_VOICES:
+        raise ValueError(f"unknown voice {voice!r}; one of {sorted(KOKORO_VOICES)} (GET /api/v1/audio/voices)")
+    if not kokoro_voice_present(voice):
+        raise ValueError(f"voice {voice!r} is not on disk; fetch it with: {model_registry.MODEL_FETCH_COMMAND} --only kokoro")
+
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 INPUT_DIR = PROJECT_ROOT / "inputs"
@@ -454,12 +485,13 @@ class VoiceEngineRouter:
     # Synthesis Backends
     # ------------------------------------------------------------------
 
-    def _synthesize_kokoro(self, text: str, output_path: Path) -> tuple[int, float]:
-        """Run Kokoro-82M synthesis. Returns (sample_rate, duration_seconds)."""
+    def _synthesize_kokoro(self, text: str, output_path: Path, voice: Optional[str] = None) -> tuple[int, float]:
+        """Run Kokoro-82M synthesis with one of ``KOKORO_VOICES``. Returns (sample_rate, duration_seconds)."""
         self.load_kokoro_realtime()
         assert self.kokoro_pipeline is not None
-        print(f"\n[Kokoro] Synthesizing: '{text[:80]}...'")
-        generator = self.kokoro_pipeline(text, voice="af_heart", speed=1.0)
+        voice = voice or DEFAULT_KOKORO_VOICE
+        print(f"\n[Kokoro] Synthesizing ({voice}): '{text[:80]}...'")
+        generator = self.kokoro_pipeline(text, voice=voice, speed=1.0)
         chunks = [audio for _, _, audio in generator]
         if not chunks:
             raise RuntimeError("Kokoro returned no audio chunks")
@@ -674,6 +706,7 @@ class VoiceEngineRouter:
         emotion_vector: Optional[dict] = None,
         audit_quality: bool = False,
         clone_engine: Optional[str] = None,
+        voice: Optional[str] = None,
     ) -> SynthesisResult:
         """
         Synthesize speech using the automatically selected model.
@@ -710,6 +743,7 @@ class VoiceEngineRouter:
         # The one place every synthesis path passes through before a loader
         # runs: no request can trigger a download or clone an unconsented voice.
         self.preflight(model_key, speaker_wav, language)
+        check_kokoro_voice(voice)
 
         start_time = time.time()
         output_path = OUTPUT_DIR / output_filename
@@ -724,7 +758,7 @@ class VoiceEngineRouter:
         )
 
         if model_key == "kokoro":
-            sample_rate, duration = self._synthesize_kokoro(text, output_path)
+            sample_rate, duration = self._synthesize_kokoro(text, output_path, voice)
 
         elif model_key == "xtts-v2":
             sample_rate, duration = self._synthesize_xtts(

@@ -245,6 +245,22 @@ class RenderJobApiTests(unittest.TestCase):
             self.assertIn("No module named 'antlr4'", body["error"])
             self.assertNotIn(home, body["error"])
 
+    def test_voices_are_listed_and_an_unknown_voice_is_a_400(self):
+        import app as app_module
+
+        # Not counted by the rate limiter: every test in this process shares one client allowance.
+        limiter = patch.object(app_module.security_gate, "inspect", return_value=(True, 0, {}))
+        limiter.start()
+        self.addCleanup(limiter.stop)
+        voices = self.client.get("/api/v1/audio/voices").json()
+        self.assertEqual({v["gender"] for v in voices["voices"]}, {"female", "male"})
+        self.assertEqual(voices["default"], "af_heart")
+        with patch("model_registry.audit_model_weights", return_value=weights_on_disk()), patch("app.synthesize_audio.delay") as delay:
+            response = self.client.post("/api/v1/audio/synthesize", json={"text": "Hi", "mode": "fast", "language": "en", "voice": "xx_nobody"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("unknown voice", response.json()["detail"])
+        delay.assert_not_called()
+
     def test_celery_queue_persists_job_for_status_lookup(self):
         queue = CeleryJobQueue(redis_client=FakeRedis())
         job = __import__("contracts").AvatarRenderJob.model_validate(VALID_JOB)

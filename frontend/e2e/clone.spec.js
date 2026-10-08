@@ -9,6 +9,7 @@ test("a cloned voice becomes a playable lip-synced avatar video", async ({ page 
   // generously so a slow machine fails on a real fault, not on the clock.
   test.setTimeout(420_000);
   await page.goto("/");
+  await page.locator('[data-avatar="demo"]').click(); // pick it explicitly: the user's own faces may sort first
   await expect(page.locator("#faces")).toHaveAttribute("data-selected", "demo");
 
   await page.locator("#voice-clone").click();

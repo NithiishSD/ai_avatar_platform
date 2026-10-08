@@ -432,3 +432,45 @@ class SynthesisSerialisationTests(unittest.TestCase):
         with patch.object(router, "_synthesize", return_value="R") as inner:
             self.assertEqual(router.synthesize("hello", mode="clone", language="es"), "R")
         inner.assert_called_once_with("hello", mode="clone", language="es")
+
+
+class KokoroVoiceTests(unittest.TestCase):
+    """Speaker voices (owner's request: the voice should match the face): known ids only, on disk only."""
+
+    def test_unknown_and_missing_voices_are_refused_with_the_fix(self):
+        from unittest import mock
+
+        import voice_engine
+
+        voice_engine.check_kokoro_voice(None)  # no choice = the default voice
+        with self.assertRaisesRegex(ValueError, "unknown voice"):
+            voice_engine.check_kokoro_voice("xx_nobody")
+        with mock.patch("huggingface_hub.try_to_load_from_cache", return_value=None):
+            with self.assertRaisesRegex(ValueError, "fetch_models.py --only kokoro"):
+                voice_engine.check_kokoro_voice("am_adam")
+        with mock.patch("huggingface_hub.try_to_load_from_cache", return_value="/cache/voices/am_adam.pt"):
+            voice_engine.check_kokoro_voice("am_adam")
+
+    def test_both_genders_are_offered(self):
+        import voice_engine
+
+        genders = {info["gender"] for info in voice_engine.KOKORO_VOICES.values()}
+        self.assertEqual(genders, {"female", "male"})
+        self.assertIn(voice_engine.DEFAULT_KOKORO_VOICE, voice_engine.KOKORO_VOICES)
+
+    def test_the_chosen_voice_reaches_kokoro(self):
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        import numpy as np
+
+        import voice_engine
+
+        router = voice_engine.VoiceEngineRouter.__new__(voice_engine.VoiceEngineRouter)
+        router.kokoro_pipeline = mock.Mock(side_effect=lambda *a, **k: iter([(None, None, np.zeros(2400, np.float32))]))
+        router.load_kokoro_realtime = mock.Mock()
+        with tempfile.TemporaryDirectory() as tmp:
+            router._synthesize_kokoro("Hi.", Path(tmp) / "a.wav", "am_michael")
+            router._synthesize_kokoro("Hi.", Path(tmp) / "b.wav")
+        self.assertEqual([c.kwargs["voice"] for c in router.kokoro_pipeline.call_args_list], ["am_michael", "af_heart"])

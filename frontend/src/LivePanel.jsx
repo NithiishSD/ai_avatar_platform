@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { recordedGender, rememberVoice, voiceForFace } from "./voices";
 
 /*
  * Live avatar panel: open a WebSocket session, type something, and watch the avatar
@@ -46,6 +47,9 @@ export default function LivePanel({ apiBase }) {
   const [text, setText] = useState("Hello! I am speaking live. Each sentence reaches you as soon as it is ready.");
   const [stats, setStats] = useState({ chunks: 0, frames: 0, audioBytes: 0, firstAudioMs: null, firstFrameMs: null, done: null });
   const [info, setInfo] = useState(null);
+  // Speaker voice, matched to the face as on the create screen (voices.js).
+  const [voices, setVoices] = useState([]);
+  const [chosenSpeaker, setChosenSpeaker] = useState({});
 
   const socketRef = useRef(null);
   const canvasRef = useRef(null);
@@ -77,6 +81,14 @@ export default function LivePanel({ apiBase }) {
       .catch(() => {});
     return () => { ignore = true; };
   }, [apiBase]);
+
+  useEffect(() => {
+    let ignore = false;
+    fetch(`${apiBase}/api/v1/audio/voices`).then((r) => (r.ok ? r.json() : null)).then((d) => !ignore && d && setVoices(d.voices ?? [])).catch(() => {});
+    return () => { ignore = true; };
+  }, [apiBase]);
+  const face = avatars.find((a) => a.avatarId === avatarId);
+  const speaker = chosenSpeaker[avatarId] || voiceForFace(face, voices, "af_heart");
 
   const publish = useCallback(() => setStats({ ...countersRef.current, done: null }), []);
 
@@ -196,7 +208,7 @@ export default function LivePanel({ apiBase }) {
     const socket = new WebSocket(wsUrl(apiBase));
     socket.binaryType = "arraybuffer";
     socketRef.current = socket;
-    socket.onopen = () => socket.send(JSON.stringify({ type: "start", avatarId, fps: 25, maxSide: 384 }));
+    socket.onopen = () => socket.send(JSON.stringify({ type: "start", avatarId, fps: 25, maxSide: 384, ...(voices.length ? { voice: speaker } : {}) }));
     socket.onmessage = (event) => {
       if (typeof event.data !== "string") return handleMedia(event.data);
       const message = JSON.parse(event.data);
@@ -324,6 +336,15 @@ export default function LivePanel({ apiBase }) {
             ))}
           </select>
         </label>
+        {voices.length > 0 && (
+          <label style={{ ...small, display: "block", marginTop: "8px" }}>
+            Speaker{face && recordedGender(face) ? ` (this face: ${recordedGender(face)})` : ""}
+            <select id="live-speaker-select" style={field} value={speaker} disabled={live || state === "connecting"}
+              onChange={(e) => { setChosenSpeaker((c) => ({ ...c, [avatarId]: e.target.value })); rememberVoice(avatarId, e.target.value); }}>
+              {voices.map((v) => <option key={v.id} value={v.id} disabled={!v.present}>{v.name} ({v.gender})</option>)}
+            </select>
+          </label>
+        )}
         <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
           <button type="button" id="live-start" disabled={!avatarId || live || state === "connecting"} onClick={start}>
             {state === "connecting" ? "Connecting…" : "Start live session"}

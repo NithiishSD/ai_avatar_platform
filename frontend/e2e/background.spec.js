@@ -30,6 +30,7 @@ async function readFrame(video) {
 test("a chosen background colour is what the rendered video shows", async ({ page }) => {
   test.setTimeout(240_000);
   await page.goto("/");
+  await page.locator('[data-avatar="demo"]').click(); // pick it explicitly: the user's own faces may sort first
   await expect(page.locator("#faces")).toHaveAttribute("data-selected", "demo");
 
   await page.locator("#script").fill("A new background behind the speaker.");

@@ -48,6 +48,7 @@ _ROWS: List[Tuple[Any, str, str, str, str]] = [
     (contracts.AudioSynthesisRequest, "emotionIntensity", "voice", M, "0.3 sits between neutral and full strength (loudness)"),
     (contracts.AudioSynthesisRequest, "emotionVector", "voice", NM, "a blend of the six presets; each preset is measured, the blend itself is not"),
     (contracts.AudioSynthesisRequest, "speakerWav", "voice", NM, "clone reference; similarity is measured (N-02, 62%), not a before/after of this field"),
+    (contracts.AudioSynthesisRequest, "voice", "voice", NM, "Kokoro speaker (2 female, 2 male) so the voice can match the face; a unit test shows the choice reaches Kokoro, the audible difference is not measured by the script"),
     (contracts.AudioSynthesisRequest, "cloneEngine", "voice", NM, "xtts-v2 vs openvoice-v2 measured separately in T2.1 / T3.3"),
     (contracts.EmotionVector, "happy", "expression", M, "smile at full strength changed the picture; ignored when a named emotion is set"),
     (contracts.EmotionVector, "neutral", "expression", NO, "accepted but never read by the face rig: setting it to 0 changed nothing"),

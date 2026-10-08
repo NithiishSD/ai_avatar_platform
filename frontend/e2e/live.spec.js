@@ -21,7 +21,7 @@ async function startCanvasSampler(page) {
 async function openSession(page) {
   await page.goto("/");
   await page.locator("#tab-live").click(); // the live avatar is on its own tab
-  await expect(page.locator("#live-avatar-select")).toHaveValue("demo");
+  await page.locator("#live-avatar-select").selectOption("demo"); // explicit: the user's own faces may sort first
   await page.locator("#live-start").click();
   await expect(page.locator("#live-panel")).toHaveAttribute("data-state", "ready", { timeout: 90_000 });
 }

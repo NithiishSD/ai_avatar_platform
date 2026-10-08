@@ -209,8 +209,10 @@ class LiveSession:
         max_side: int = 384,
         speaker_wav: Optional[str] = None,
         clone_engine: Optional[str] = None,
+        voice: Optional[str] = None,
     ) -> None:
         self.router = router
+        self.voice = voice
         self.store = store
         self.avatar_id = avatar_id
         self.language = language
@@ -277,6 +279,7 @@ class LiveSession:
             emotion=self.emotion,
             emotion_intensity=self.emotion_intensity,
             clone_engine=self.clone_engine,
+            voice=self.voice,
         )
         path = Path(result.output_path)
         try:
