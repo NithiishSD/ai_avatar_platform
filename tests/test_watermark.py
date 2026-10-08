@@ -287,3 +287,24 @@ class RealAudioSealTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WatermarkDeviceTests(unittest.TestCase):
+    """Both marks follow the project's device rule: AVATAR_DEVICE, else CUDA when present, else CPU (owner's GPU run, 8 Oct)."""
+
+    def test_device_choice(self):
+        import os
+        from unittest import mock
+
+        import video_watermark
+        import watermark_engine
+
+        for module, cls in ((watermark_engine, watermark_engine.AudioWatermarker), (video_watermark, video_watermark.VideoWatermarker)):
+            with self.subTest(module=module.__name__):
+                with mock.patch.dict(os.environ, {"AVATAR_DEVICE": ""}), mock.patch("torch.cuda.is_available", return_value=True):
+                    self.assertEqual(cls().device, "cuda")
+                with mock.patch.dict(os.environ, {"AVATAR_DEVICE": ""}), mock.patch("torch.cuda.is_available", return_value=False):
+                    self.assertEqual(cls().device, "cpu")
+                with mock.patch.dict(os.environ, {"AVATAR_DEVICE": "cpu"}), mock.patch("torch.cuda.is_available", return_value=True):
+                    self.assertEqual(cls().device, "cpu")
+                self.assertEqual(cls(device="cpu").device, "cpu")

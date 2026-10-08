@@ -171,8 +171,10 @@ class VideoWatermarker:
     instead of retrying an expensive import on every render.
     """
 
-    def __init__(self, device: str = "cpu") -> None:
-        self.device = device
+    def __init__(self, device: Optional[str] = None) -> None:
+        # GPU when there is one (AVATAR_DEVICE overrides): the mark runs on every frame, and the
+        # owner's RTX 4050 run showed it on the CPU cost 28 s of a 32 s render (8.5x the render itself).
+        self.device = device or _default_device()
         self._model: Any = None
         self._failure: Optional[str] = None
         self._lock = threading.Lock()
@@ -337,6 +339,15 @@ def _sha256(path: Path) -> str:
 
 _shared: Optional[VideoWatermarker] = None
 _shared_lock = threading.Lock()
+
+
+def _default_device() -> str:
+    """``AVATAR_DEVICE`` if set, else CUDA when PyTorch sees it, else the CPU (the rule every other model here follows)."""
+    import torch
+
+    import gpu_utils
+
+    return gpu_utils.preferred_device() or ("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def shared_video_watermarker() -> VideoWatermarker:

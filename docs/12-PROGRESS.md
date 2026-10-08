@@ -1390,3 +1390,13 @@ N-10 (peak `max_memory_allocated` / `reserved` per step, plus nvidia-smi) and Wa
 It exits 2 without measuring when PyTorch sees no GPU, with the checks to make (the host lacks the userspace driver: `libnvidia-compute-595`, `nvidia-utils-595`).
 Tested here only in `--allow-cpu --quick` mode (labelled "not GPU evidence"): every step ran; Wav2Lip offset 0, 3/3 seconds within one frame. First attempt was
 killed by the OOM killer while loading Wav2Lip (another project's Kafka/HBase containers were holding memory); rerun detached, passed.
+
+### 2026-10-08 — owner's GPU run 1 (M-11) and the fix it pointed to
+
+Part A: the owner installed the NVIDIA userspace libraries; PyTorch now sees the RTX 4050 Laptop (5,772 MiB). `nvidia-smi` reports a driver/library mismatch
+(library 595.99, kernel module 595.91: a reboot or the matching kernel module package fixes it); CUDA works regardless.
+
+Part B (`scripts/gpu_benchmark.py`, JSON in `docs/benchmarks/gpu_run1_20261008.json`): speech 0.69 s per 30 s unmarked / 3.40 s marked; 30 s render 4.07 s unmarked /
+34.7 s marked; 60 s end to end, marked, 75.8 s; peak VRAM 2,980 MiB allocated / 4,480 MiB reserved (N-10 met); Wav2Lip on CUDA: offset 0, LSE-C 8.92, 3/3 seconds within
+one frame, 7.6 s for 3.25 s. **The log showed `Loaded VideoSeal ... on cpu`:** both watermark models were hard-wired to the CPU. Fixed (D-57) with a test of the device
+rule; `scripts/check.sh` 866 tests OK. The owner re-runs the same command to measure the marked numbers on the GPU.

@@ -150,7 +150,9 @@ class WatermarkReport:
 # --------------------------------------------------------------------------- engine
 class AudioWatermarker:
     def __init__(self, device: Optional[str] = None) -> None:
-        self.device = device or "cpu"  # the models are small and fast enough on a CPU; the GPU is for the big ones
+        # GPU when there is one (AVATAR_DEVICE overrides). It was CPU-only on the theory that a small model
+        # is cheap anywhere; on the owner's GPU host it still cost 2.2 s of a 2.7 s synthesis (4x Kokoro).
+        self.device = device or _default_device()
         self._generator: Any = None
         self._detector: Any = None
         self._failure: Optional[str] = None
@@ -278,6 +280,15 @@ def _mono(audio: np.ndarray) -> np.ndarray:
 
 _shared: Optional[AudioWatermarker] = None
 _shared_lock = threading.Lock()
+
+
+def _default_device() -> str:
+    """``AVATAR_DEVICE`` if set, else CUDA when PyTorch sees it, else the CPU (the rule every other model here follows)."""
+    import torch
+
+    import gpu_utils
+
+    return gpu_utils.preferred_device() or ("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def shared_watermarker() -> AudioWatermarker:

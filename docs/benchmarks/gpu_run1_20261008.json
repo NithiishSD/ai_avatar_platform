@@ -1,0 +1,74 @@
+{
+  "date": "2026-10-08T16:47:53+00:00",
+  "environment": {
+    "torch": "2.5.1+cu121",
+    "torchCuda": "12.1",
+    "cudaAvailable": false,
+    "device": null,
+    "vramTotalMiB": null,
+    "nvidiaSmi": null
+  },
+  "note": "CPU run for testing the script, not GPU evidence",
+  "speech_N17": {
+    "model": "kokoro",
+    "target": "< 2 s per 30 s of audio",
+    "unmarked": {
+      "audioSeconds": 6.17,
+      "seconds": 2.48,
+      "secondsPer30s": 12.03,
+      "peakAllocMiB": null,
+      "peakReservedMiB": null
+    },
+    "marked": {
+      "audioSeconds": 6.17,
+      "seconds": 2.33,
+      "secondsPer30s": 11.34,
+      "peakAllocMiB": null,
+      "peakReservedMiB": null
+    }
+  },
+  "render30_N20": {
+    "engine": "blendshape",
+    "target": "< 5 s per 30 s of video",
+    "unmarked": {
+      "videoSeconds": 6.17,
+      "renderSeconds": 3.77,
+      "secondsPer30s": 18.3,
+      "peakAllocMiB": null,
+      "peakReservedMiB": null
+    },
+    "marked": {
+      "videoSeconds": 6.17,
+      "renderSeconds": 12.49,
+      "secondsPer30s": 60.69,
+      "peakAllocMiB": null,
+      "peakReservedMiB": null
+    }
+  },
+  "video60_N06": {
+    "target": "< 30 s for 60 s of video",
+    "videoSeconds": 12.55,
+    "wallSeconds": 29.26,
+    "secondsPer60s": 139.91,
+    "watermarks": "on",
+    "peakAllocMiB": null,
+    "peakReservedMiB": null,
+    "nvidiaSmiAfter": null
+  },
+  "wav2lip_N10": {
+    "target": "peak VRAM < 6144 MiB",
+    "renderSeconds": 11.39,
+    "peakAllocMiB": null,
+    "peakReservedMiB": null,
+    "rendererPeakVramMiB": null,
+    "nvidiaSmiAfter": null,
+    "video": "/home/nithiish/Projects/ai_avatar_plateform/outputs/renders/gpu-w2l.mp4",
+    "offsetFrames": 0,
+    "lseC": 8.961,
+    "secondsWithinOneFrame": {
+      "within": 3,
+      "of": 3,
+      "percent": 100.0
+    }
+  }
+}
