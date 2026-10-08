@@ -123,7 +123,7 @@ def main() -> int:
     speech_rows = {}
     for marks in (False, True):
         set_marks(marks)
-        result, seconds, alloc, reserved = timed(lambda: speak(text30, f"gpu-speech-{marks}", False), cuda)
+        result, seconds, alloc, reserved = timed(lambda m=marks: speak(text30, f"gpu-speech-{m}", False), cuda)
         speech_rows["marked" if marks else "unmarked"] = {
             "audioSeconds": round(result.duration_seconds, 2), "seconds": round(seconds, 2),
             "secondsPer30s": round(seconds * 30 / result.duration_seconds, 2), "peakAllocMiB": alloc, "peakReservedMiB": reserved}
@@ -142,7 +142,7 @@ def main() -> int:
     render_rows = {}
     for marks in (False, True):
         set_marks(marks)
-        result, seconds, alloc, reserved = timed(lambda: render_engine.render_job(job_for(speech30, f"gpu-r30-{marks}"), engine="blendshape"), cuda)
+        result, seconds, alloc, reserved = timed(lambda m=marks: render_engine.render_job(job_for(speech30, f"gpu-r30-{m}"), engine="blendshape"), cuda)
         render_rows["marked" if marks else "unmarked"] = {
             "videoSeconds": round(result.duration_seconds, 2), "renderSeconds": round(result.render_seconds, 2),
             "secondsPer30s": round(result.render_seconds * 30 / result.duration_seconds, 2), "peakAllocMiB": alloc, "peakReservedMiB": reserved}
