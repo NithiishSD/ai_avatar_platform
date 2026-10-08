@@ -686,11 +686,26 @@ class LiveSayMessage(BaseModel):
 
 
 class LiveControlMessage(BaseModel):
-    """``interrupt`` stops the current speech and keeps the session; ``stop`` ends it."""
+    """``interrupt`` stops the current speech and keeps the session; ``stop`` ends it; ``audio_end`` closes an audio stream."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    type: Literal["interrupt", "stop"]
+    type: Literal["interrupt", "stop", "audio_end"]
+
+
+class LiveAudioStartMessage(BaseModel):
+    """
+    Switch a live session to the client's own speech (R-41): binary messages that follow are
+    16-bit little-endian mono PCM at ``sampleRate``, each at most 2 s, and the avatar's mouth follows
+    them. The voice is a person's, so the client states the basis it is used under; it goes on the
+    audit trail as ``audio_supplied``.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    type: Literal["audio_start"]
+    sample_rate: int = Field(alias="sampleRate", ge=8000, le=48000)
+    consent_basis: Literal["speaker-recorded", "written-consent", "open-licence"] = Field(alias="consentBasis")
 
 
 class AvatarGenerateRequest(BaseModel):

@@ -19,6 +19,13 @@ garbage cannot pass. ``--save DIR`` keeps a few frames and the audio.
 
     PYTHONPATH=backend backend/.conda/bin/python scripts/live_client.py \\
         --avatar demo --text "Hello there. This is a live avatar speaking to you."
+
+``--audio FILE`` streams a recording instead (R-41): it is sent as 0.5 s PCM16 chunks at real-time
+pace, as a microphone would, and the report adds how long each chunk took to come back as frames
+and whether the mouth follows the audio: the correlation between each frame's audio loudness and
+how far the lower face has moved from its quietest frame.
+
+    ... scripts/live_client.py --avatar demo --audio inputs/ljspeech_reference.wav --seconds 10
 """
 
 from __future__ import annotations
@@ -156,11 +163,94 @@ async def run(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
+async def run_audio(args: argparse.Namespace) -> Dict[str, Any]:
+    """Stream a recording into a live session and measure the frames that come back."""
+    import numpy as np
+    import soundfile as sf
+    import websockets
+    from PIL import Image
+
+    data, rate = sf.read(args.audio, dtype="float32", always_2d=True)
+    mono = data.mean(axis=1)[: int(args.seconds * rate)]
+    pcm = (np.clip(mono, -1, 1) * 32767).astype("<i2").tobytes()
+    step = int(0.5 * rate) * 2  # 0.5 s of 16-bit samples
+    pieces = [pcm[i:i + step] for i in range(0, len(pcm), step)]
+    url = args.api.replace("http", "ws", 1) + "/api/v1/live"
+    sent_at: List[float] = []
+    chunk_back: Dict[int, float] = {}
+    frames: Dict[int, Any] = {}  # presentation ms -> grey lower half
+
+    async with websockets.connect(url, max_size=None) as ws:
+        await ws.send(json.dumps({"type": "start", "avatarId": args.avatar, "fps": args.fps, "maxSide": args.max_side,
+                                  **({"apiKey": args.api_key} if args.api_key else {})}))
+        ready = json.loads(await ws.recv())
+        if ready.get("type") != "ready":
+            raise SystemExit(f"server refused the session: {ready}")
+        await ws.send(json.dumps({"type": "audio_start", "sampleRate": int(rate), "consentBasis": args.consent_basis}))
+        audio_ready = json.loads(await ws.recv())
+        if audio_ready.get("type") != "audio_ready":
+            raise SystemExit(f"server refused the audio stream: {audio_ready}")
+
+        async def send() -> None:
+            began = time.perf_counter()
+            for k, piece in enumerate(pieces):
+                # Real-time pace: chunk k is not available before k x 0.5 s, as from a microphone.
+                await asyncio.sleep(max(0.0, began + k * 0.5 - time.perf_counter()))
+                sent_at.append(time.perf_counter())
+                await ws.send(piece)
+            await ws.send(json.dumps({"type": "audio_end"}))
+
+        sender = asyncio.create_task(send())
+        done: Dict[str, Any] = {}
+        while True:
+            message = await ws.recv()
+            if isinstance(message, bytes):
+                kind, chunk, index, pres = HEADER.unpack_from(message)[:4]
+                image = Image.open(io.BytesIO(message[HEADER.size:])).convert("L")
+                pixels = np.asarray(image, dtype=np.float32)
+                frames[pres] = pixels[pixels.shape[0] // 2:]
+            else:
+                event = json.loads(message)
+                if event["type"] == "chunk":
+                    chunk_back[event["chunk"]] = time.perf_counter()
+                elif event["type"] == "error":
+                    raise SystemExit(f"server error: {event}")
+                elif event["type"] == "done":
+                    done = event
+                    break
+        await sender
+        await ws.send(json.dumps({"type": "stop"}))
+
+    # Mouth vs loudness: per frame, the audio RMS over that frame's 40 ms, and the lower face's
+    # distance from its quietest frame. A mouth that follows the audio correlates positively.
+    times = sorted(frames)
+    hop = rate / args.fps
+    loudness = np.array([float(np.sqrt(np.mean(mono[int(t / 1000 * rate): int(t / 1000 * rate + hop)] ** 2) or 0.0)) for t in times])
+    quietest = frames[times[int(np.argmin(loudness))]]
+    movement = np.array([float(np.abs(frames[t] - quietest).mean()) for t in times])
+    # A correlation needs both series to vary; a still face (e.g. silent input) has none to measure.
+    varies = len(times) > 2 and loudness.std() > 0 and movement.std() > 0
+    correlation = float(np.corrcoef(loudness, movement)[0, 1]) if varies else None
+    latency = [(chunk_back[k] - sent_at[k]) * 1000 for k in range(len(sent_at)) if k in chunk_back]
+    return {
+        "audio": args.audio, "seconds": round(len(mono) / rate, 2), "sampleRate": int(rate), "chunksSent": len(pieces),
+        "chunksAnimated": len(chunk_back), "frames": len(frames), "drive": audio_ready.get("drive"), "note": audio_ready.get("note"),
+        "chunkToFramesMs": {"p50": round(percentile(latency, 50), 1), "p95": round(percentile(latency, 95), 1), "max": round(max(latency), 1)},
+        "mouthFollowsLoudness": {"pearson": round(correlation, 3) if correlation is not None else None,
+                                 "lowerFaceMovementMax": round(float(movement.max()), 3) if len(times) else None,
+                                 "method": "per-frame audio RMS vs lower-face distance from its quietest frame"},
+        "serverSummary": done,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--api", default="http://localhost:8000")
     parser.add_argument("--avatar", required=True)
-    parser.add_argument("--text", required=True)
+    parser.add_argument("--text", default=None, help="text to speak (or --audio)")
+    parser.add_argument("--audio", default=None, help="stream this recording instead of text (R-41)")
+    parser.add_argument("--seconds", type=float, default=10.0, help="with --audio: how much of it to send")
+    parser.add_argument("--consent-basis", default="open-licence", help="with --audio: the basis the voice is used under")
     parser.add_argument("--language", default="en")
     parser.add_argument("--mode", default="fast", choices=["fast", "clone"])
     parser.add_argument("--emotion", default=None)
@@ -172,7 +262,9 @@ def main() -> int:
     parser.add_argument("--save", default=None, help="folder for sample frames and the audio")
     parser.add_argument("--json-out", action="store_true", help="also write the report to outputs/benchmarks/")
     args = parser.parse_args()
-    report = asyncio.run(run(args))
+    if (args.text is None) == (args.audio is None):
+        parser.error("give exactly one of --text or --audio")
+    report = asyncio.run(run_audio(args) if args.audio else run(args))
     print(json.dumps(report, indent=2))
     if args.json_out:
         out = PROJECT_ROOT / "outputs" / "benchmarks"
@@ -180,6 +272,8 @@ def main() -> int:
         destination = out / f"live-{time.strftime('%Y%m%d-%H%M%S')}.json"
         destination.write_text(json.dumps(report, indent=2))
         print(f"written: {destination}")
+    if args.audio:
+        return 0 if report["chunksAnimated"] == report["chunksSent"] else 1
     return 0 if report["undecodableOrWrongSizeFrames"] == 0 else 1
 
 

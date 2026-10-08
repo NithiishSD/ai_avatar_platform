@@ -63,6 +63,10 @@ class FakeSession:
     def build_track(self, chunk):
         return FakeTrack(13, chunk.index)
 
+    def audio_track(self, index, pcm16, sample_rate):
+        self.log.append(("audio", index, len(pcm16), sample_rate))
+        return FakeTrack(int(round(len(pcm16) / 2 / sample_rate * self.fps)), index)
+
     def render_jpeg(self, track, index) -> bytes:
         self.log.append(("frame", track.chunk, index, time.perf_counter()))
         if FakeSession.frame_delay:
@@ -191,6 +195,80 @@ class RealSessionSynthesisTests(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- websocket
+def tone(seconds, level, rate=16000):
+    """PCM16 of a 200 Hz tone at ``level`` (0..1 of full scale)."""
+    t = np.arange(int(seconds * rate)) / rate
+    return (np.sin(2 * np.pi * 200 * t) * level * 32767).astype("<i2").tobytes()
+
+
+class AudioDrivenTests(unittest.TestCase):
+    """Streaming audio input (R-41): the client's own speech moves the mouth by its loudness."""
+
+    def session(self):
+        real = live_engine.LiveSession(mock.MagicMock(), mock.MagicMock(), "demo", fps=25)
+        real.session_id = "audio-test"
+        return real
+
+    def jaw(self, track):
+        return float(track.column("jawOpen").mean())
+
+    def test_loud_speech_opens_the_mouth_and_silence_keeps_it_shut(self):
+        session = self.session()
+        loud = session.audio_track(0, tone(1.0, 0.5), 16000)
+        silent = session.audio_track(1, tone(1.0, 0.0), 16000)
+        self.assertEqual(loud.frame_count, 25)
+        self.assertGreater(self.jaw(loud), 0.05)
+        self.assertLess(self.jaw(silent), 1e-3)
+
+    def test_a_quiet_chunk_after_a_loud_one_is_drawn_quieter(self):
+        session = self.session()
+        loud = session.audio_track(0, tone(1.0, 0.5), 16000)
+        quiet = session.audio_track(1, tone(1.0, 0.08), 16000)
+        self.assertLess(self.jaw(quiet), self.jaw(loud))
+
+    def test_room_noise_alone_does_not_open_the_mouth(self):
+        session = self.session()
+        hiss = (np.random.default_rng(0).normal(scale=0.002, size=16000) * 32767).astype("<i2").tobytes()
+        self.assertLess(self.jaw(session.audio_track(0, hiss, 16000)), 1e-3)
+
+    def test_bad_chunks_are_refused_with_the_reason(self):
+        with self.assertRaisesRegex(LiveError, "empty"):
+            live_engine.check_pcm(b"", 16000)
+        with self.assertRaisesRegex(LiveError, "even number"):
+            live_engine.check_pcm(b"\x00" * 3, 16000)
+        with self.assertRaisesRegex(LiveError, "at most 2 s"):
+            live_engine.check_pcm(tone(2.5, 0.1), 16000)
+        live_engine.check_pcm(tone(2.0, 0.1), 16000)
+
+    def test_a_chunk_streams_its_frames_on_the_session_timeline_then_a_labelled_summary(self):
+        fake = FakeSession(None, None, "demo")
+
+        async def run():
+            return [event async for event in live_engine.stream_audio_chunk(fake, 0, tone(0.4, 0.3), 16000)]
+
+        events = asyncio.run(run())
+        self.assertEqual([e.kind for e in events], ["frame"] * 10 + ["chunk"])
+        self.assertEqual([unpack_media(e.payload)[3] for e in events[:3]], [0, 40, 80])
+        self.assertEqual(events[-1].meta["drive"], "audio-energy")
+        self.assertIn("not phoneme-aligned", events[-1].meta["note"])
+        self.assertEqual(fake.timeline_ms, 400.0)
+
+
+class AudioTimelineTests(unittest.TestCase):
+    def test_half_second_chunks_keep_exactly_the_session_frame_rate_on_one_grid(self):
+        fake = FakeSession(None, None, "demo")
+
+        async def run():
+            events = []
+            for k in range(4):  # 2 s of audio in 0.5 s chunks: 12.5 frames each
+                events += [e async for e in live_engine.stream_audio_chunk(fake, k, tone(0.5, 0.3), 16000)]
+            return events
+
+        frames = [unpack_media(e.payload)[3] for e in asyncio.run(run()) if e.kind == "frame"]
+        self.assertEqual(len(frames), 50)                          # 25 fps, not 26
+        self.assertEqual(frames, [i * 40 for i in range(50)])      # one grid, no repeats, no gaps
+
+
 class LiveWebSocketTests(unittest.TestCase):
     def setUp(self):
         FakeSession.instances, FakeSession.open_error, FakeSession.frame_delay = [], None, 0.0
@@ -367,6 +445,45 @@ class LiveWebSocketTests(unittest.TestCase):
         self.assertLess(len(synthesised), 6)  # it stopped; it did not synthesise the whole text for nobody
         self.assertTrue(FakeSession.instances[0].cleaned)
         self.assertEqual(app_module._live_active, 0)
+
+    def test_streamed_audio_is_animated_labelled_and_logged_with_its_consent_basis(self):
+        from audit_log import AuditLog
+
+        log = AuditLog(":memory:")
+        with mock.patch("audit_log.shared_audit", return_value=log), self.client.websocket_connect("/api/v1/live") as ws:
+            self.start(ws)
+            ws.send_bytes(tone(0.4, 0.3))                           # before audio_start: refused, session lives on
+            self.assertEqual(ws.receive_json()["code"], "audio_not_started")
+            ws.send_json({"type": "audio_start", "sampleRate": 16000})  # no consent basis
+            self.assertEqual(ws.receive_json()["code"], "bad_message")
+            ws.send_json({"type": "audio_start", "sampleRate": 16000, "consentBasis": "speaker-recorded"})
+            ready = ws.receive_json()
+            self.assertEqual((ready["type"], ready["drive"]), ("audio_ready", "audio-energy"))
+            for _ in range(2):
+                ws.send_bytes(tone(0.4, 0.3))
+            ws.send_bytes(tone(3.0, 0.3))                           # too long for one chunk
+            ws.send_json({"type": "audio_end"})
+            messages = []
+            while True:  # unlike until_done, read past the error to the final "done"
+                message = ws.receive()
+                if message.get("text") is None:
+                    messages.append(unpack_media(message["bytes"]))
+                    continue
+                messages.append(__import__("json").loads(message["text"]))
+                if messages[-1]["type"] == "done":
+                    break
+        frames = [m for m in messages if isinstance(m, tuple)]
+        chunks = [m for m in messages if isinstance(m, dict) and m["type"] == "chunk"]
+        errors = [m for m in messages if isinstance(m, dict) and m["type"] == "error"]
+        self.assertEqual(len(frames), 20)
+        self.assertEqual([c["startMs"] for c in chunks], [0.0, 400.0])     # one continuous timeline
+        self.assertTrue(all(c["drive"] == "audio-energy" for c in chunks))
+        self.assertEqual(messages[-1], {"type": "done", "drive": "audio-energy", "chunks": 2})
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["code"], "bad_audio")
+        supplied = log.query(event="audio_supplied")
+        self.assertEqual(len(supplied), 1)
+        self.assertEqual((supplied[0]["basis"], supplied[0]["details"]["sampleRate"]), ("speaker-recorded", 16000))
 
     def test_the_connection_carries_a_request_id_in_the_ready_message(self):
         with self.client.websocket_connect("/api/v1/live", headers={"X-Request-ID": "trace-live-1"}) as ws:

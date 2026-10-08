@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 import struct
 import time
@@ -45,7 +46,7 @@ import numpy as np
 
 import audit_log
 from avatar_store import AvatarConsentError, AvatarStore
-from face_animation import AnimationTrack, build_animation, seed_from_job_id, speech_energy_envelope
+from face_animation import AnimationTrack, build_animation, energy_envelope, seed_from_job_id, speech_energy_envelope
 from face_engine import FACE_ENGINE_LOCK, shared_face_engine
 from face_warp import PortraitAnimator
 
@@ -66,6 +67,19 @@ MAX_CHUNK_CHARS = 220
 # One synthesis at a time across every session (the router serialises anyway;
 # this keeps the queue visible and bounded). Rendering is numpy/OpenCV and may
 # run two at a time.
+# Streaming *audio* input (R-41): the client sends its own speech as PCM16 chunks and the face
+# follows it. There is no transcript, so there are no phonemes to align: the mouth opens and
+# closes with the loudness of the audio. That is an estimate, and every message about it says so.
+AUDIO_DRIVE = "audio-energy"
+AUDIO_DRIVE_NOTE = "mouth estimated from the audio's loudness; not phoneme-aligned"
+MAX_PCM_SECONDS = 2.0       # one binary message carries at most this much audio
+# The quietest level treated as speech when nothing louder has been heard yet (about -34 dBFS);
+# below it a stream of room noise keeps the mouth shut instead of being normalised up to "talking".
+MIN_AUDIO_REFERENCE = 0.02
+# Steps quieter than this (RMS ~ -40 dBFS) count as silence whatever the reference: a microphone's
+# room noise sits around -50 to -60 dBFS and would otherwise flicker the mouth open.
+NOISE_GATE = 0.01
+
 _SYNTH_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-synth")
 _RENDER_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="live-render")
 
@@ -164,6 +178,8 @@ class LiveSession:
         self.width = self.height = 0
         # Where the next chunk starts on the session's timeline (ms).
         self.timeline_ms = 0.0
+        # Loudest level of the client's own audio so far (streaming audio input).
+        self.audio_reference = 0.0
         LIVE_DIR.mkdir(parents=True, exist_ok=True)
 
     # -- blocking work; each runs on a worker thread -----------------------
@@ -260,6 +276,29 @@ class LiveSession:
             raise LiveError("a frame could not be encoded as JPEG")
         return encoded.tobytes()
 
+    def audio_track(self, index: int, pcm16: bytes, sample_rate: int) -> AnimationTrack:
+        """Frames for one chunk of the client's own audio: the mouth follows its loudness (``AUDIO_DRIVE``)."""
+        mono = np.frombuffer(pcm16, dtype="<i2").astype(np.float32) / 32768.0
+        duration = len(mono) / float(sample_rate)
+        rms, _ = energy_envelope(mono, sample_rate, reference=1.0)  # raw RMS per grid step (full scale = 1)
+        speech = rms[rms > 1e-4]
+        loudest = float(np.percentile(speech, 95)) if speech.size else 0.0
+        # Normalise by the loudest level heard so far (this chunk included), never below the floor:
+        # a quiet chunk after a loud one is drawn as quiet, and room noise alone keeps the mouth shut.
+        self.audio_reference = max(MIN_AUDIO_REFERENCE, self.audio_reference, loudest)
+        envelope = np.clip(rms / self.audio_reference, 0.0, 1.0).astype(np.float32)
+        envelope[rms < NOISE_GATE] = 0.0
+        # One open-vowel shape held for the whole chunk; the energy gate in build_animation opens and
+        # shuts it with the loudness. Without phonemes there is nothing better to pick.
+        held = [{"phoneme": "AA", "viseme": "viseme_aa", "startMs": 0, "endMs": duration * 1000.0}]
+        emotion = None
+        if self.emotion:
+            from emotion_engine import to_render_emotion_vector
+
+            emotion = to_render_emotion_vector({self.emotion: self.emotion_intensity})
+        return build_animation(held, duration_seconds=duration, fps=self.fps, emotion_vector=emotion,
+                               seed=seed_from_job_id(f"{self.session_id}-a{index}"), energy_envelope=envelope)
+
     def cleanup(self) -> None:
         for leftover in LIVE_DIR.glob(f"{self.session_id}-*.wav"):
             leftover.unlink(missing_ok=True)
@@ -336,3 +375,45 @@ async def stream_text(session: LiveSession, text: str, with_frames: bool = True)
     finally:
         if pending is not None and not pending.done():
             pending.cancel()
+
+
+def check_pcm(data: bytes, sample_rate: int) -> None:
+    """Refuse a chunk the server cannot animate, with the reason (raises ``LiveError``)."""
+    if not data:
+        raise LiveError("an audio chunk was empty")
+    if len(data) % 2:
+        raise LiveError("audio chunks must be 16-bit little-endian mono PCM (an even number of bytes)")
+    limit = int(MAX_PCM_SECONDS * sample_rate) * 2
+    if len(data) > limit:
+        raise LiveError(f"an audio chunk may hold at most {MAX_PCM_SECONDS:g} s ({limit} bytes at {sample_rate} Hz); split it")
+
+
+async def stream_audio_chunk(session: LiveSession, index: int, pcm16: bytes, sample_rate: int) -> AsyncGenerator[LiveEvent, None]:
+    """
+    Animate one chunk of the client's own speech: yield its ``frame`` events, then a ``chunk``
+    event. No audio is sent back; the client already has it. The frames sit on the same timeline
+    as text speech, so a session can mix the two.
+    """
+    loop = asyncio.get_running_loop()
+    check_pcm(pcm16, sample_rate)
+    started = time.perf_counter()
+    track = await loop.run_in_executor(_RENDER_POOL, session.audio_track, index, pcm16, sample_rate)
+    start_ms = session.timeline_ms
+    audio_ms = len(pcm16) / 2 / sample_rate * 1000.0
+    # Frames sit on the session's one global grid (every 1000/fps ms) rather than restarting at each
+    # chunk: a 0.5 s chunk is 12.5 frames, and rounding each chunk up would drift to 26 fps and
+    # put frames off the grid. Each grid slot inside this chunk takes the nearest frame of its track.
+    frame_ms = 1000.0 / session.fps
+    first, end = math.ceil(start_ms / frame_ms - 1e-9), math.ceil((start_ms + audio_ms) / frame_ms - 1e-9)
+    frames = 0
+    for slot in range(first, end):
+        local = min(track.frame_count - 1, int((slot * frame_ms - start_ms) / frame_ms))
+        jpeg = await loop.run_in_executor(_RENDER_POOL, session.render_jpeg, track, local)
+        yield LiveEvent("frame", pack_media(KIND_FRAME, index, frames, int(round(slot * frame_ms)), jpeg))
+        frames += 1
+    session.timeline_ms += audio_ms
+    yield LiveEvent("chunk", meta={
+        "chunk": index, "drive": AUDIO_DRIVE, "note": AUDIO_DRIVE_NOTE, "audioMs": round(audio_ms, 1),
+        "frames": frames, "startMs": round(start_ms, 1),
+        "processingMs": round((time.perf_counter() - started) * 1000.0, 1),
+    })

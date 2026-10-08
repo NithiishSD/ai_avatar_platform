@@ -166,11 +166,23 @@ def speech_energy_envelope(
     import soundfile as sf
 
     data, sample_rate = sf.read(str(audio_path), dtype="float32", always_2d=True)
-    mono = data.mean(axis=1)
+    return energy_envelope(data.mean(axis=1), sample_rate, grid_ms)[0]
+
+
+def energy_envelope(
+    mono: np.ndarray, sample_rate: int, grid_ms: float = GRID_MS, reference: Optional[float] = None
+) -> Tuple[np.ndarray, Optional[float]]:
+    """
+    ``(envelope, reference)``: RMS per grid step divided by ``reference``.
+
+    With no ``reference`` it is the 95th percentile of the voiced steps (a whole clip). A live
+    stream passes the loudest level heard so far instead, so a quiet chunk stays quiet rather than
+    being stretched to full loudness; the reference used is returned for the next chunk.
+    """
     hop = max(1, int(round(sample_rate * grid_ms / 1000.0)))
     steps = int(math.ceil(len(mono) / hop))
     if steps == 0:
-        return np.zeros(0, dtype=np.float32)
+        return np.zeros(0, dtype=np.float32), reference
     padded = np.zeros(steps * hop, dtype=np.float32)
     padded[: len(mono)] = mono
     rms = np.sqrt((padded.reshape(steps, hop) ** 2).mean(axis=1))
@@ -178,10 +190,11 @@ def speech_energy_envelope(
     # the plain 95th percentile is itself silence, which would normalise
     # every step to zero and shut the mouth for the whole clip.
     voiced = rms[rms > 1e-4]
-    if voiced.size == 0:
-        return np.zeros(0, dtype=np.float32)  # truly silent: nothing to gate on
-    reference = float(np.percentile(voiced, 95))
-    return np.clip(rms / reference, 0.0, 1.0).astype(np.float32)
+    if reference is None:
+        if voiced.size == 0:
+            return np.zeros(0, dtype=np.float32), None  # truly silent: nothing to gate on
+        reference = float(np.percentile(voiced, 95))
+    return np.clip(rms / reference, 0.0, 1.0).astype(np.float32), reference
 
 
 def _gaussian(array: np.ndarray, sigma_steps: float) -> np.ndarray:

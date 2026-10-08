@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -23,6 +24,7 @@ from contracts import (
     AvatarGenerateRequest,
     AvatarGenerateResponse,
     AvatarRegisterResponse,
+    LiveAudioStartMessage,
     LiveControlMessage,
     LiveSayMessage,
     LiveStartMessage,
@@ -1111,15 +1113,25 @@ async def live_avatar(ws: WebSocket) -> None:
         async def receive() -> None:
             while True:
                 try:
-                    inbox.put_nowait(await ws.receive_json())
-                except (ValueError, TypeError):  # not JSON: tell the client, keep listening
-                    inbox.put_nowait({"type": "_malformed"})
+                    message = await ws.receive()
                 except (WebSocketDisconnect, RuntimeError):  # the client left
                     inbox.put_nowait({"type": "_closed"})
                     return
+                if message.get("type") == "websocket.disconnect":
+                    inbox.put_nowait({"type": "_closed"})
+                    return
+                if message.get("bytes") is not None:  # a binary message is a chunk of the client's own audio
+                    inbox.put_nowait({"type": "_pcm", "data": message["bytes"]})
+                    continue
+                try:
+                    inbox.put_nowait(json.loads(message.get("text") or ""))
+                except ValueError:  # not JSON: tell the client, keep listening
+                    inbox.put_nowait({"type": "_malformed"})
 
         receiver = asyncio.create_task(receive())
         queued: list = []
+        audio_rate: Optional[int] = None  # set by audio_start; None means no audio stream is open
+        audio_chunks = 0
 
         async def next_message() -> dict:
             if queued:
@@ -1136,6 +1148,38 @@ async def live_avatar(ws: WebSocket) -> None:
                 break
             if kind == "_malformed":
                 await ws.send_json({"type": "error", "code": "malformed", "detail": "messages must be JSON objects"})
+                continue
+            # -- streaming audio input (R-41): the client's own speech drives the mouth ----------
+            if kind == "audio_start":
+                try:
+                    audio_start = LiveAudioStartMessage.model_validate(raw)
+                except ValidationError as err:
+                    await ws.send_json({"type": "error", "code": "bad_message", "detail": _scrub(str(err))[:300]})
+                    continue
+                audio_rate, audio_chunks = audio_start.sample_rate, 0
+                audit_log.shared_audit().record("audio_supplied", subject=session.session_id, basis=audio_start.consent_basis,
+                                                live=True, avatar=start.avatar_id, sampleRate=audio_rate)
+                await ws.send_json({"type": "audio_ready", "drive": live_engine.AUDIO_DRIVE, "note": live_engine.AUDIO_DRIVE_NOTE,
+                                    "maxChunkSeconds": live_engine.MAX_PCM_SECONDS})
+                continue
+            if kind == "_pcm":
+                if audio_rate is None:
+                    await ws.send_json({"type": "error", "code": "audio_not_started",
+                                        "detail": "send an audio_start message (sampleRate, consentBasis) before audio chunks"})
+                    continue
+                try:
+                    async for event in live_engine.stream_audio_chunk(session, audio_chunks, raw["data"], audio_rate):
+                        if event.kind == "frame":
+                            await ws.send_bytes(event.payload)
+                        else:
+                            await ws.send_json({"type": event.kind, **event.meta})
+                    audio_chunks += 1
+                except live_engine.LiveError as err:
+                    await ws.send_json({"type": "error", "code": "bad_audio", "detail": str(err)})
+                continue
+            if kind == "audio_end":
+                await ws.send_json({"type": "done", "drive": live_engine.AUDIO_DRIVE, "chunks": audio_chunks})
+                audio_rate, audio_chunks = None, 0
                 continue
             try:
                 message = _live_message.validate_python(raw)

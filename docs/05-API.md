@@ -63,6 +63,15 @@ when it is due on the session timeline, so a client plays by that, not by arriva
 `consent`, `avatar_not_found`, `bad_request`, `model_unavailable`, `bad_message`, `malformed`,
 `speech_failed`, `idle`. Consent, weights and language are checked before any speech, as in REST.
 
+**Streaming audio input (R-41).** Instead of text, a client can send its own speech: `audio_start`
+(`sampleRate` 8000–48000, `consentBasis` one of `speaker-recorded`, `written-consent`, `open-licence`;
+written to the audit trail as `audio_supplied`) answers `audio_ready` with `drive: "audio-energy"`.
+Each following **binary** message is up to 2 s of 16-bit little-endian mono PCM; the server answers
+with that chunk's JPEG frames (kind 2, on the session's single 1000/fps ms grid) and a `chunk`
+message labelled `drive: "audio-energy"`, `note: "mouth estimated from the audio's loudness; not
+phoneme-aligned"`. No audio is sent back. `audio_end` answers `done`. Errors: `audio_not_started`
+(PCM before `audio_start`), `bad_audio` (empty, odd length, longer than 2 s); the session carries on.
+
 ## Request ids
 
 Every response carries `X-Request-ID` (also on 401/429/500). Send your own

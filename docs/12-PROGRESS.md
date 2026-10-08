@@ -54,7 +54,8 @@ records what was verified live, with the real command and result.
 | T8.10 | Done | 2cf36b4 |
 | T8.3 | Done | ea59957 |
 | T8.9 | Done | 3faafde |
-| T8.4 | Done — Wav2Lip meets the lip-sync percentage on 13 languages, blendshape does not; N-20 not met | (this commit) |
+| T8.5 | Done | (this commit) |
+| T8.4 | Done — Wav2Lip meets the lip-sync percentage on 13 languages, blendshape does not; N-20 not met | 0eb03a9 |
 | T8.7 | Built and measured; the Stable Diffusion words wait on M-08 | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
 
@@ -1247,3 +1248,18 @@ N-20 (30 s video < 5 s): 26.8 s of video rendered in 4.96 s unmarked (~5.6 s per
 
 Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **826 tests OK** (5 new; the tolerance off-by-one plant caught).
 Not done: more than one sentence per language; native-speaker judgement (R-53, not planned); Wav2Lip timing at 30 s.
+
+### 2026-10-08 — T8.5 streaming audio input to the live avatar
+
+A live session now takes the client's own speech: `audio_start` (sample rate + consent basis, audited as `audio_supplied`), then binary PCM16 chunks of up to
+2 s, then `audio_end`. `LiveSession.audio_track` holds one open-vowel shape and gates it by the chunk's loudness (`face_animation.energy_envelope`, split out of
+`speech_energy_envelope` so it works on samples), normalised by the loudest level so far with a -40 dBFS noise gate. Every message says `drive: "audio-energy"` and
+that the mouth is estimated, not phoneme-aligned (D-52). `scripts/live_client.py --audio FILE` streams a recording at real-time pace.
+
+Found while testing: (1) room noise at -54 dBFS opened the mouth; an absolute gate fixed it (test pins it). (2) the first live run sent 312 frames for 12 s:
+each 0.5 s chunk rounded 12.5 frames up to 13 (26 fps, off the grid); frames are now placed on the session's global grid, 300 frames for 12 s (test pins it).
+
+Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **833 tests OK** (7 new, 2 plants caught). Live, real server, CPU: 12 s of the LJSpeech recording in
+0.5 s chunks: 24/24 animated, 300 frames, chunk -> frames p50 39 ms / p95 47 ms, mouth-loudness correlation 0.705; 4 s of silence: 100 frames, no lower-face movement.
+
+Not done: a microphone button in the UI (the protocol is ready; the browser side is not built); phoneme-accurate visemes from live audio (needs streaming ASR).
