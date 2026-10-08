@@ -109,6 +109,14 @@ def download_file(
     return dest
 
 
+def _fetch_videoseal() -> None:
+    """The VideoSeal 1.0 checkpoint (pinned size and SHA-256) and the small config file its wheel omits."""
+    from video_watermark import ATTENUATION_FILE, ATTENUATION_YAML, CHECKPOINT, CHECKPOINT_BYTES, CHECKPOINT_SHA256, CHECKPOINT_URL
+
+    download_file(CHECKPOINT_URL, CHECKPOINT, min_bytes=CHECKPOINT_BYTES, sha256=CHECKPOINT_SHA256)
+    ATTENUATION_FILE.write_text(ATTENUATION_YAML)
+
+
 def _fetch_face_landmarker() -> None:
     download_file(
         f"{_MEDIAPIPE}/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
@@ -215,6 +223,15 @@ SPECS: List[VisionSpec] = [
         licence="Apache-2.0",
         note="hair / clothes masks for the customization studio",
         fetch=_fetch_multiclass_segmenter,
+    ),
+    VisionSpec(
+        key="videoseal",
+        name="VideoSeal 1.0 (256-bit invisible video watermark)",
+        approx_gb=0.23,
+        default=True,
+        licence="MIT (Meta; code and weights)",
+        note="every rendered video is watermarked with it; also needs the packages in video_watermark.VIDEOSEAL_PIP",
+        fetch=_fetch_videoseal,
     ),
     VisionSpec(
         key="syncnet",

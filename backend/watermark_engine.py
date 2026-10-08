@@ -61,6 +61,11 @@ DEFAULT_ALPHA = 1.0
 METHOD = "audioseal-16bit (facebook/audioseal, MIT): generator_base + detector_base, 16 kHz internal rate"
 
 
+def enabled() -> bool:
+    """One switch for both marks (audio and video): ``WATERMARK_ENABLED=false`` turns them off, visibly."""
+    return os.getenv("WATERMARK_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+
+
 class WatermarkUnavailable(RuntimeError):
     """The watermark model cannot run; the message names the fix."""
 

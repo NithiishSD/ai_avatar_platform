@@ -59,7 +59,7 @@ class VisionAuditTests(unittest.TestCase):
         keys = [s.key for s in audit_vision_weights()]
         self.assertEqual(
             keys,
-            ["face-landmarker", "selfie-segmenter", "multiclass-segmenter", "wav2lip", "syncnet", "sface", "avatar-diffusion"],
+            ["videoseal", "face-landmarker", "selfie-segmenter", "multiclass-segmenter", "wav2lip", "syncnet", "sface", "avatar-diffusion"],
         )
 
     def test_fetch_script_and_audit_cover_the_same_models(self):

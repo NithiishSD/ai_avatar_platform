@@ -5,6 +5,7 @@ The face landmarker is replaced by the synthetic-face fixture; ffmpeg is the
 real system binary. No model weights are touched.
 """
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -13,8 +14,10 @@ from unittest import mock
 
 import numpy as np
 
+import manifest as manifest_module
 import provenance
 import render_engine
+import watermark_engine
 import video_io
 from avatar_store import AvatarConsentError, AvatarNotFound, AvatarStore
 from contracts import AvatarRenderJob, BackgroundSpec, RenderQuality
@@ -407,6 +410,114 @@ class BackgroundRenderTests(RenderCase):
         result = render_engine.render_job(self.job(), store=self.store, label=False)
         self.assertIsNone(result.background)
         self.assertEqual(self.segmenter.calls, 0)
+
+
+class FakeVideoMarker:
+    """Stands in for VideoSeal: passes frames through, remembers the id, reads back what it is told to."""
+
+    def __init__(self, detected=True):
+        self.detected = detected
+        self.embedded_ids = []
+        self.frames_seen = 0
+
+    def embed_stream(self, frames, manifest_id):
+        self.embedded_ids.append(manifest_id)
+        for frame in frames:
+            self.frames_seen += 1
+            yield frame
+
+    def detect_video(self, path, sample_frames=16):
+        from video_watermark import VideoWatermarkReport
+
+        ident = self.embedded_ids[-1].hex() if self.embedded_ids else None
+        return VideoWatermarkReport(self.detected, 128 if self.detected else 40, 1.0 if self.detected else 0.3,
+                                    ident if self.detected else None, sample_frames)
+
+
+@unittest.skipUnless(HAVE_FFMPEG, "ffmpeg / ffprobe not installed")
+class RenderWatermarkAndManifestTests(RenderCase):
+    def setUp(self):
+        super().setUp()
+        self.marker = FakeVideoMarker()
+        for patcher in (
+            mock.patch("watermark_engine.enabled", return_value=True),
+            mock.patch("watermark_engine.signing_key", return_value=b"render-test-key"),
+            mock.patch("video_watermark.VideoWatermarker.files_present", return_value=True),
+            mock.patch("video_watermark.shared_video_watermarker", return_value=self.marker),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        watermark_engine.reset_key_cache()
+        self.addCleanup(watermark_engine.reset_key_cache)
+
+    def render(self, **kw):
+        self.wav(1.0)
+        return render_engine.render_job(self.job(**kw), store=self.store, label=False)
+
+    def load_manifest(self, result):
+        return json.loads(Path(result.manifest["path"]).read_text())
+
+    def test_a_render_marks_the_frames_and_ships_a_manifest_that_verifies_against_the_file(self):
+        result = self.render()
+        self.assertEqual(self.marker.frames_seen, result.frame_count)           # every frame went through the marker
+        self.assertTrue(result.watermark["applied"] and result.watermark["verified"])
+        document = self.load_manifest(result)
+        report = manifest_module.verify(document, result.output_path)
+        self.assertTrue(report.trustworthy, report.problems)
+        # one id ties the three together: what was embedded, what was read back, what the manifest says
+        embedded = self.marker.embedded_ids[-1].hex()
+        self.assertEqual({result.watermark["embeddedManifestId"], result.watermark["manifestId"],
+                          result.manifest["manifestId"], document["manifestId"]}, {embedded})
+        self.assertTrue(result.manifest["url"].endswith(".mp4.manifest.json"))
+
+    def test_the_manifest_records_what_went_into_the_video(self):
+        result = self.render()
+        document = self.load_manifest(result)
+        self.assertEqual(document["inputs"]["avatar"]["avatarId"], "demo")
+        self.assertEqual(document["inputs"]["avatar"]["source"], "synthetic")
+        self.assertEqual(document["processing"]["renderEngine"], "blendshape")
+        self.assertEqual(document["processing"]["quality"], "PREVIEW")
+        self.assertEqual(document["content"]["frameCount"], result.frame_count)
+        self.assertEqual(document["inputs"]["audio"]["speechRecord"]["status"], "unrecorded")  # this wav came from no synthesis
+
+    def test_a_speech_record_for_the_exact_audio_is_carried_into_the_manifest(self):
+        path = self.wav(1.0)
+        manifest_module.write_speech_record(path, model="kokoro", mode="fast", language="en", speaker_wav=None, clone_engine=None,
+                                            emotion=None, alignment_method="mms_fa", duration_seconds=1.0, watermark={"applied": True})
+        result = render_engine.render_job(self.job(), store=self.store, label=False)
+        record = self.load_manifest(result)["inputs"]["audio"]["speechRecord"]
+        self.assertEqual((record["status"], record["model"], record["alignmentMethod"]), ("matched", "kokoro", "mms_fa"))
+
+    def test_a_mark_that_cannot_be_read_back_fails_the_job_and_leaves_no_video(self):
+        self.marker.detected = False
+        self.wav(1.0)
+        with self.assertRaisesRegex(RenderError, "could not be read back"):
+            render_engine.render_job(self.job(), store=self.store, label=False)
+        self.assertEqual(list((self.outputs / "renders").glob("*")), [])        # no video, no partial, no manifest
+
+    def test_switching_the_mark_off_is_visible_and_the_manifest_is_still_issued(self):
+        with mock.patch("watermark_engine.enabled", return_value=False):
+            result = self.render()
+        self.assertEqual(result.watermark["applied"], False)
+        self.assertIn("WATERMARK_ENABLED", result.watermark["reason"])
+        self.assertEqual(self.marker.frames_seen, 0)
+        document = self.load_manifest(result)
+        self.assertTrue(manifest_module.verify(document, result.output_path).trustworthy)
+        self.assertEqual(document["watermarks"]["video"]["applied"], False)    # the manifest does not claim a mark it lacks
+        self.assertIsNone(document["models"]["videoWatermark"])
+
+    def test_two_renders_never_share_a_manifest_id(self):
+        first = self.render(jobId="A")
+        second = self.render(jobId="B")
+        self.assertNotEqual(first.manifest["manifestId"], second.manifest["manifestId"])
+
+    def test_preflight_refuses_to_queue_a_job_that_cannot_be_marked(self):
+        self.wav(1.0)
+        with mock.patch("video_watermark.VideoWatermarker.files_present", return_value=False):
+            with self.assertRaisesRegex(RenderError, "fetch_vision_models.py --only videoseal"):
+                render_engine.preflight(self.job(), store=self.store)
+            with mock.patch("watermark_engine.enabled", return_value=False):
+                render_engine.preflight(self.job(), store=self.store)           # the opt-out needs no model
 
 
 if __name__ == "__main__":

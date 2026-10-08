@@ -402,6 +402,29 @@ def check_audioseal(key: str = "audioseal", name: str = "AudioSeal (audio waterm
     return check_hf_files(key, name, AUDIOSEAL_REPO, list(AUDIOSEAL_FILES))
 
 
+def check_videoseal(key: str = "videoseal", name: str = "VideoSeal 1.0 (invisible video watermark)") -> ModelWeightStatus:
+    """The video watermark needs its packages, the 228 MB checkpoint at its exact size, and its config."""
+    import importlib.util
+
+    from video_watermark import ATTENUATION_FILE, CHECKPOINT, CHECKPOINT_BYTES, VIDEOSEAL_PIP
+
+    missing = [m for m in ("videoseal", "timm", "av", "yaml") if importlib.util.find_spec(m) is None]
+    if missing:
+        return ModelWeightStatus(
+            key=key, name=name, source=str(CHECKPOINT), present=False, size_bytes=0,
+            detail=f"the {', '.join(missing)} package is not installed", fix=VIDEOSEAL_PIP,
+        )
+    size = CHECKPOINT.stat().st_size if CHECKPOINT.is_file() else 0
+    if size != CHECKPOINT_BYTES or not ATTENUATION_FILE.is_file():
+        return ModelWeightStatus(
+            key=key, name=name, source=str(CHECKPOINT), present=False, size_bytes=size,
+            detail=(f"checkpoint is {size} bytes, expected {CHECKPOINT_BYTES}" if size else "not downloaded")
+            + ("" if ATTENUATION_FILE.is_file() else "; the attenuation config is missing"),
+            fix=f"{VISION_FETCH_COMMAND} --only videoseal",
+        )
+    return ModelWeightStatus(key=key, name=name, source=str(CHECKPOINT), present=True, size_bytes=size, detail="weights present")
+
+
 def check_bark(key: str = "bark", name: str = "Bark small (dialogue)") -> ModelWeightStatus:
     """Bark needs its model files and the presets for both dialogue speakers."""
     from bark_engine import BARK_FILES, BARK_REPO, DIALOGUE_VOICES, PRESET_PARTS
@@ -517,6 +540,7 @@ def audit_vision_weights() -> List[ModelWeightStatus]:
             ),
         )
     return [
+        check_videoseal(),
         check_local_file(
             "face-landmarker",
             "MediaPipe Face Landmarker (478 points)",

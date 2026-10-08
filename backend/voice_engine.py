@@ -36,6 +36,7 @@ import alignment_engine
 import watermark_engine
 from alignment_engine import ForcedAligner
 import gpu_utils
+import manifest
 import language_registry
 import model_registry
 import provenance
@@ -815,6 +816,17 @@ class VoiceEngineRouter:
             except Exception as audit_err:  # noqa: BLE001 - auditing is advisory
                 logger.warning("Quality audit failed: %s", audit_err)
 
+        # How this clip was made, tied to its bytes: the render step copies it into the video's manifest.
+        try:
+            manifest.write_speech_record(
+                output_path, model=model_key, mode=mode, language=language, speaker_wav=speaker_wav,
+                clone_engine=clone_engine if model_key in REFERENCE_ENGINES else None,
+                emotion=emotion_report, alignment_method=alignment_method, duration_seconds=duration,
+                watermark=watermark_result,
+            )
+        except Exception as record_err:  # noqa: BLE001 - the audio is fine; the manifest will say "unrecorded"
+            logger.warning("Could not write the speech record for %s: %s", output_path, record_err)
+
         latency = (time.time() - start_time) * 1000
         print(f"\n✅ Audio saved → {os.path.abspath(output_path)}")
         print(f"⏱  Latency: {latency:.0f} ms  |  Duration: {duration:.2f}s  |  Model: {model_key}")
@@ -837,7 +849,7 @@ class VoiceEngineRouter:
 
     @staticmethod
     def watermark_enabled() -> bool:
-        return os.getenv("WATERMARK_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+        return watermark_engine.enabled()
 
     def _watermark_output(self, output_path: Path) -> dict:
         """

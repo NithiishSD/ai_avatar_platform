@@ -46,6 +46,7 @@ records what was verified live, with the real command and result.
 | T4.4 | Done (measured with T4.1/T4.2) | 1c88e64 |
 | T4.3 | Done | (this commit) |
 | **M4 gate** | **Passed 8 Oct** (= roadmap Gate 4): `check.sh` 671 tests green, `npx playwright test` 13 passed, `npm run build` clean; N-07 met as defined (first audio → first frame 1.4–1.8 ms), text → first audio ~0.43 s warm | |
+| T5.2 | **Built and unit-tested; live robustness sweep and a person's look (M-07) still to do** | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
@@ -1039,3 +1040,44 @@ The 4 kHz case is odd: the 24 -> 8 -> 24 kHz resample, which also removes everyt
 cause is probably the IIR filter's phase shift, not the lost band; **not isolated, no claim made**. False positives:
 0 of 55 clips that should not match (human, TTS, noise, tones, silence, and our own clips with a different key).
 Listening pairs for the owner are in `outputs/watermark-ab/` (M-06). T5.1 stays open until that answer is in.
+
+### 2026-10-08 — T5.2 video watermark and signed manifest (built, tested, one real render)
+
+**Video watermark:** `backend/video_watermark.py`, Meta's **VideoSeal 1.0** (MIT code and weights, 256-bit, 57 M parameters).
+Installed `--no-deps` (+ `av lpips pytorch_msssim calflops decord pycocotools PyWavelets timm==0.9.16`, `scikit-image<0.22`,
+`networkx<3`: **my first `scikit-image` install pulled networkx 3.4 and broke `gruut`, a Coqui dependency; caught by `pip`'s
+own warning and reverted** — numpy, torch and transformers pins unchanged). The 228 MB checkpoint is fetched by
+`scripts/fetch_vision_models.py --only videoseal` with a pinned size and SHA-256 (`3d2ff252…`), verified again on load.
+Upstream gaps worked around: the wheel omits `configs/attenuation.yaml` (written next to the checkpoint), and its card paths are
+repo-relative (a local card is generated). Message = 128-bit keyed tag + 128-bit manifest id; accepted when >= 96 of 128 tag
+bits read back (a random video matches that well with probability ~6e-9, asserted in a test). Frames are marked in windows of
+32 as they stream into the encoder (bounded memory), before the visible "AI-generated" label.
+**Strength matters and was measured** (`scaling_w`): at VideoSeal's default 0.2 a textured clip lost the mark at H.264 CRF 23 and read
+only 117/128 at the renderer's own CRF 20; at **0.3** it reads 128/128 at CRF 20 and 102/128 at CRF 23, the face clip holds to CRF 28
+(124/128), and the mark stays ~45 dB below the picture (PSNR 44.7–46.2 dB). 0.3 is the default (`VIDEO_WATERMARK_STRENGTH`
+overrides). First exploratory sweep on a real face render (strength 0.2): bit accuracy 100% uncompressed, 97% CRF 18, 96% CRF 23, 90%
+CRF 28, 72% CRF 35, lost at CRF 42; an unmarked video 51.6% (chance); unmarked after H.264 54.3%.
+
+**Signed manifest:** `backend/manifest.py`. Ed25519 (`cryptography` 50.0.2, added), key derived from the platform secret, public key in
+every manifest. Lists inputs (avatar source / consent basis / licence / image hash; audio hash and its **speech record**: model,
+mode, language, voice-reference consent basis and hash, emotion, audio-watermark result), processing (engine, quality,
+background, label), models, both watermark results, and the video's SHA-256; **no names**. A speech record
+(`<audio>.speech.json`) is written at synthesis, tied to the audio bytes; if the audio was overwritten the manifest says
+"mismatched" instead of describing the wrong clip. The render writes `<video>.manifest.json`; the mark is read back from the
+*encoded file* and a video that cannot show its mark is not delivered. Not C2PA (D-49).
+
+Verified:
+- `scripts/check.sh` ruff clean, pyrefly 0 errors, **738 tests OK** (new: `test_manifest.py` 15, `test_video_watermark.py` 19 incl. 4
+  real-VideoSeal tests that run when the weights exist, 7 render-integration tests). **Eight plants, each caught:** `verify` always
+  valid (2 fail), any issuer counts as ours (1), a manifest that leaks the speaker's name (1), tag threshold loosened to 60 (4), message without the
+  manifest id (2), no read-back check in the render (1), frames never marked (1), a constant manifest id (planted; the run was killed by an out-of-memory event
+  before its result, **and a `# PLANT` line was left in `manifest.py`; found and restored from backup on resume, grep confirms none remain**).
+- live, real render (`render_avatar.py --face demo --metric`, CPU, all marks on): 112 frames, mark read back from the encoded MP4 with
+  **128/128 tag bits**, embedded id `d54ceefd…` = read-back id = manifest id; manifest verifies (`trustworthy`), **one edited field
+  breaks the signature, a different video breaks the hash match**; SyncNet offset 0, LSE-C 4.73. **Cost, not hidden: this 4.5 s video took 14.9 s to render
+  (3.3x real time) because the mark runs frame by frame on the CPU; before it, blendshape rendered faster than real time.** Not measured on a GPU.
+- one existing test (`GeneratorLoadTests`) failed on this memory-starved machine because my RAM guard ran in front of its missing-weights check;
+  it is now hermetic (the guard has its own tests).
+
+Not done: the robustness sweep over many clips and transforms for video (as for audio), live-session frames are **not** watermarked (each is a
+JPEG pushed to a socket; stated, not claimed), a person looking for visible artefacts (M-07), the verify endpoint (T5.3), the audit trail (T5.4).

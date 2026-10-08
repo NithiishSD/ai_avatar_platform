@@ -134,6 +134,13 @@ class GenerateAvatarTests(unittest.TestCase):
 
 
 class GeneratorLoadTests(unittest.TestCase):
+    def setUp(self):
+        # What is under test is the missing-weights path. The host-RAM guard in front of it is tested on
+        # its own (test_ram_guard_loaders); letting it run here made this test depend on free memory.
+        patcher = mock.patch("gpu_utils.ensure_host_memory")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_missing_weights_name_the_fetch_command_and_failure_is_cached(self):
         generator = AvatarGenerator(repo_id="nobody/not-cached", device="cpu")
         fake = mock.Mock()

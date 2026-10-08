@@ -44,7 +44,8 @@ test_() {
   # JOBS_DB=:memory: keeps importing the app from touching the real job file.
   # WATERMARK_ENABLED=false: unit tests mock the speech models and must not need the watermark
   # weights (CI has none); the watermark has its own tests that mock the detector or load the real one.
-  JOBS_DB=:memory: WATERMARK_ENABLED=false PYTHONPATH=backend:tests "$PY" -m unittest discover -s tests -p 'test_*.py'
+  # WATERMARK_KEY: a fixed test key, so no key file is created in outputs/ while testing.
+  JOBS_DB=:memory: WATERMARK_ENABLED=false WATERMARK_KEY=unit-test-key PYTHONPATH=backend:tests "$PY" -m unittest discover -s tests -p 'test_*.py'
 }
 
 frontend() {

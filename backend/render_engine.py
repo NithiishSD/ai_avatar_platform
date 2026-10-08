@@ -24,6 +24,7 @@ back as a blendshape render.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -36,7 +37,10 @@ from urllib.parse import unquote, urlparse
 import numpy as np
 
 import gpu_utils
+import manifest as manifest_module
 import video_io
+import video_watermark
+import watermark_engine
 from avatar_store import AvatarStore
 from contracts import AvatarRenderJob, BackgroundSpec, RenderQuality
 from face_animation import (
@@ -177,6 +181,9 @@ class RenderResult:
     unknown_visemes: Dict[str, int] = field(default_factory=dict)
     peak_vram_mb: Optional[int] = None
     background: Optional[str] = None
+    # What the invisible video watermark did and where the signed manifest is (both always present).
+    watermark: Optional[Dict[str, object]] = None
+    manifest: Optional[Dict[str, object]] = None
     warnings: List[str] = field(default_factory=list)
 
     @property
@@ -204,6 +211,8 @@ class RenderResult:
             "unknownVisemes": self.unknown_visemes,
             "peakVramMb": self.peak_vram_mb,
             "background": self.background,
+            "watermark": self.watermark,
+            "manifest": self.manifest,
             "warnings": self.warnings,
         }
 
@@ -220,6 +229,14 @@ def preflight(job: AvatarRenderJob, engine: Optional[str] = None, store: Optiona
     audio = resolve_audio_url(job.audio_url)
     if job.background is not None:
         _check_background(job.background)
+    if watermark_engine.enabled() and not video_watermark.VideoWatermarker.files_present():
+        from model_registry import VISION_FETCH_COMMAND
+
+        raise RenderError(
+            "the invisible video watermark model is missing, and every rendered video must carry the mark. "
+            f"Fetch it with: {VISION_FETCH_COMMAND} --only videoseal (set WATERMARK_ENABLED=false to render "
+            "unmarked, which the result will say)"
+        )
     if name == ENGINE_WAV2LIP:
         from wav2lip_engine import shared_wav2lip_engine
 
@@ -315,6 +332,46 @@ def _describe_background(spec: Optional[BackgroundSpec]) -> Optional[str]:
     if spec is None:
         return None
     return f"color {spec.color}" if spec.color else f"image {Path(spec.image_url or '').name}"
+
+
+def _verify_video_mark(path: Path, manifest_id: bytes) -> Dict[str, object]:
+    """
+    Read the mark back from the encoded file and insist it is there, with this video's id.
+
+    Checked on the file as written (after H.264), not on the frames before it, because the
+    encoding is what the mark has to survive. A video that would claim a mark it does not carry
+    is not delivered (golden rule 1).
+    """
+    report = video_watermark.shared_video_watermarker().detect_video(path, sample_frames=16)
+    if not report.detected:
+        raise RenderError(
+            f"the video watermark was embedded but could not be read back from the encoded file "
+            f"({report.to_dict()}); refusing to deliver a video that claims a mark it does not carry"
+        )
+    return {"applied": True, "verified": True, "embeddedManifestId": manifest_id.hex(), **report.to_dict()}
+
+
+def _issue_manifest(manifest_id: bytes, video: Path, audio: Path, avatar: Dict[str, object],
+                    watermark: Dict[str, object], render: Dict[str, object]) -> Dict[str, object]:
+    """Write the signed manifest beside the video and say where it is."""
+    models = {
+        "speech": (manifest_module.read_speech_record(audio).get("model")),
+        "renderer": render.get("engine"),
+        "landmarks": "MediaPipe Face Landmarker (478 points)",
+        "audioWatermark": watermark_engine.METHOD if watermark_engine.enabled() else None,
+        "videoWatermark": video_watermark.METHOD if watermark_engine.enabled() else None,
+    }
+    document = manifest_module.build_manifest(
+        manifest_id=manifest_id, video_path=video, audio_path=audio, avatar=avatar, render=render,
+        video_watermark=watermark, models=models,
+    )
+    path = Path(str(video) + ".manifest.json")
+    path.write_text(json.dumps(document, indent=2, sort_keys=True))
+    try:
+        url = f"/outputs/{path.resolve().relative_to(OUTPUTS_DIR.resolve()).as_posix()}"
+    except ValueError:
+        url = path.resolve().as_uri()
+    return {"manifestId": manifest_id.hex(), "path": str(path), "url": url, "videoSha256": document["content"]["videoSha256"]}
 
 
 def _stamp_label(frame: np.ndarray) -> np.ndarray:
@@ -415,10 +472,18 @@ def render_job(
     else:
         frames = _warp_frames(animator, track, include_mouth=True)
 
+    # The invisible mark goes in before the visible label, one window of frames at a time as they are
+    # encoded. Its message names this video's manifest, which is issued below once the file exists.
+    manifest_id = manifest_module.new_manifest_id()
+    marking = watermark_engine.enabled()
+    if marking:
+        frames = video_watermark.shared_video_watermarker().embed_stream(frames, manifest_id)
+
     destination = Path(output_path) if output_path else output_path_for(job.job_id)
     # Encoded beside the destination and moved into place only when complete,
     # so a failed render never truncates or deletes an earlier finished video.
     partial = destination.with_name(destination.stem + ".partial.mp4")
+    watermark_result: Dict[str, object]
     try:
         with video_io.VideoWriter(
             # The cutoff is the end of the LAST FRAME, not the end of the audio: with
@@ -441,6 +506,8 @@ def render_job(
                 f"the encoder produced a file with a missing stream ({media.to_dict()}); "
                 "the clip may be shorter than one frame at this targetFps"
             )
+        watermark_result = _verify_video_mark(partial, manifest_id) if marking else {
+            "applied": False, "reason": "disabled by WATERMARK_ENABLED=false"}
         os.replace(partial, destination)
     finally:
         partial.unlink(missing_ok=True)
@@ -453,6 +520,15 @@ def render_job(
         video_url = f"/outputs/{relative.as_posix()}"
     except ValueError:
         video_url = destination.resolve().as_uri()
+
+    manifest_info = _issue_manifest(
+        manifest_id, destination, audio_path, store.get(job.avatar_id).to_dict(), watermark_result,
+        render={
+            "width": width, "height": height, "fps": job.target_fps, "frameCount": total,
+            "durationSeconds": round(duration, 3), "engine": engine_name, "quality": job.render_quality.value,
+            "background": _describe_background(job.background), "label": bool(label),
+        },
+    )
 
     result = RenderResult(
         job_id=job.job_id,
@@ -472,6 +548,8 @@ def render_job(
         unknown_visemes=track.unknown_visemes,
         peak_vram_mb=peak_vram,
         background=_describe_background(job.background),
+        watermark=watermark_result,
+        manifest=manifest_info,
         warnings=warnings,
     )
     logger.info(
