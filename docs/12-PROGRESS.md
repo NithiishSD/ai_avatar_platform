@@ -41,10 +41,13 @@ records what was verified live, with the real command and result.
 | T6.3 | Done | (this commit) |
 | T6.4 | Done | (this commit) |
 | T6.5 | Done — 6 findings fixed (09-SECURITY.md); S-16 and S-18 open | (this commit) |
-| T4.1 | Next | |
+| T4.1 | Done | 1c88e64 |
+| T4.2 | Done | 1c88e64 |
+| T4.4 | Done (measured with T4.1/T4.2) | 1c88e64 |
+| T4.3 | Next | |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
-M4 live: T4.1 streaming TTS (`WS /api/v1/live`) -> T4.2 live frames -> T4.3 live UI + E2E -> T4.4 latency ->
+M4 live: T4.3 live UI + E2E (T4.1/T4.2/T4.4 done) ->
 M5: T5.1 audio watermark -> T5.2 video watermark + signed manifest -> T5.3 verify endpoint -> T5.4 audit trail ->
 T6.6 re-run benchmarks (incl. the unexplained blendshape offset -4, see the T7.1 entry) ->
 T7.2 Docker (build is heavy: torch image) -> T7.4 documentation pass -> T7.6 README -> T7.7 final verification.
@@ -938,3 +941,38 @@ Live: real server, default limiter, 200 requests with a new random key each → 
 Existing tests that used temp-folder voices now patch `app.inputs_dir` (the old behaviour was the bug).
 
 Not done: S-16 (Dockerfile does not exist, T7.2), S-18 (M5); the limiter is per process.
+
+### 2026-10-08 — T4.1 streaming TTS, T4.2 live frames, T4.4 latency (M4)
+
+`backend/live_engine.py` (sentence splitter, binary framing, `LiveSession`, pipelined `stream_text`),
+`WS /api/v1/live` in `app.py`, message contracts in `contracts.py`, `scripts/live_client.py`,
+a lock around `VoiceEngineRouter.synthesize` (D-47). Design and protocol: D-46 and `05-API.md`.
+
+Verified:
+- `scripts/check.sh` → ruff clean, pyrefly 0 errors, **671 tests OK** (28 new: `test_live.py` 26, router lock 2).
+- the tests were distrusted because they passed first time. Four plants, each caught: prefetch moved
+  after the frames (**my first version of that test could not fail**: it compared against the last frame of
+  *all* sentences; fixed to the first sentence's frames, then caught), session slot never released (5
+  tests fail), `cleanup` removed (2), auth check skipped (1).
+- live, real server, real Kokoro + MMS_FA aligner + animator, CPU, `demo`, 384 px, 25 fps, "Hello there. This is
+  a live avatar speaking to you. The frames follow the words as they are spoken." (3 sentences, 7.2 s):
+
+| | cold (models loading) | warm run 1 | warm run 2 |
+|---|---|---|---|
+| session open | 1,406 ms | 26 ms | n/a |
+| text → first audio | 7,252 ms | 425 ms | 461 ms |
+| first audio → first frame (N-07) | 6.0 ms | 1.4 ms | 1.8 ms |
+| text → first frame | 7,258 ms | 426 ms | n/a |
+| frames / audio received | 182 / 7.2 s | 182 / 7.2 s | 182 / 7.2 s |
+| late frames (real-time client) | 2 (max 17.7 ms) | 2 (max 13.3 ms) | 2 |
+| per-sentence synth+align | 7,248 / 895 / 996 ms | 421 / 799 / 862 ms | n/a |
+| render per frame | 2.3–4.1 ms | 2.5–3.4 ms | n/a |
+
+  All 182 frames decode as 384×384 JPEGs (~20.7 kB each), presentation times monotonic, alignment
+  `mms_fa` (measured) for every sentence, audio plays as 24 kHz PCM16 (7.2 s written to a WAV).
+  The face moves: 123 of 181 consecutive frame pairs differ (58 identical = silent holds).
+
+Reading it honestly: N-07 is met as the roadmap defines it, but only because a blendshape frame is cheap;
+the figure a person feels is text → first audio, about 0.43 s warm and 7.3 s on the very first request after
+start. Not measured: Wav2Lip live (not offered), clone mode live (XTTS is ~10 s a sentence on this CPU, so
+it will not feel live), several sessions at once, GPU, a real browser playing it (T4.3).
