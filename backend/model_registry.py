@@ -387,6 +387,21 @@ def check_hf_files(key: str, name: str, repo_id: str, required: Sequence[str]) -
     )
 
 
+def check_audioseal(key: str = "audioseal", name: str = "AudioSeal (audio watermark)") -> ModelWeightStatus:
+    """The watermark needs its package and both checkpoints (about 94 MB, MIT)."""
+    import importlib.util
+
+    from watermark_engine import AUDIOSEAL_FILES, AUDIOSEAL_PIP, AUDIOSEAL_REPO
+
+    missing = [m for m in ("audioseal", "omegaconf") if importlib.util.find_spec(m) is None]
+    if missing:
+        return ModelWeightStatus(
+            key=key, name=name, source=AUDIOSEAL_REPO, present=False, size_bytes=0,
+            detail=f"the {', '.join(missing)} package is not installed", fix=AUDIOSEAL_PIP,
+        )
+    return check_hf_files(key, name, AUDIOSEAL_REPO, list(AUDIOSEAL_FILES))
+
+
 def check_bark(key: str = "bark", name: str = "Bark small (dialogue)") -> ModelWeightStatus:
     """Bark needs its model files and the presets for both dialogue speakers."""
     from bark_engine import BARK_FILES, BARK_REPO, DIALOGUE_VOICES, PRESET_PARTS
@@ -413,6 +428,7 @@ def audit_model_weights() -> List[ModelWeightStatus]:
         check_mms(),
         check_openvoice(),
         check_bark(),
+        check_audioseal(),
     ]
     # Every other missing model is fixed by fetching it. `replace` builds a
     # new frozen instance with one field changed.

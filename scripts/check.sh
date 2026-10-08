@@ -42,7 +42,9 @@ test_() {
   # unittest through discover, the only way the imports resolve: tests import
   # backend modules by bare name, so backend/ and tests/ go on PYTHONPATH.
   # JOBS_DB=:memory: keeps importing the app from touching the real job file.
-  JOBS_DB=:memory: PYTHONPATH=backend:tests "$PY" -m unittest discover -s tests -p 'test_*.py'
+  # WATERMARK_ENABLED=false: unit tests mock the speech models and must not need the watermark
+  # weights (CI has none); the watermark has its own tests that mock the detector or load the real one.
+  JOBS_DB=:memory: WATERMARK_ENABLED=false PYTHONPATH=backend:tests "$PY" -m unittest discover -s tests -p 'test_*.py'
 }
 
 frontend() {

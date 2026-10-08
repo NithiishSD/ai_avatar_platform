@@ -387,6 +387,7 @@ class AudioSynthesisResponse(BaseModel):
     emotion: Optional[Dict[str, Any]] = Field(default=None)
     quality_report: Optional[Dict[str, Any]] = Field(default=None, alias="qualityReport")
     language: Optional[Dict[str, Any]] = Field(default=None)
+    watermark: Optional[Dict[str, Any]] = Field(default=None)
 
 
 class SynthesisJobResponse(BaseModel):
@@ -414,6 +415,8 @@ class SynthesisJobResponse(BaseModel):
     quality_report: Optional[Dict[str, Any]] = Field(default=None, alias="qualityReport")
     language: Optional[Dict[str, Any]] = Field(default=None)
     latency_ms: Optional[float] = Field(default=None, alias="latencyMs")
+    # Whether (and how verifiably) the audio carries this platform's watermark.
+    watermark: Optional[Dict[str, Any]] = None
 
 
 class AlignmentRequest(BaseModel):

@@ -22,7 +22,7 @@ control, where it lives, and how it is verified.
 | S-15 | Dependencies audited | `pip-audit`, `npm audit` | T7.3 | **pass with exceptions** — T7.3, D-41 (4 packages, each about untrusted model repos, which this code never loads) |
 | S-16 | Container runs as non-root | `Dockerfile` | `docker run whoami` | **open** — no `Dockerfile` exists yet; verified in T7.2 |
 | S-17 | Default dev passwords only in the dev compose, overridable, never used in prod config | `docker-compose.yml`, `.env.example` | read | **fixed** — the dev compose published Redis (no password) and Postgres (default password) on every interface; now `127.0.0.1` only (F6). Default password remains dev-only and overridable by `POSTGRES_PASSWORD` |
-| S-18 | Watermark/manifest signing key from environment | M5 | test | **open** — no watermark or manifest signing yet; M5 |
+| S-18 | Watermark/manifest signing key from environment | M5 | test | **partly**: the watermark tag key is `WATERMARK_KEY` or a 0600 key file (tested); manifest signing arrives with T5.2 |
 
 ## T6.5 review: findings
 

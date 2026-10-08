@@ -988,6 +988,7 @@ def _job_response(task_id: str, task_status: str, result: dict) -> SynthesisJobR
         qualityReport=result.get("quality_report"),
         language=result.get("language"),
         latencyMs=result.get("latency_ms"),
+        watermark=result.get("watermark"),
     )
 
 

@@ -33,6 +33,7 @@ import numpy as np
 
 from audio_utils import validate_and_convert_for_cloning
 import alignment_engine
+import watermark_engine
 from alignment_engine import ForcedAligner
 import gpu_utils
 import language_registry
@@ -155,6 +156,9 @@ class SynthesisResult:
     emotion: Optional[dict] = None
     quality_report: Optional[dict] = None
     language: Optional[dict] = None
+    # What the audio watermark step did: {"applied": bool, ...}. Always present, so an
+    # unmarked clip can never be mistaken for a marked one (golden rule 1).
+    watermark: Optional[dict] = None
 
 
 
@@ -207,6 +211,7 @@ class VoiceEngineRouter:
         self._openvoice.release()
         self._bark.release()
         alignment_engine.release_shared_models()
+        watermark_engine.shared_watermarker().release()
 
     @property
     def auditor(self) -> SpeechQualityAuditor:
@@ -350,6 +355,8 @@ class VoiceEngineRouter:
         if speaker_wav and model_key in REFERENCE_ENGINES:
             require_voice_consent(speaker_wav)
         self.require_weights(model_key)
+        if self.watermark_enabled():
+            self.require_weights("audioseal")  # refused up front, not after minutes of synthesis
         if model_key == "xtts-v2" and speaker_wav:
             # A language XTTS cannot speak is a 400 now, not a failure minutes into the job.
             self.xtts_language(language)
@@ -763,6 +770,11 @@ class VoiceEngineRouter:
         except Exception as prosody_err:  # noqa: BLE001 - keep the raw audio
             logger.warning("Prosody / emotion post-processing failed: %s", prosody_err)
 
+        # ---- Phase 5: inaudible watermark on every generated clip (R-32) -----
+        # After prosody (the mark must survive nothing we do ourselves) and before alignment and
+        # the quality audit, so both see the audio that is actually delivered.
+        watermark_result = self._watermark_output(output_path)
+
         # Generate millisecond phoneme/viseme timestamps if requested
         phoneme_timestamps = None
         alignment_method = None
@@ -820,7 +832,39 @@ class VoiceEngineRouter:
             emotion=emotion_report,
             quality_report=quality_report,
             language=language_info,
+            watermark=watermark_result,
         )
+
+    @staticmethod
+    def watermark_enabled() -> bool:
+        return os.getenv("WATERMARK_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+
+    def _watermark_output(self, output_path: Path) -> dict:
+        """
+        Hide the platform tag in the saved clip and check it can be read back.
+
+        Marking is on by default and a failure to mark is a failure of the request, not a quiet
+        fall-back to unmarked audio (golden rule 1). ``WATERMARK_ENABLED=false`` is the explicit
+        opt-out, and the result then says ``applied: false`` and why.
+        """
+        if not self.watermark_enabled():
+            return {"applied": False, "reason": "disabled by WATERMARK_ENABLED=false"}
+        import soundfile as sf
+
+        from watermark_engine import shared_watermarker
+
+        marker = shared_watermarker()
+        audio, rate = sf.read(str(output_path), dtype="float32", always_2d=False)
+        sf.write(str(output_path), marker.embed(audio, rate), rate)
+        # Read the file back and detect: proof the mark survived the write, with its own method string.
+        check, _ = sf.read(str(output_path), dtype="float32", always_2d=False)
+        report = marker.detect(check, rate)
+        if not report.detected:
+            raise RuntimeError(
+                f"the watermark was embedded but could not be read back from {output_path.name} "
+                f"({report.to_dict()}); refusing to deliver audio that claims a mark it does not carry"
+            )
+        return {"applied": True, "verified": True, **report.to_dict()}
 
 
 

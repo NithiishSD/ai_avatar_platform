@@ -35,6 +35,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 from model_registry import UNRUNNABLE, audit_model_weights  # noqa: E402
 from openvoice_engine import OPENVOICE_REPO  # noqa: E402
 from bark_engine import BARK_REPO, DIALOGUE_VOICES  # noqa: E402
+from watermark_engine import AUDIOSEAL_FILES, AUDIOSEAL_REPO  # noqa: E402
 
 # Refuse to fill the disk. A GPU box that runs out of room mid-download leaves
 # a half-written cache that reports as present but fails to load.
@@ -89,6 +90,11 @@ def _fetch_bark() -> None:
     _fetch_hf(BARK_REPO, allow_patterns=["*.json", "*.txt", "pytorch_model.bin", *presets])
 
 
+def _fetch_audioseal() -> None:
+    # Only the two 16-bit checkpoints (59 MB + 35 MB); the 453 MB 32 kHz model is not used.
+    _fetch_hf(AUDIOSEAL_REPO, allow_patterns=list(AUDIOSEAL_FILES))
+
+
 def _fetch_mms() -> None:
     """
     MMS-TTS is one checkpoint per language, fetched on demand at ~145 MB each.
@@ -133,6 +139,14 @@ SPECS: List[ModelSpec] = [
         default=True,
         note="MIT; clones over Kokoro / MMS-TTS. Needs the openvoice package, see requirements.txt",
         fetch=_fetch_openvoice,
+    ),
+    ModelSpec(
+        key="audioseal",
+        name="AudioSeal (inaudible audio watermark)",
+        approx_gb=0.1,
+        default=True,
+        note="MIT; every generated clip is watermarked with it. Needs `pip install --no-deps audioseal==0.2.0 omegaconf`",
+        fetch=_fetch_audioseal,
     ),
     ModelSpec(
         key="bark",

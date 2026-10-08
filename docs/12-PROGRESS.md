@@ -46,7 +46,7 @@ records what was verified live, with the real command and result.
 | T4.4 | Done (measured with T4.1/T4.2) | 1c88e64 |
 | T4.3 | Done | (this commit) |
 | **M4 gate** | **Passed 8 Oct** (= roadmap Gate 4): `check.sh` 671 tests green, `npx playwright test` 13 passed, `npm run build` clean; N-07 met as defined (first audio → first frame 1.4–1.8 ms), text → first audio ~0.43 s warm | |
-| T5.1 | Next | |
+| T5.1 | **In progress**: built, wired into every synthesis, 26 tests; the quality / robustness / false-positive measurement (`scripts/measure_watermark.py`) is written but NOT yet run | (this commit) |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
 M5: T5.1 audio watermark -> T5.2 video watermark + signed manifest -> T5.3 verify endpoint -> T5.4 audit trail ->
@@ -999,3 +999,31 @@ Verified:
 Not verified: that anything is audible. Headless Chromium runs the Web Audio graph but there is no speaker, so the
 test proves audio chunks arrive and are scheduled (counted), not that sound comes out; and nobody has watched the live
 canvas. Both go on the owner's manual list (M-05 below).
+
+### 2026-10-08 — T5.1 audio watermark: built, measurement still to run (checkpoint commit)
+
+Chosen method (D-48): **AudioSeal** (Meta, MIT code and MIT ungated weights, 94 MB), installed `--no-deps`
+(`audioseal==0.2.0` plus `omegaconf`/`antlr4`, pure Python; numpy and transformers pins unchanged).
+`backend/watermark_engine.py`: embeds a 16-bit platform tag = HMAC(secret key, label); a clip counts as ours when
+the detector's probability >= 0.5 AND >= 14 of 16 bits equal the tag (a random message matches that well by chance
+with probability 137/65536 = 0.2%). Key: `WATERMARK_KEY`, else a random key file in `outputs/` (mode 0600, logged
+loudly). Wired into `VoiceEngineRouter.synthesize` after prosody and before alignment, so **every clip, including
+live sessions and the audio track of every video, is marked**; the clip is read back and detected before it is
+returned, and a mark that cannot be read back fails the request. `WATERMARK_ENABLED=false` is the explicit opt-out
+and the result then says `applied: false` and why. Preflight refuses with the fetch command when the weights are
+missing. Registry, `fetch_models.py --only audioseal`, `doctor.py` know it; the response has a `watermark` block.
+
+Found while testing it: AudioSeal 0.2+ **no longer resamples internally** (its own warning), so the engine
+resamples to 16 kHz, marks there and adds the mark back at the clip's rate; and its `torch.compile` recompiled per
+clip length (first 5 s clip took **42 s**), fixed by disabling dynamo (**0.12 s** embed, 0.1 s detect, CPU).
+
+Verified so far: `scripts/check.sh` ruff clean, pyrefly 0 errors, **697 tests OK** (26 new in `test_watermark.py`,
+unit tests run with `WATERMARK_ENABLED=false` so CI needs no weights). Four plants each caught: threshold loosened to
+10 bits, no 16 kHz resampling (3 tests fail), no read-back check, preflight no longer demanding the weights. First
+real runs, CPU: LJSpeech human 5 s and a Kokoro clip: signal-to-mark 30.9 and 26.3 dB; marked clips detected with
+16/16 bits, p=1.000; the unmarked originals 5/16 and 8/16 bits, p=0.000, not detected.
+
+**Not done, so not claimed:** the MOS change (SQUIM before/after), robustness to AAC/MP3/Opus/noise/trim/speed, and the
+false-positive rate over many clips: all in `scripts/measure_watermark.py`, written and type-checked, **never run**.
+Also not done: the live-session and REST responses were not re-checked with the watermark switched on end to end, and
+the full E2E suite was not re-run with it on.
