@@ -1382,3 +1382,11 @@ after) took 292 s for the same render; repeated idle, 6.0 s. `scripts/check.sh` 
 
 Not complete, stated: **T7.4 documentation pass is paused by the owner** (48 files done, 17 below 35%); `main` has not been released to (a release copies code only and
 needs the owner's request); the manual checks M-04 to M-10 wait for the owner.
+
+### 2026-10-08 — GPU measurements packaged for the owner (M-11)
+
+`scripts/gpu_benchmark.py`: one host run measures N-17 (Kokoro per 30 s, marks off/on), N-20 (30 s render, marks off/on), N-06 (60 s end to end, warm, marks on),
+N-10 (peak `max_memory_allocated` / `reserved` per step, plus nvidia-smi) and Wav2Lip lip sync on the GPU, and writes `outputs/benchmarks/gpu-<date>.json`.
+It exits 2 without measuring when PyTorch sees no GPU, with the checks to make (the host lacks the userspace driver: `libnvidia-compute-595`, `nvidia-utils-595`).
+Tested here only in `--allow-cpu --quick` mode (labelled "not GPU evidence"): every step ran; Wav2Lip offset 0, 3/3 seconds within one frame. First attempt was
+killed by the OOM killer while loading Wav2Lip (another project's Kafka/HBase containers were holding memory); rerun detached, passed.
