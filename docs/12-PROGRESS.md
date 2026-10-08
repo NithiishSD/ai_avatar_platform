@@ -865,3 +865,25 @@ on a quiet 14 GiB box the headroom is larger. Peak 8.2 GiB is still high for one
 Kokoro + the aligner + whichever cloner ran last; it is not a 6 GiB-VRAM-style hard limit, and
 the GPU path (`ensure_vram`) is unchanged and untested here. `SpeechQualityAuditor` in `app.py`
 is a second instance from the router's (SQUIM would load twice if both are used); not changed.
+
+### 2026-10-08 — owner ran M-04 on the host: CPU, and a render bug it showed
+
+The owner's host output (`render_avatar.py --engine wav2lip --metric`) printed
+`Processing Device: CPU`, so the host run did not use the GPU either. Diagnosis (read-only):
+`lspci` shows the RTX 4050 Max-Q; `lsmod` shows nvidia / nvidia_uvm / nvidia_drm; `/dev/nvidia0`
+and `/dev/nvidiactl` exist; `/proc/driver/nvidia/version` says 595.91.07. **But** `libcuda.so`
+and `nvidia-smi` do not exist (`dpkg` has only `nvidia-kernel-common-595`), so
+`torch.cuda.is_available()` is False in `backend/.conda` (torch 2.5.1+cu121). `apt-cache`
+offers the matching `libnvidia-compute-595` and `nvidia-utils-595` at 595.91.07. Installing
+them is a system change, so the owner runs it (M-04 row has the exact commands). Nothing in the
+code is wrong: the router already picks CUDA when torch sees it. **N-06, N-07, N-10 and peak VRAM
+stay unmeasured until then.**
+
+The same output carried `Warning: 82 frames were rendered but the file holds 81`. It was not new
+(my earlier runs had it too; I had hidden it with `grep -v Warning`). ffmpeg's `-t <audio length>`
+dropped a last frame that started 10 ms before the cutoff (3.25 s x 25 fps = 81.25, ceil 82), so
+the file was a frame shorter than the audio. The writer's cutoff is now the end of the last
+frame. New regression test (3.25 s at 25 fps; fails with the old line, passes with the fix).
+Live, same command on CPU: 82 frames, video 3.28 s, audio 3.25 s (uncut), no warning, offset 0,
+LSE-C 9.301, LSE-D 6.545; **jitter on the Wav2Lip render: mean 0.354%, p95 0.834%, max 1.093%**
+(< 2%, closes the "Wav2Lip not measured" gap in T3.5). `check.sh`: 621 tests OK.

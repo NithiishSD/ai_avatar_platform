@@ -421,7 +421,12 @@ def render_job(
     partial = destination.with_name(destination.stem + ".partial.mp4")
     try:
         with video_io.VideoWriter(
-            partial, width, height, job.target_fps, audio_path=audio_path, duration=duration
+            # The cutoff is the end of the LAST FRAME, not the end of the audio: with
+            # the audio's length, ffmpeg dropped a final frame that started within
+            # ~10 ms of it (3.25 s at 25 fps: 82 frames rendered, 81 kept). The
+            # audio itself is never cut: it is shorter than the cutoff.
+            partial, width, height, job.target_fps, audio_path=audio_path,
+            duration=max(duration, total / job.target_fps),
         ) as writer:
             for index, frame in enumerate(frames):
                 writer.write(_stamp_label(frame) if label else frame)

@@ -279,6 +279,16 @@ class RenderJobTests(RenderCase):
         self.assertAlmostEqual(result.media["audioDuration"], 3.017, delta=0.03)
         self.assertEqual(result.warnings, [])
 
+    def test_a_clip_whose_last_frame_starts_just_before_the_end_keeps_it(self):
+        # 3.25 s at 25 fps: frame 82 starts at 3.24 s. ffmpeg used to cut it
+        # (the owner's host render printed "82 frames were rendered but the file holds 81").
+        self.wav(3.25)
+        result = render_engine.render_job(self.job(durationSeconds=3.25), store=self.store, label=False)
+        self.assertEqual(result.frame_count, 82)
+        self.assertEqual(result.media["frameCount"], 82)
+        self.assertEqual(result.warnings, [])
+        self.assertAlmostEqual(result.media["audioDuration"], 3.25, delta=0.03)  # audio not cut
+
     def test_clip_shorter_than_a_frame_still_has_a_video_stream(self):
         self.wav(0.6)
         job = self.job(targetFps=1, durationSeconds=0.6,
