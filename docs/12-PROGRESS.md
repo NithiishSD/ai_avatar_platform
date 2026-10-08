@@ -1130,3 +1130,17 @@ differs: a modified copy"; exact file + manifest and a path under `outputs/` wit
 Not done / not claimed: the audio-mark false-positive and video-mark false-positive rates over many unmarked videos (audio: 0/55 earlier;
 video: only the chance-level sweep and the unit-test arithmetic); detecting other systems' deepfakes (not built: R-46); a person using
 the endpoint from the UI (no UI for it yet).
+
+### 2026-10-08 — T5.3 UI: provenance line in the studio and the Verify panel
+
+`frontend/src/ProvenancePanel.jsx` (new) posts a file, and optionally its manifest, to `POST /api/v1/provenance/verify` and shows the
+verdict, its meaning, each kind of evidence on its own line and the "cannot do" caveat. `AvatarPanel.jsx` shows, under a finished
+render, "invisible watermark verified (n/128 bits)" (or the reason it is not marked) and a link to the signed manifest.
+
+Verified: `frontend/e2e/provenance.spec.js`, real Kokoro + renderer + VideoSeal + AudioSeal through the browser: the render shows
+its watermark line with >= 96/128 bits and a `.mp4.manifest.json` link; the Verify panel gives `authentic_original` (exact file +
+manifest), `ours_modified` (same video, no manifest; mark found), `tampered_manifest` (edited consent basis; "signature does NOT
+match") and `no_evidence` for silent audio, with "does NOT show the content is real" visible. 1 passed in 38 s.
+`scripts/check.sh` 784 tests OK, ruff clean, pyrefly 0 errors; `npm run lint` clean, `npm run build` clean.
+
+Not done: a person looking at how the panel reads (add to M-07's visual pass); the full Playwright suite for the M5 gate has not been run yet.

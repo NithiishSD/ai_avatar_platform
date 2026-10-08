@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import "./App.css";
 import AvatarPanel from "./AvatarPanel";
 import LivePanel from "./LivePanel";
+import ProvenancePanel from "./ProvenancePanel";
 
 const API_BASE = "http://localhost:8000";
 
@@ -976,6 +977,8 @@ function App() {
           />
 
           <LivePanel apiBase={API_BASE} />
+
+          <ProvenancePanel apiBase={API_BASE} />
         </section>
       </main>
     </div>

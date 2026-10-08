@@ -514,6 +514,17 @@ export default function AvatarPanel({ apiBase, phonemeTimestamps, emotionVector,
                     {result.background ? ` · background: ${result.background}` : ""}
                   </div>
                 )}
+                {result?.watermark && (
+                  <div id="provenance-line" style={{ ...small, marginTop: "4px", color: result.watermark.applied ? "#6ee7b7" : "#fbbf24" }}>
+                    {result.watermark.applied
+                      ? `🔒 invisible watermark verified (${result.watermark.tagBitsMatching}/128 bits)`
+                      : `⚠ not watermarked: ${result.watermark.reason}`}
+                    {result.manifest?.url && (
+                      <> · <a id="manifest-link" href={`${apiBase}${result.manifest.url}`} target="_blank" rel="noreferrer"
+                        style={{ color: "#38bdf8" }}>signed manifest</a></>
+                    )}
+                  </div>
+                )}
                 {result?.warnings?.map((w) => (
                   <div key={w} style={{ ...small, color: "#fbbf24", marginTop: "4px" }}>⚠ {w}</div>
                 ))}
