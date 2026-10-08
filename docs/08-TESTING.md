@@ -34,7 +34,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-11 | `test_face_quality.py` | pass |
 | R-12 | `test_render_engine.py`, `test_app_vision.py`; E2E `clone.spec.js`; live: cloned voice → Wav2Lip video through the API (`clone_to_video.py`, T2.4) | pass |
 | R-13 | `test_render_engine.py` engine selection; live: blendshape and Wav2Lip on the same 3 jobs (T2.3) | pass |
-| R-14 | `test_viseme_blendshapes.py`, `test_face_animation.py` | pass |
+| R-14 | `test_viseme_blendshapes.py`, `test_face_animation.py`; E2E `gate3.spec.js` (custom avatar + cloned multilingual voice + emotion → preview render) | pass |
 | R-15 | `test_avatar_generator.py` (prompt choices, registration, id clash), `test_app_vision.py` `AvatarGenerateRouteTests` (202/409/422/503/404, mocked SD); E2E `generate.spec.js`; live SD 1.5 through the API (T3.2) | pass |
 | R-16 | `test_render_engine.py` (`BackgroundSpecTests`, `BackgroundRenderTests`), `test_app_vision.py` (400 without segmenter, 422 malformed); E2E `background.spec.js` (decoded video corners are the chosen colour); live on the real segmenter (T3.1) | pass |
 | R-17 | `test_lipsync_metric.py` | pass |
@@ -44,7 +44,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-21 | `test_job_store.py` (store round trip; finished job and result survive; mid-render job becomes FAILED with the restart reason; never-started job re-runs; ids stay unique; generation jobs likewise); live two-process restart (T6.1) | pass |
 | R-22 | `test_security.py` | pass |
 | R-23 | `test_model_registry.py`, `test_app.py` health; live: /health lists higgs/dia unavailable (T1.4) | pass |
-| R-24 | E2E `smoke.spec.js` (T0.6), `synthesis.spec.js` (T1.1), `avatar.spec.js` (T1.2), `clone.spec.js` (T2.5: clone → render → video decodes). Still to come: T3.4, T4.3 | partial |
+| R-24 | E2E `smoke.spec.js` (T0.6), `synthesis.spec.js` (T1.1), `avatar.spec.js` (T1.2), `clone.spec.js` (T2.5), `background.spec.js` (T3.1), `generate.spec.js` (T3.2), `gate3.spec.js` (T3.4: generated avatar + XTTS-v2 Spanish clone + joy + new background → video whose corners are the new colour). Still to come: T4.3 | partial |
 | R-25 | `test_sdk.py` (10: polling, eager answer, failure and missing-timing errors, job validated against the real `AvatarRenderJob`, error detail + request id, 429 retry and give-up, headers); live against a real server (T7.1) | pass |
 | R-26 | T7.2 | gap |
 | R-27 | `test_request_context.py` (id on every response, safe caller id kept, unsafe one replaced, log lines stamped, no leak past the request, worker thread inherits the id, 500 names the id); live on a real server (T6.2) | pass |

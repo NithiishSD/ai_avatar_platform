@@ -36,10 +36,10 @@ records what was verified live, with the real command and result.
 | T7.3 | Done (4 documented exceptions, D-41) | ec5b180 |
 | T7.5 | Done (two HTML `placeholder` attributes remain by decision D-40) | d62dd62 |
 | T3.3 | Done — voice carries over only partly (43–49%) | (this commit) |
-| T3.4 | Next | |
+| T3.4 | Done | (this commit) |
+| T4.1 | Next | |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
-T3.4 Gate 3 flow (custom avatar + cloned multilingual voice + emotion, E2E) ->
 T6.3 load test -> T6.4 concurrency test (50+ jobs) -> T6.5 security review ->
 M4 live: T4.1 streaming TTS (`WS /api/v1/live`) -> T4.2 live frames -> T4.3 live UI + E2E -> T4.4 latency ->
 M5: T5.1 audio watermark -> T5.2 video watermark + signed manifest -> T5.3 verify endpoint -> T5.4 audit trail ->
@@ -829,3 +829,38 @@ phonemes, `mms_fa`, 49.52%. These agree with the script's numbers, and the 30 s 
 part of the full reference did not inflate them. OpenVoice V2 Hindi (T2.6b) is the other data
 point. **Not met** against 85%/90%, like English. No cross-lingual figure for a second speaker
 (Q-05).
+
+### 2026-10-08 — T3.4 Gate 3 flow, and the memory problems it exposed
+
+`frontend/e2e/gate3.spec.js`: generated avatar (`gate3-face`, created through the API the first
+time, reused after) → clone mode, XTTS-v2, `ljspeech_reference` → language **Spanish** picked
+in the UI → emotion **joy** → Generate → badge `xtts-v2`, "Emotion Applied", alignment measured
+→ background colour → Render → COMPLETED → the decoded video's top corners are the new colour.
+**Passed in the browser against real servers and weights**, and the same file proves it can fail:
+
+**Bug 1 (user-visible, now fixed):** the studio sends ISO-639-3 codes (`spa`, `hin`, `fra`) but
+XTTS-v2 takes `es`, `hi`, `fr`. Picking Spanish in clone mode crashed XTTS ("Language spa is not
+supported") and `xttsSupported` called Spanish unsupported. New `language_registry.xtts_code()`
+maps either spelling (and Coqui's `zh-cn`); a language XTTS cannot speak is now a 400 naming
+`openvoice-v2`. With the old code restored, `gate3.spec.js` fails with exactly that error.
+
+**Bug 2 (test, not product):** my first corner-colour read got black because the canvas was
+drawn before the browser painted the frame (`217` = distance of black from `#0b3d91`). The MP4
+itself was right (ffmpeg: corners (10,60,141)). `readFrame()` now seeks, waits, retries.
+
+**Memory (D-44).** The full suite was OOM-killed twice (exit 137). Causes found by measuring:
+SD 1.5 adds 6.6 GiB on CPU, XTTS-v2 4.2 GiB; RAM guard + `malloc_trim` + shared aligner added.
+- one process loading XTTS → OpenVoice → Bark → XTTS: unguarded 3.0 → 3.8 → 5.2 GiB with all
+  three resident; guarded one engine at a time, 1.5 GiB after OpenVoice.
+- full E2E, server RSS: before the work peak **9.9–10.1 GiB**, lowest free RAM 1.3 GiB; after
+  **8.2 GiB, lowest free 3.1 GiB**, and the suite went from 1.2 min to 55 s (no aligner reload).
+- `scripts/check.sh` → ruff clean, pyrefly 0 errors, 620 tests OK (19 new). Plants: old language
+  mapping → unit test and E2E fail; SD/Bark/OpenVoice/XTTS loaders each have a test that the
+  guard is asked for the measured size and that a refusal is not cached.
+- `npx playwright test` → **11 passed** (54.7 s), twice in a row at the end (and 11 passed earlier).
+
+Not done: the machine is shared (another project's Java services held ~4 GiB during these runs);
+on a quiet 14 GiB box the headroom is larger. Peak 8.2 GiB is still high for one server holding
+Kokoro + the aligner + whichever cloner ran last; it is not a 6 GiB-VRAM-style hard limit, and
+the GPU path (`ensure_vram`) is unchanged and untested here. `SpeechQualityAuditor` in `app.py`
+is a second instance from the router's (SQUIM would load twice if both are used); not changed.

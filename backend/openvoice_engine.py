@@ -37,9 +37,13 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
+import gpu_utils
+
 logger = logging.getLogger(__name__)
 
 OPENVOICE_REPO = "myshell-ai/OpenVoiceV2"
+# Measured 8 Oct 2026: converter plus its base voice add 1637 MiB on a CPU host.
+RAM_MB = 1700
 # The package, pinned to the commit whose code was read before installing it,
 # and installed without its own requirements (they would downgrade numpy).
 OPENVOICE_PIP = (
@@ -82,6 +86,10 @@ class OpenVoiceEngine:
             return self._converter
         if self._failure is not None:
             raise OpenVoiceUnavailable(self._failure)
+        # Before the try: running short of RAM is not a broken install, so it
+        # must not be cached as a permanent load failure.
+        if self.device in (None, "cpu"):
+            gpu_utils.ensure_host_memory(RAM_MB, "OpenVoice V2")
         try:
             import torch
             from huggingface_hub import snapshot_download

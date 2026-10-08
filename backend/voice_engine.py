@@ -31,7 +31,9 @@ import soundfile as sf
 import numpy as np
 
 from audio_utils import validate_and_convert_for_cloning
+import alignment_engine
 from alignment_engine import ForcedAligner
+import gpu_utils
 import language_registry
 import model_registry
 import provenance
@@ -67,6 +69,11 @@ class ModelWeightsMissing(RuntimeError):
 # Engines that condition on a reference recording - that is, clone a voice.
 # Only for these does a supplied speaker_wav actually get used.
 REFERENCE_ENGINES = frozenset({"xtts-v2", "higgs-tts-2", "openvoice-v2"})
+# Peak process memory each engine adds on a CPU host, measured 8 Oct 2026 by
+# loading it alone and synthesising once (ru_maxrss minus the bare router):
+# XTTS-v2 4157 MiB, Bark 1840, OpenVoice V2 1637, Kokoro 1101, SD 1.5 6610.
+# Rounded up; ``gpu_utils.ensure_host_memory`` unloads the others when short.
+XTTS_RAM_MB = 4200
 # Engines a caller may ask for in mode="clone"; the first is the default.
 CLONE_ENGINES = ("xtts-v2", "openvoice-v2")
 
@@ -186,8 +193,6 @@ class VoiceEngineRouter:
 
         # Lets the vision side make room on the 6 GB card before it loads a
         # model (golden rule 5). Everything reloads lazily on the next call.
-        import gpu_utils
-
         gpu_utils.register_releaser("tts-router", self.release)
 
     def release(self) -> None:
@@ -197,6 +202,7 @@ class VoiceEngineRouter:
         self._higgs_pipe = None
         self._openvoice.release()
         self._bark.release()
+        alignment_engine.release_shared_models()
 
     @property
     def auditor(self) -> SpeechQualityAuditor:
@@ -299,6 +305,18 @@ class VoiceEngineRouter:
             "'high_quality', 'dialogue', 'multilingual'."
         )
 
+    @staticmethod
+    def xtts_language(language: str) -> str:
+        """XTTS-v2's code for ``language`` (``spa`` -> ``es``), or a refusal naming the alternative."""
+        code = language_registry.xtts_code(language)
+        if code is None:
+            raise ValueError(
+                f"XTTS-v2 cannot speak '{language}'. It covers "
+                f"{', '.join(sorted(language_registry.XTTS_LANGUAGES))}; use "
+                "cloneEngine='openvoice-v2' to clone into any of the 1077 MMS-TTS languages."
+            )
+        return code
+
     def openvoice_base(self, language: str) -> str:
         """
         The engine that speaks the words OpenVoice then re-timbres.
@@ -328,6 +346,9 @@ class VoiceEngineRouter:
         if speaker_wav and model_key in REFERENCE_ENGINES:
             require_voice_consent(speaker_wav)
         self.require_weights(model_key)
+        if model_key == "xtts-v2" and speaker_wav:
+            # A language XTTS cannot speak is a 400 now, not a failure minutes into the job.
+            self.xtts_language(language)
         if model_key == "openvoice-v2":
             # Its base voice must be installed too, or the job would fail late.
             self.require_weights(self.openvoice_base(language))
@@ -361,6 +382,8 @@ class VoiceEngineRouter:
         """Loads XTTS-v2 for zero-shot voice cloning."""
         if self.xtts_model is not None:
             return
+        if self.device == "cpu":
+            gpu_utils.ensure_host_memory(XTTS_RAM_MB, "XTTS-v2")
         print(f"\n[Loading Model] XTTS-v2 on {self.device.upper()}...")
         from TTS.api import TTS
         self.xtts_model = TTS(model_name="tts_models/multilingual/multi-dataset/xtts_v2")
@@ -447,7 +470,7 @@ class VoiceEngineRouter:
         self.load_xtts_cloning()
         assert self.xtts_model is not None
         print(f"\n[XTTS-v2] Cloning from '{ready_path.name}', text: '{text[:80]}...'")
-        lang_code = language.split("-")[0].lower()  # "en-US" → "en"
+        lang_code = self.xtts_language(language)
         self.xtts_model.tts_to_file(
             text=text,
             speaker_wav=str(ready_path),

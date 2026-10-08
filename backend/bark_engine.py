@@ -27,9 +27,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+import gpu_utils
+
 logger = logging.getLogger(__name__)
 
 BARK_REPO = "suno/bark-small"
+# Measured 8 Oct 2026: adds 1840 MiB to the process peak on a CPU host.
+RAM_MB = 1900
 # Files the model and the two dialogue presets need; the registry checks these.
 BARK_FILES = ("config.json", "pytorch_model.bin")
 # One preset per speaker tag. A male and a female English voice, so the two
@@ -102,6 +106,10 @@ class BarkEngine:
             return self._model, self._processor
         if self._failure is not None:
             raise BarkUnavailable(self._failure)
+        # Before the try: running short of RAM is not a broken install, so it
+        # must not be cached as a permanent load failure.
+        if self.device in (None, "cpu"):
+            gpu_utils.ensure_host_memory(RAM_MB, "Bark")
         try:
             import torch
             from huggingface_hub import snapshot_download

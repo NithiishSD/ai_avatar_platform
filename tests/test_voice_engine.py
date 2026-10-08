@@ -218,6 +218,41 @@ def reference(folder, name, seconds=0.1, **provenance_fields):
     return str(path)
 
 
+class XttsLanguageTests(unittest.TestCase):
+    """XTTS-v2 gets the code it understands, and a language it cannot speak is refused early."""
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.router = VoiceEngineRouter(device="cpu")
+        audit = patch("model_registry.audit_model_weights", return_value=weights_on_disk())
+        audit.start()
+        self.addCleanup(audit.stop)
+        self.wav = reference(self.tmp.name, "me.wav", source="human", speaker="Me", consent_basis="subject-provided")
+
+    def test_the_model_is_given_two_letter_code_even_when_the_ui_sent_three(self):
+        from unittest.mock import MagicMock
+
+        model = MagicMock()
+        self.router.xtts_model = model
+        out = Path(self.tmp.name) / "out.wav"
+        sf.write(out, np.zeros(2400, dtype=np.float32), 24000)  # the engine reads the file back for its duration
+        with patch("voice_engine.validate_and_convert_for_cloning", return_value=Path(self.wav)):
+            self.router._synthesize_xtts("Hola", out, self.wav, "spa")
+        self.assertEqual(model.tts_to_file.call_args.kwargs["language"], "es")
+
+    def test_a_language_xtts_cannot_speak_is_refused_before_queueing_and_names_the_alternative(self):
+        with self.assertRaises(ValueError) as caught:
+            self.router.preflight("xtts-v2", self.wav, "tam")
+        self.assertIn("openvoice-v2", str(caught.exception))
+        self.router.preflight("xtts-v2", self.wav, "spa")  # a supported one passes
+
+    def test_openvoice_is_not_limited_to_xttss_languages(self):
+        self.router.preflight("openvoice-v2", self.wav, "tam")
+
+
 class VoiceConsentTests(unittest.TestCase):
     """Cloning refuses a recording whose provenance does not permit it."""
 

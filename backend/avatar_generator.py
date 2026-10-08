@@ -37,6 +37,8 @@ from model_registry import AVATAR_DIFFUSION_REPO, VISION_FETCH_COMMAND
 logger = logging.getLogger(__name__)
 
 REQUIRED_VRAM_MB = 3200
+# Measured 8 Oct 2026: fp32 on the CPU adds 6610 MiB to the process peak.
+RAM_MB = 6700
 IMAGE_SIZE = 512
 
 DEFAULT_PROMPT = (
@@ -138,6 +140,8 @@ class AvatarGenerator:
         import torch
 
         device = self.device or ("cuda" if torch.cuda.is_available() else "cpu")
+        if device == "cpu":
+            gpu_utils.ensure_host_memory(RAM_MB, "Stable Diffusion 1.5", keep="avatar-diffusion")
         if device == "cuda":
             gpu_utils.ensure_vram(REQUIRED_VRAM_MB, "Stable Diffusion 1.5", keep="avatar-diffusion")
         try:

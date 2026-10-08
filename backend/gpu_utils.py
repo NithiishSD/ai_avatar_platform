@@ -109,12 +109,92 @@ def free_vram_mb() -> Optional[int]:
     return int(free // (1024 * 1024))
 
 
+class InsufficientRAM(RuntimeError):
+    """
+    Not enough free system memory to load a model on the CPU.
+
+    The CPU twin of ``InsufficientVRAM``. Without it the failure is the
+    operating system's out-of-memory killer ending the whole server mid-request
+    (exit 137, no message), which is what happened when several engines were
+    loaded one after another into the same process.
+    """
+
+
+# Free memory to keep beyond a model's own size, so loading does not leave the
+# machine with nothing for the rest of the request (audio, the aligner, the OS).
+RAM_HEADROOM_MB = 1500
+
+
+def free_ram_mb() -> Optional[int]:
+    """Memory the kernel says is available (``MemAvailable``), or ``None`` if it cannot be read."""
+    try:
+        with open("/proc/meminfo", encoding="ascii") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024  # the file is in kB
+    except (OSError, ValueError):
+        pass
+    # Not Linux, or unreadable: unknown. Callers treat None as "do not interfere".
+    return None
+
+
+def ensure_host_memory(required_mb: int, purpose: str, keep: Optional[str] = None) -> None:
+    """
+    Make room in system RAM before loading a model that will run on the CPU.
+
+    Golden rule 5 ("one heavy model resident at a time") was only enforced for
+    GPU memory; on a CPU host every engine stayed loaded forever. Here, when
+    free RAM would fall below the model's size plus ``RAM_HEADROOM_MB``, the
+    other registered models are unloaded first (they reload lazily on next
+    use). If that still is not enough the load is refused with the numbers,
+    rather than left for the OS to kill the process.
+
+    A model that is going to the GPU does not use system RAM for its weights
+    in the same way, so this passes when CUDA is in use.
+    """
+    if cuda_available():
+        return
+    free = free_ram_mb()
+    if free is None or free >= required_mb + RAM_HEADROOM_MB:
+        return
+    released = release_others(keep=keep)
+    free = free_ram_mb() or 0
+    if free >= required_mb:
+        logger.info("Freed RAM for %s by unloading: %s (now %d MiB free)", purpose, ", ".join(released) or "cache", free)
+        return
+    raise InsufficientRAM(
+        f"{purpose} needs about {required_mb} MiB of free RAM but only {free} MiB is available "
+        f"after unloading {', '.join(released) or 'nothing else'}. Close other programs "
+        "(check `ps aux --sort=-rss | head`), or run it on the GPU."
+    )
+
+
+def _return_heap_to_os() -> None:
+    """
+    Ask glibc to give freed heap pages back to the operating system.
+
+    Dropping a model and running the garbage collector frees its objects, but
+    glibc keeps the freed pages in the process, so the server's memory stays
+    high and the OS (and the next model) cannot use them. Measured 8 Oct 2026
+    on one process loading Kokoro, XTTS-v2, OpenVoice and Bark in turn, each
+    released: 1.2-2.4 GiB stayed resident after ``gc.collect()``, ~1.0 GiB
+    after ``malloc_trim``. Only exists on Linux/glibc; anywhere else this is a no-op.
+    """
+    try:
+        import ctypes
+
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
+
+
 def empty_cache() -> None:
     """Return cached, unused blocks to the driver."""
     # gc.collect() first, and that order matters: torch only releases a block
     # once no Python object references the tensor, so collecting unreachable
     # objects is what makes the following empty_cache() actually free anything.
     gc.collect()
+    _return_heap_to_os()
     if cuda_available():
         import torch
 

@@ -31,6 +31,10 @@ XTTS_LANGUAGES = {
     "ru", "nl", "cs", "ar", "zh", "ja", "hu", "ko", "hi",
 }
 
+# XTTS-v2's own spelling of a language, where it differs from ISO-639-1:
+# Coqui lists Chinese as "zh-cn".
+_XTTS_SPELLING = {"zh": "zh-cn"}
+
 # Scripts MMS-TTS cannot tokenize directly; the checkpoint's tokenizer sets
 # ``is_uroman`` and the text must be romanized before synthesis.
 _NON_LATIN_HINT = re.compile(
@@ -99,6 +103,24 @@ def to_iso3(code: str) -> Optional[str]:
     return _aliases().get(base)
 
 
+def xtts_code(code: str) -> Optional[str]:
+    """
+    The code XTTS-v2 expects for a language, or None if it cannot speak it.
+
+    The studio sends ISO-639-3 codes (``spa``, ``hin``) because that is how the
+    MMS-TTS catalogue is keyed, while XTTS-v2 takes ISO-639-1 (``es``, ``hi``).
+    Passing ``spa`` through used to reach the model unchanged, and
+    ``xtts_supported`` called Spanish unsupported. Both spellings now resolve.
+    """
+    iso3 = to_iso3(code)
+    if not iso3:
+        return None
+    for candidate in sorted(XTTS_LANGUAGES):
+        if to_iso3(candidate) == iso3:
+            return _XTTS_SPELLING.get(candidate, candidate)
+    return None
+
+
 def is_english(code: str) -> bool:
     return (code or "").strip().lower() in ENGLISH_CODES or to_iso3(code) == "eng"
 
@@ -124,7 +146,7 @@ def resolve(code: str) -> LanguageInfo:
         name=name,
         mms_supported=supported,
         mms_model=f"facebook/mms-tts-{iso3}" if supported else None,
-        xtts_supported=normalize_code(requested) in XTTS_LANGUAGES,
+        xtts_supported=xtts_code(requested) is not None,
         is_english=is_english(requested),
     )
 

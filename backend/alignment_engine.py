@@ -12,8 +12,9 @@ import logging
 import math
 import os
 import re
+import threading
 from pathlib import Path
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import soundfile as sf
 import torch
@@ -230,6 +231,22 @@ class PhonemeToVisemeMapper:
         ]
 
 
+# The MMS_FA wav2vec2 model (~1.2 GB in fp32) is shared by every ForcedAligner,
+# keyed by device. Each synthesis builds a fresh ForcedAligner (it carries
+# per-call state: ``last_method``), and each used to reload this model from
+# disk: slow, and each load left freed heap behind that the process never gave
+# back. The per-call state stays per instance, so concurrent calls cannot mix
+# up their ``last_method``; only the read-only model is shared.
+_SHARED_MMS: Dict[str, Tuple[Any, Any]] = {}
+_SHARED_MMS_LOCK = threading.Lock()
+
+
+def release_shared_models() -> None:
+    """Drop the shared forced-alignment model; it reloads on the next alignment."""
+    with _SHARED_MMS_LOCK:
+        _SHARED_MMS.clear()
+
+
 class ForcedAligner:
     """
     Multilingual forced aligner for speech audio.
@@ -260,6 +277,12 @@ class ForcedAligner:
         if self._mms_failed:
             return None, None
 
+        with _SHARED_MMS_LOCK:
+            shared = _SHARED_MMS.get(self.device)
+        if shared is not None:
+            self._mms_aligner, self._mms_tokenizer = shared
+            return shared
+
         try:
             import torchaudio.pipelines as pipelines
             bundle = pipelines.MMS_FA
@@ -282,6 +305,8 @@ class ForcedAligner:
                 model = model.to("cpu")
             self._mms_aligner = model
             self._mms_tokenizer = tokenizer
+            with _SHARED_MMS_LOCK:
+                _SHARED_MMS[self.device] = (model, tokenizer)
             logger.info("Loaded torchaudio MMS_FA forced aligner on %s", self.device)
             return self._mms_aligner, self._mms_tokenizer
         except Exception as exc:  # noqa: BLE001 - recorded as the fallback reason, never silent
