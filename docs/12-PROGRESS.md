@@ -58,7 +58,9 @@ records what was verified live, with the real command and result.
 | T8.2 | Done | 0a74a50 |
 | T8.8 | Done — 1080p met by super-resolving the photo; a person's look waits on M-09 | 3980a94 |
 | T8.6 | Done — built and measured; a person's look waits on M-10 | 79dd00f |
-| T7.4 | **Partial, paused by the owner**: 48 files documented (comment-only, proven); 17 files still below 35% | (this commit) |
+| T7.4 | **Partial, paused by the owner**: 48 files documented (comment-only, proven); 17 files still below 35% | 206805a |
+| T7.2 | Done | 8da4461 + (this commit) |
+| T7.6 | Done (README rewritten) | 8da4461 |
 | T8.4 | Done — Wav2Lip meets the lip-sync percentage on 13 languages, blendshape does not; N-20 not met | 0eb03a9 |
 | T8.7 | Built and measured; the Stable Diffusion words wait on M-08 | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
@@ -1340,3 +1342,19 @@ ProvenancePanel.jsx 9%, main.jsx 0%). The JSX check is "the production bundle ke
 
 Found by a worker while reading `scripts/live_client.py`: the per-frame RMS `... or 0.0` never applies (the mean of an empty slice is NaN, which is truthy); harmless
 today because every frame window has samples, but the guard does nothing. Left as is (comment-only pass).
+
+### 2026-10-08 — T7.2 Docker (DoD 7)
+
+`Dockerfile` (node build stage + Ubuntu 22.04 / Python 3.10 venv, CPU PyTorch by default, `TORCH_INDEX` build arg for CUDA, non-root `app`, health check), root
+`docker-compose.yml` (API + studio on 127.0.0.1:8000, weights mounted from the host: `.models/`, HF and Torch caches, Coqui's folder; `inputs/`, `outputs/`),
+`.dockerignore`, `FRONTEND_DIST` mount in `app.py`, `HF_HUB_OFFLINE=1` in the image.
+
+**What building and running it found (each fixed, each a real gap in the local setup too):** Debian's package mirror is blocked from this network (moved to
+Ubuntu 22.04, which also ships Python 3.10); `cryptography` (manifest signing) was never in `requirements.txt`; Kokoro pip-installs spaCy's `en_core_web_sm` at
+run time (now in the image and the setup docs); `omegaconf --no-deps` lacked `antlr4-python3-runtime` (and the fix hint in the error said so incompletely);
+MediaPipe needs EGL/GLES libraries even on CPU; a failed synthesis returned `FAILED` with no reason (now an `error` field, tested, paths scrubbed); the
+container retried huggingface.co on every load (now offline: weights come from the mounted cache).
+
+Verified: image 4.85 GB; `/health` 200 `ok`; Docker health `healthy`; `whoami` = `app`; studio served at `/`; through the SDK: speech 3.0 s (kokoro, mms_fa,
+watermark detected), render 6.0 s (blendshape, mark 128/128), SyncNet offset 1. A first run during heavy host load (load average 52, the host rebooted right
+after) took 292 s for the same render; repeated idle, 6.0 s. `scripts/check.sh` 865 tests OK.

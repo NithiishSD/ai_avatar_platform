@@ -20,7 +20,7 @@ control, where it lives, and how it is verified.
 | S-13 | Errors do not leak stack traces to clients | `app.py` handlers | test | **fixed** — no tracebacks reach clients (the request-id middleware turns an unhandled error into a generic 500 naming the id). F3: audio endpoints echoed absolute server paths in 500 bodies; now scrubbed to `<project>` / `~`, unreadable audio is a 422 |
 | S-14 | Sensitive data not logged (keys, raw uploads) | logging calls | `git grep` | **pass** — no log call formats a key, token or password; request logs carry ids, not bodies |
 | S-15 | Dependencies audited | `pip-audit`, `npm audit` | T7.3 | **pass with exceptions** — T7.3, D-41 (4 packages, each about untrusted model repos, which this code never loads) |
-| S-16 | Container runs as non-root | `Dockerfile` | `docker run whoami` | **open** — no `Dockerfile` exists yet; verified in T7.2 |
+| S-16 | Container runs as non-root | `Dockerfile` | `docker run whoami` | **pass** (T7.2): `docker exec avatar_api whoami` -> `app` (uid 1000); pinned by `test_container.py` |
 | S-17 | Default dev passwords only in the dev compose, overridable, never used in prod config | `docker-compose.yml`, `.env.example` | read | **fixed** — the dev compose published Redis (no password) and Postgres (default password) on every interface; now `127.0.0.1` only (F6). Default password remains dev-only and overridable by `POSTGRES_PASSWORD` |
 | S-18 | Watermark/manifest signing key from environment | M5 | test | **partly**: the watermark tag key is `WATERMARK_KEY` or a 0600 key file (tested); manifest signing arrives with T5.2 |
 
