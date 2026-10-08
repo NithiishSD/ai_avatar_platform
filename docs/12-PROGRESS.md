@@ -44,10 +44,11 @@ records what was verified live, with the real command and result.
 | T4.1 | Done | 1c88e64 |
 | T4.2 | Done | 1c88e64 |
 | T4.4 | Done (measured with T4.1/T4.2) | 1c88e64 |
-| T4.3 | Next | |
+| T4.3 | Done | (this commit) |
+| **M4 gate** | **Passed 8 Oct** (= roadmap Gate 4): `check.sh` 671 tests green, `npx playwright test` 13 passed, `npm run build` clean; N-07 met as defined (first audio → first frame 1.4–1.8 ms), text → first audio ~0.43 s warm | |
+| T5.1 | Next | |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
-M4 live: T4.3 live UI + E2E (T4.1/T4.2/T4.4 done) ->
 M5: T5.1 audio watermark -> T5.2 video watermark + signed manifest -> T5.3 verify endpoint -> T5.4 audit trail ->
 T6.6 re-run benchmarks (incl. the unexplained blendshape offset -4, see the T7.1 entry) ->
 T7.2 Docker (build is heavy: torch image) -> T7.4 documentation pass -> T7.6 README -> T7.7 final verification.
@@ -976,3 +977,25 @@ Reading it honestly: N-07 is met as the roadmap defines it, but only because a b
 the figure a person feels is text → first audio, about 0.43 s warm and 7.3 s on the very first request after
 start. Not measured: Wav2Lip live (not offered), clone mode live (XTTS is ~10 s a sentence on this CPU, so
 it will not feel live), several sessions at once, GPU, a real browser playing it (T4.3).
+
+### 2026-10-08 — T4.3 live UI + E2E, and the M4 gate
+
+`frontend/src/LivePanel.jsx` (wired into `App.jsx`): Start / Speak / Interrupt / Stop, a canvas, and counters.
+Playback is by the server's `presentationMs`, not arrival: PCM16 is decoded to Web Audio buffers scheduled on
+the audio clock (re-anchored if the user waits between utterances), JPEG frames are decoded with
+`createImageBitmap` and drawn when the same clock reaches them. `e2e/live.spec.js`, 2 tests.
+
+Verified:
+- `npx playwright test live.spec.js` → **2 passed (22.1 s)**, real WebSocket, real Kokoro + aligner + animator: ready
+  panel reads `384×384 @ 25 fps · kokoro`; 2 sentences → exactly 2 audio chunks and 60+ frames; the canvas shows a
+  face (over 30% of pixels lit) whose lower half changed more than 3 times during speech; a second utterance on the
+  same session finishes; with an 8-sentence text, Interrupt returns the panel to `ready`, **no frame arrives
+  afterwards** (count identical 2.5 s later) and the speech was cut short (< 400 of ~480 frames); Stop → `closed`.
+- both plants caught: frames never drawn → fails ("Expected > 3, Received 1"); interrupt sends nothing → fails
+  ("Expected < 400, Received 625"). Restored.
+- **M4 gate:** `scripts/check.sh` 671 tests OK, ruff clean, pyrefly 0 errors; `npm run lint` clean; `npm run build`
+  clean; full `npx playwright test` → **13 passed (1.2 min)**; server RSS peak 7.7 GiB, lowest free RAM 3.2 GiB.
+
+Not verified: that anything is audible. Headless Chromium runs the Web Audio graph but there is no speaker, so the
+test proves audio chunks arrive and are scheduled (counted), not that sound comes out; and nobody has watched the live
+canvas. Both go on the owner's manual list (M-05 below).
