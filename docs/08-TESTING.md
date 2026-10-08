@@ -50,7 +50,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-27 | `test_request_context.py` (id on every response, safe caller id kept, unsafe one replaced, log lines stamped, no leak past the request, worker thread inherits the id, 500 names the id); live on a real server (T6.2) | pass |
 | R-30 | `test_provenance.py`, `test_avatar_store.py`, `VoiceConsentTests` (voices now checked too) | pass |
 | R-31 | `VoiceConsentTests` (8), `test_app.py` 403/400/202; live on a real server (T2.2) | pass |
-| R-32 | T5.1 | gap |
+| R-32 | `test_watermark.py` (26; real AudioSeal round trip when the weights are on disk; **4 plants caught**); `scripts/measure_watermark.py`, 8 Oct, CPU, 16 clips (8 human LJSpeech segments, 8 Kokoro sentences), method `torchaudio-squim` for quality: **mark is 26.6 dB below the speech (min 22.8)**; SQUIM MOS change **+0.06 mean (human +0.008, TTS +0.111; worst −0.003)**, PESQ estimate −0.067 (worst −0.277), STOI −0.001. **Detected after:** float32, 16-bit WAV, 24→8→24 kHz resample, AAC 128 kbps *and* 64 kbps, MP3 128, Opus 32, 30 dB noise, trim 0.7 s, volume ×0.3: **16/16 each**; 20 dB noise 13/16. **Lost after:** 10 dB noise 0/16, 4 kHz IIR low-pass 0/16, speed ×1.10 0/16. **False positives: 0/55** (8 human, 8 TTS, 8 noise, 6 tones, silence, and our 16 marked clips checked with another key); the bit rule alone admits a random message with probability 137/65536 = 0.2%; 0/55 only bounds the real rate under ~5% (95%). Not verified by a person: that it is inaudible (M-06) | measured; **inaudibility pending M-06** |
 | R-33 | T5.2 | gap |
 | R-34 | `test_render_engine.py` label | pass |
 | R-35 | T5.4 | gap |

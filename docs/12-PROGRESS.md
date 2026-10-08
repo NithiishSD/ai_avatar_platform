@@ -46,7 +46,7 @@ records what was verified live, with the real command and result.
 | T4.4 | Done (measured with T4.1/T4.2) | 1c88e64 |
 | T4.3 | Done | (this commit) |
 | **M4 gate** | **Passed 8 Oct** (= roadmap Gate 4): `check.sh` 671 tests green, `npx playwright test` 13 passed, `npm run build` clean; N-07 met as defined (first audio → first frame 1.4–1.8 ms), text → first audio ~0.43 s warm | |
-| T5.1 | **In progress**: built, wired into every synthesis, 26 tests; the quality / robustness / false-positive measurement (`scripts/measure_watermark.py`) is written but NOT yet run | (this commit) |
+| T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
 M5: T5.1 audio watermark -> T5.2 video watermark + signed manifest -> T5.3 verify endpoint -> T5.4 audit trail ->
@@ -1027,3 +1027,15 @@ real runs, CPU: LJSpeech human 5 s and a Kokoro clip: signal-to-mark 30.9 and 26
 false-positive rate over many clips: all in `scripts/measure_watermark.py`, written and type-checked, **never run**.
 Also not done: the live-session and REST responses were not re-checked with the watermark switched on end to end, and
 the full E2E suite was not re-run with it on.
+
+### 2026-10-08 — T5.1 measured (`scripts/measure_watermark.py`, 16 clips, CPU)
+
+Numbers in `08-TESTING.md` (R-32). In short: the mark sits **26.6 dB below the speech** (22.8 at worst); SQUIM's MOS
+estimate did not fall (mean +0.06, worst -0.003; PESQ-estimate -0.07, STOI unchanged: SQUIM is a model's estimate,
+and a positive MOS change is noise, not an improvement). It was detected in **16 of 16** clips after a 16-bit WAV, an
+8 kHz resample, AAC at 128 *and* 64 kbps (the MP4 soundtrack case), MP3, Opus, 30 dB noise, a 0.7 s trim and a volume cut;
+13 of 16 at 20 dB noise. **It is lost** after 10 dB noise, after a 4 kHz low-pass and after a 10% speed change (0 of 16 each).
+The 4 kHz case is odd: the 24 -> 8 -> 24 kHz resample, which also removes everything above 4 kHz, kept it 16 of 16, so the
+cause is probably the IIR filter's phase shift, not the lost band; **not isolated, no claim made**. False positives:
+0 of 55 clips that should not match (human, TTS, noise, tones, silence, and our own clips with a different key).
+Listening pairs for the owner are in `outputs/watermark-ab/` (M-06). T5.1 stays open until that answer is in.
