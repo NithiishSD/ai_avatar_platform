@@ -545,6 +545,40 @@ class AvatarGenerateRouteTests(VisionApiCase):
             time.sleep(0.05)
         self.fail("generation did not finish")
 
+    def test_stylize_registers_a_derived_avatar_and_reports_identity(self):
+        import style_transfer
+
+        self.add_synthetic("demo")
+        fake = mock.Mock(repo_id="fake/sd")
+        fake.stylize.side_effect = lambda image, style, seed=0, steps=30: np.ascontiguousarray(255 - image)
+        identity = mock.Mock(return_value=0.64)
+        real = style_transfer.stylize_registered_avatar
+        with mock.patch.object(style_transfer, "shared_transfer", return_value=fake), \
+                mock.patch.object(style_transfer, "stylize_registered_avatar",
+                                  side_effect=lambda *a, **k: real(*a, **k, identity=identity)):
+            response = self.client.post("/api/v1/avatar/stylize", json={"avatarId": "demo", "style": "painting", "newAvatarId": "demo-paint"})
+            self.assertEqual(response.status_code, 202, response.text)
+            body = self.wait(response.json()["taskId"])
+        self.assertEqual(body["status"], "COMPLETED", body)
+        self.assertEqual((body["result"]["style"], body["result"]["identity"]["percent"]), ("painting", 64.0))
+        self.assertEqual(body["result"]["provenance"]["extra"]["derivedFrom"], "demo")
+        styles = self.client.get("/api/v1/avatar/styles").json()
+        self.assertEqual(sorted(styles["styles"]), ["cartoon", "painting", "realistic", "sketch"])
+
+    def test_stylize_refusals_come_before_any_work(self):
+        self.add_synthetic("demo")
+        cases = [
+            ({"avatarId": "ghost", "style": "cartoon", "newAvatarId": "x1"}, 404),
+            ({"avatarId": "demo", "style": "cartoon", "newAvatarId": "demo"}, 409),
+            ({"avatarId": "demo", "style": "vaporwave", "newAvatarId": "x2"}, 422),
+        ]
+        for body, code in cases:
+            self.assertEqual(self.client.post("/api/v1/avatar/stylize", json=body).status_code, code, body)
+        provenance.sidecar_path(self.store.get("demo").path).unlink()
+        self.assertEqual(self.client.post("/api/v1/avatar/stylize", json={"avatarId": "demo", "style": "cartoon", "newAvatarId": "x3"}).status_code, 403)
+        with mock.patch.object(app_module, "_diffusion_weights", return_value={"present": False, "detail": "fetch it"}):
+            self.assertEqual(self.client.post("/api/v1/avatar/stylize", json={"avatarId": "demo", "style": "cartoon", "newAvatarId": "x4"}).status_code, 503)
+
     def test_generates_and_registers_a_usable_synthetic_face(self):
         response = self.client.post(
             "/api/v1/avatar/generate",

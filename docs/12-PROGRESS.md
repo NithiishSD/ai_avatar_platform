@@ -56,7 +56,8 @@ records what was verified live, with the real command and result.
 | T8.9 | Done | 3faafde |
 | T8.5 | Done | b4643a7 |
 | T8.2 | Done | 0a74a50 |
-| T8.8 | Done — 1080p met by super-resolving the photo; a person's look waits on M-09 | (this commit) |
+| T8.8 | Done — 1080p met by super-resolving the photo; a person's look waits on M-09 | 3980a94 |
+| T8.6 | Done — built and measured; a person's look waits on M-10 | (this commit) |
 | T8.4 | Done — Wav2Lip meets the lip-sync percentage on 13 languages, blendshape does not; N-20 not met | 0eb03a9 |
 | T8.7 | Built and measured; the Stable Diffusion words wait on M-08 | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
@@ -1291,3 +1292,16 @@ Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **849 tests OK** (7 n
 unmarked / 16.2 s marked for 5.15 s of video, mark 128/128, identity 96.2%, LPIPS 0.297 vs the photo (smoothing). A person's look is M-09.
 
 Not done: lighting correction (R-44 second half); 4K; per-frame enhancement of Wav2Lip's mouth region.
+
+### 2026-10-08 — T8.6 style transfer
+
+`backend/style_transfer.py`, `GET /api/v1/avatar/styles`, `POST /api/v1/avatar/stylize` (polled through the generation tasks). SD 1.5 img2img from the registered photo, four
+fixed styles (realistic 0.30, cartoon 0.55, painting 0.50, sketch 0.55 strength), the face quality gate on the result, SFace identity to the source, provenance inherited and
+`derivedFrom` recorded, `face_generated` audited with `derived_from`. D-55.
+
+Found live: the first run released the pipeline after each style and the next three were refused by the RAM guard (~1 GB stays resident after release on this shared host);
+one shared pipeline now stays loaded. Rerun: all four COMPLETED, 105-127 s each on CPU; identity 68.1 / 51.8 / 41.7 / 38.6%; a styled avatar renders (offset 0, mark 128/128).
+Looking at them: cartoon is barely stylised. M-10 asks the owner.
+
+Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **861 tests OK** (12 new, incl. `test_container.py` for T7.2, committed with it).
+Not done: a style picker in the UI (API only); identity-preserving conditioning (IP-Adapter / ControlNet).

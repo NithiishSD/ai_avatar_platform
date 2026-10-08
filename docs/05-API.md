@@ -34,6 +34,8 @@ Auth: `X-API-Key` header when `AUTH_ENABLED=true`. Rate limit: 429 with
 | GET / POST / DELETE | `/api/v1/abuse/protected-voices[/{id}]` | the opt-out list: POST a recording (multipart `file`, <= 25 MB) -> `{id}`; only the speaker embedding is kept; cloning a voice that matches it is refused (403) | 200 / 201 / 204 |
 | GET | `/api/v1/parameters` | every customisation parameter with type, range, default, and a `status` from measuring it (`measured`, `no-effect`, `limited`, `not-measured`); counts against the 50+ target, which is reported as not met | 200 |
 | GET | `/api/v1/metrics` | queue depth by state, render time and real-time-factor spread (mean/p50/p95/max), watermarked count, lip-sync scores taken so far, audit trail size; `None` where nothing has been measured; the Celery backend cannot list jobs and says so | 200 |
+| GET | `/api/v1/avatar/styles` | the fixed styles (realistic, cartoon, painting, sketch), each with its prompt and img2img strength, and whether the weights are present | 200 |
+| POST | `/api/v1/avatar/stylize` | restyle a registered avatar (`avatarId`, `style`, `newAvatarId`, `seed`, `steps`) with SD 1.5 img2img; the copy inherits the source's provenance and records `derivedFrom`; the result reports SFace identity to the source; poll `GET /api/v1/avatar/generate/{taskId}` | 202 / 403 / 404 / 409 / 503 |
 | GET | `/api/v1/avatar/generate/options` | fixed attribute choices + whether weights exist | 200 |
 | POST | `/api/v1/avatar/generate` | queue a synthetic face (`AvatarGenerateRequest`; 409 id taken, 503 no weights) | 202 + `taskId` |
 | GET | `/api/v1/avatar/generate/{taskId}` | poll a generation | 200 / 404 |

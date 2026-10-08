@@ -31,6 +31,7 @@ from contracts import (
     FaceAnalysisResponse,
     LipSyncScoreResponse,
     AvatarRenderJob,
+    AvatarStylizeRequest,
     RenderBatchRequest,
     RenderQuality,
     RenderJobResponse,
@@ -563,6 +564,66 @@ def generate_avatar_face(request: AvatarGenerateRequest) -> AvatarGenerateRespon
             "rejectedSeeds": {str(k): v for k, v in generated.rejected_seeds.items()},
             "provenance": record.provenance,
         }
+
+    return AvatarGenerateResponse(taskId=generation_jobs.submit(work), status="QUEUED")
+
+
+@app.get("/api/v1/avatar/styles")
+def avatar_styles() -> dict:
+    """The styles ``POST /avatar/stylize`` accepts, with the strength each uses, and whether it can run."""
+    import style_transfer
+
+    weights = _diffusion_weights()
+    return {"styles": {name: {"prompt": s.prompt, "strength": s.strength} for name, s in style_transfer.STYLES.items()},
+            "available": bool(weights.get("present")), "detail": weights.get("detail", "")}
+
+
+@app.post(
+    "/api/v1/avatar/stylize",
+    response_model=AvatarGenerateResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def stylize_avatar(request: AvatarStylizeRequest) -> AvatarGenerateResponse:
+    """
+    Queue a restyled copy of an avatar (Stable Diffusion img2img). The copy inherits the source's
+    provenance and records what it came from; the result reports SFace identity similarity to the
+    source. Refused up front: missing weights (503), unknown source (404), a source without consent
+    (403), a taken id (409).
+    """
+    import style_transfer
+
+    weights = _diffusion_weights()
+    if not weights.get("present"):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=weights.get("detail", "avatar-diffusion weights missing"))
+    try:
+        faces.require_usable(request.avatar_id)
+    except avatar_store.AvatarNotFound as err:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(err)) from err
+    except avatar_store.AvatarConsentError as err:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(err)) from err
+    try:
+        faces.get(request.new_avatar_id)
+    except avatar_store.AvatarNotFound:
+        pass
+    else:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"avatar {request.new_avatar_id!r} already exists; choose another id")
+
+    def work() -> dict:
+        from face_engine import FACE_ENGINE_LOCK, shared_face_engine
+
+        def check(image):
+            with FACE_ENGINE_LOCK:
+                return shared_face_engine().check_quality(image)
+
+        result = style_transfer.stylize_registered_avatar(
+            faces, check, request.avatar_id, request.style, request.new_avatar_id, seed=request.seed, steps=request.steps)
+        record = faces.get(request.new_avatar_id)
+        audit_log.shared_audit().record(
+            "face_generated", subject=request.new_avatar_id, basis=str(record.provenance.get("consentBasis") or record.provenance.get("source") or ""),
+            derived_from=request.avatar_id, style=request.style, seed=request.seed, image_sha256=manifest.sha256_file(record.path),
+        )
+        return {**result, "imageUrl": record.to_dict()["imageUrl"], "provenance": record.provenance}
 
     return AvatarGenerateResponse(taskId=generation_jobs.submit(work), status="QUEUED")
 
@@ -1460,3 +1521,11 @@ def voice_similarity(request: VoiceSimilarityRequest) -> VoiceSimilarityResponse
     except Exception as err:  # noqa: BLE001
         raise _audio_failure("Similarity scoring", err) from err
     return VoiceSimilarityResponse(report=report.to_dict())
+
+
+# The built studio (Docker image, T7.2): served from the same origin as the API when FRONTEND_DIST
+# points at a `npm run build` output. Mounted last, because a mount at "/" would otherwise answer
+# for every API path registered after it.
+_frontend_dist = os.getenv("FRONTEND_DIST")
+if _frontend_dist and Path(_frontend_dist, "index.html").is_file():
+    app.mount("/", StaticFiles(directory=_frontend_dist, html=True), name="studio")

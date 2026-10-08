@@ -731,6 +731,22 @@ class AvatarGenerateRequest(BaseModel):
     overwrite: bool = False
 
 
+class AvatarStylizeRequest(BaseModel):
+    """
+    Restyle a registered avatar (T8.6): ``style`` is a fixed choice (``GET /api/v1/avatar/styles``),
+    the result is registered as ``newAvatarId`` and inherits the source's provenance. Poll it with
+    ``GET /api/v1/avatar/generate/{taskId}``.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    avatar_id: str = Field(alias="avatarId", pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    style: Literal["realistic", "cartoon", "painting", "sketch"]
+    new_avatar_id: str = Field(alias="newAvatarId", pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    seed: int = Field(default=0, ge=0, le=2**31 - 1)
+    steps: int = Field(default=30, ge=10, le=50)
+
+
 class AvatarGenerateResponse(BaseModel):
     """Poll state of a generation: QUEUED / PROCESSING / COMPLETED / FAILED."""
 
