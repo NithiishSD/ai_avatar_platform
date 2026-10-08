@@ -21,7 +21,7 @@ records what was verified live, with the real command and result.
 | T1.3 | Done | 0d68c57 |
 | T1.4 | Done | b02a741 |
 | **M1 gate** | **Passed** (= roadmap Gate 1) | |
-| T2.1 | Done — measured, **N-02 not met** (62.0% vs 85%) | (this commit) |
+| T2.1 | Done — measured, **N-02 not met** (62.0% vs 85%) | de4a36a |
 | T2.2 | Done | 54686a2 |
 | T2.3 | Verified on CPU — waiting on M-04 (peak VRAM on the host GPU, and a look at the video) | (this commit) |
 | T2.6 | Done — 4 usable engines; the 5th (XTTS-v2) waits on M-03 | 6b94d3c, b55e538, f5d85bc |
@@ -35,18 +35,19 @@ records what was verified live, with the real command and result.
 | T7.1 | Done | 98902e3 |
 | T7.3 | Done (4 documented exceptions, D-41) | ec5b180 |
 | T7.5 | Done (two HTML `placeholder` attributes remain by decision D-40) | d62dd62 |
-| T3.3 | Done — voice carries over only partly (43–49%) | (this commit) |
-| T3.4 | Done | (this commit) |
-| T4.1 | Next | |
+| T3.3 | Done — voice carries over only partly (43–49%) | 3b43262 |
+| T3.4 | Done | 0b43bca |
+| **M3 gate** | **Passed 8 Oct** (= roadmap Gate 3): `check.sh` 620 tests green, `npx playwright test` 11 passed, `npm run build` clean. Targets inside it: N-02 not met (62.0% English, 43–49% cross-lingual), N-09 met | |
+| T6.3 | Next | |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
 T6.3 load test -> T6.4 concurrency test (50+ jobs) -> T6.5 security review ->
 M4 live: T4.1 streaming TTS (`WS /api/v1/live`) -> T4.2 live frames -> T4.3 live UI + E2E -> T4.4 latency ->
 M5: T5.1 audio watermark -> T5.2 video watermark + signed manifest -> T5.3 verify endpoint -> T5.4 audit trail ->
-T6.6 re-run benchmarks (incl. the unexplained blendshape offset -4, see T7.1 entry) ->
+T6.6 re-run benchmarks (incl. the unexplained blendshape offset -4, see the T7.1 entry) ->
 T7.2 Docker (build is heavy: torch image) -> T7.4 documentation pass -> T7.6 README -> T7.7 final verification.
-Waiting on the owner, cannot be done here: T2.1 (M-03 XTTS-v2 licence), T2.3 sign-off (M-04 host GPU + look at the video).
-Environment gotchas learned: never `pkill -f` / `pgrep -f` with a pattern that also appears in your own
+Waiting on the owner, cannot be done here: T2.3 sign-off and the Gate 2 sign-off (M-04: host GPU peak VRAM + a look at the video; the owner's host run failed on a wrong command, correct one is in 13). M-03 is done. Q-04: the problem-statement PDF is unrecoverable, the owner is to re-export or paste it.
+Environment gotchas learned: the machine is shared (another project's Java services use ~4 GiB) and has 14 GiB, so a full `npx playwright test` needs the RAM guard (D-44); run long jobs detached (`setsid nohup … &`) and poll, because an OOM kill of the foreground shell is exit 137; never `pkill -f` / `pgrep -f` with a pattern that also appears in your own
 command line (it kills the shell, exit 144); find the server by `ss -ltnp 'sport = :8000'`.
 
 ## Log
