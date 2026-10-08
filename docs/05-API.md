@@ -28,6 +28,8 @@ Auth: `X-API-Key` header when `AUTH_ENABLED=true`. Rate limit: 429 with
 | POST | `/api/v1/avatar/render-job` | queue a render (`AvatarRenderJob`, `?engine=`) | 202 |
 | GET | `/api/v1/avatar/render-job/{jobId}` | poll a render | 200 / 404 |
 | POST | `/api/v1/avatar/render-job/{jobId}/lipsync-score` | SyncNet score of the result | 200 |
+| POST | `/api/v1/avatar/render-batch` | queue up to 50 render jobs (`{"jobs": [AvatarRenderJob, ...]}`, `?engine=`); each item is checked on its own; returns `batchId` and, per item, `accepted` or `httpStatus` + `detail`; over 50 or empty is a 422 | 202 |
+| GET | `/api/v1/avatar/render-batch/{batchId}` | state of every job in the batch, `counts` by state, `done` | 200 / 404 |
 | GET | `/api/v1/avatar/generate/options` | fixed attribute choices + whether weights exist | 200 |
 | POST | `/api/v1/avatar/generate` | queue a synthetic face (`AvatarGenerateRequest`; 409 id taken, 503 no weights) | 202 + `taskId` |
 | GET | `/api/v1/avatar/generate/{taskId}` | poll a generation | 200 / 404 |

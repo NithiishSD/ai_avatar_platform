@@ -73,7 +73,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 |---|---|---|
 | R-40 | T8.2 | gap |
 | R-41 | T8.5 | gap |
-| R-42 | T8.1 | gap |
+| R-42 | `test_app_vision.py` (4 batch tests: a mixed batch where an unknown avatar, a malformed job and a repeated id are refused by index with their reasons while the good ones complete; 50 jobs all accepted, each run once, none lost; over the cap of 50 and empty batches refused whole; engine passed through, unknown batch 404; **plant caught**: stopping at the first bad item fails the mixed test). Live (T8.1), real server, CPU: `scripts/batch_test.py --jobs 10`: POST -> 202 in 306 ms, 10 accepted, 3 refused (404 unknown avatar, 422 missing `phonemeTimestamps`, 409 repeated id), all 10 COMPLETED in 48.6 s, 10 distinct videos on disk | pass |
 | R-43 | T8.6 | gap |
 | R-44 | T8.8 | gap |
 | R-45 | not planned (CPU-infeasible), D-50 | not built |

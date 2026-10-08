@@ -50,6 +50,7 @@ records what was verified live, with the real command and result.
 | T5.4 | Done | 43c9c87 |
 | T5.3 | Done | caaf316 |
 | T6.6 | Measured on CPU (8 Oct): offset -4 not reproduced, N-06 **not met**, MOS 4.894; N-10 and the GPU timing wait on M-04; the 10+ language percentage is T8.4 | (this commit) |
+| T8.1 | Done | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
@@ -1164,3 +1165,16 @@ An earlier run showed `live.spec.js` failing after 17 minutes against a 240 s ti
 - **N-01:** SQUIM MOS 4.894 with a non-matching reference (5 Kokoro sentences). The harness rewrites `docs/benchmarks/phase3_benchmark.md` with
   "NOT MEASURED" rows for skipped sections; that file was restored and only the dated JSON kept.
 - Not done here: N-10 peak VRAM and GPU timings (M-04, host GPU); N-05 over 10+ languages (T8.4); N-02 unchanged (62.0%, not met).
+
+### 2026-10-08 — T8.1 batch render API
+
+`POST /api/v1/avatar/render-batch` takes up to 50 render jobs (`MAX_BATCH_JOBS`, the size the N-08 test proved) and validates and queues each
+through the same `_submit_render` as the single-job endpoint, so the rules cannot drift apart. Items are raw objects validated one by one, so
+one bad item is reported by index (404 unknown avatar, 403 no consent, 422 malformed, 409 repeated id, 400 bad audio) and does not stop the
+rest. The batch (item -> job id or refusal) is stored in the job store, so it survives a restart; `GET .../render-batch/{batchId}` reads each
+job's live state from the queue and says `LOST` if the queue no longer knows an accepted job.
+
+Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **788 tests OK** (4 new; one plant caught). Live, real server and renders, CPU:
+`scripts/batch_test.py --jobs 10` -> 202 in 306 ms, 10 accepted + 3 refused with reasons, 10 COMPLETED in 48.6 s, 10 distinct video files.
+
+Not done: a batch UI, a Python SDK method for batches, Celery/Redis not run here.

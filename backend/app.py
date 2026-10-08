@@ -1,10 +1,11 @@
 import asyncio
 import logging
 import os
+import uuid
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 
 project_root = Path(__file__).resolve().parents[1]
@@ -28,6 +29,7 @@ from contracts import (
     FaceAnalysisResponse,
     LipSyncScoreResponse,
     AvatarRenderJob,
+    RenderBatchRequest,
     RenderJobResponse,
     SynthesisJobResponse,
     AlignmentRequest,
@@ -774,6 +776,15 @@ def create_render_job(job: AvatarRenderJob, engine: Optional[str] = None) -> Ren
     consent, audio this server cannot read, an engine with no weights -- is
     rejected here with the reason, not accepted and failed later.
     """
+    queued_job = _submit_render(job, engine)
+    return _render_response(queued_job.job.job_id, queued_job)
+
+
+def _submit_render(job: AvatarRenderJob, engine: Optional[str]):
+    """Validate one job and put it on the queue; raises ``HTTPException`` with the reason if it cannot run.
+
+    Shared by the single-job and the batch endpoint so both apply exactly the same rules.
+    """
     if getattr(job_queue, "executes", False):
         try:
             engine = render_engine.validate_engine(engine)
@@ -787,7 +798,7 @@ def create_render_job(job: AvatarRenderJob, engine: Optional[str] = None) -> Ren
         except render_engine.RenderError as err:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
     try:
-        queued_job = job_queue.enqueue(job, engine)
+        return job_queue.enqueue(job, engine)
     except ValueError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     except Exception as error:  # noqa: BLE001 - broker or status store unreachable
@@ -795,7 +806,63 @@ def create_render_job(job: AvatarRenderJob, engine: Optional[str] = None) -> Ren
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"render queue unavailable: {error}. Is Redis running (./start-docker.sh)?",
         ) from error
-    return _render_response(queued_job.job.job_id, queued_job)
+
+
+# A batch is a list of ordinary render jobs submitted in one request (cap: contracts.MAX_BATCH_JOBS).
+batch_store = JobStore()  # kind "batch": batchId -> what happened to each item, so a batch survives a restart
+
+
+@app.post("/api/v1/avatar/render-batch", status_code=status.HTTP_202_ACCEPTED)
+def create_render_batch(request: RenderBatchRequest, engine: Optional[str] = None) -> dict:
+    """
+    Queue up to ``MAX_BATCH_JOBS`` (50) renders at once. Each item is checked on its own, so one bad item
+    (unknown avatar, no consent, malformed, duplicate id) is reported against its index and does not
+    stop the others. The response lists every item; poll ``GET .../render-batch/{batchId}``.
+    """
+    items: List[Dict[str, Any]] = []
+    for index, raw in enumerate(request.jobs):
+        job_id = raw.get("jobId") if isinstance(raw, dict) and isinstance(raw.get("jobId"), str) else None
+        try:
+            job = AvatarRenderJob.model_validate(raw)
+            _submit_render(job, engine)
+            items.append({"index": index, "jobId": job.job_id, "accepted": True})
+        except ValidationError as err:
+            first = err.errors()[0]
+            where = ".".join(str(part) for part in first["loc"])
+            items.append({"index": index, "jobId": job_id, "accepted": False, "httpStatus": 422,
+                          "detail": f"{where}: {first['msg']}"})
+        except HTTPException as err:
+            items.append({"index": index, "jobId": job_id, "accepted": False,
+                          "httpStatus": err.status_code, "detail": str(err.detail)})
+    batch_id = uuid.uuid4().hex[:12]
+    batch_store.put("batch", batch_id, {"items": items})
+    accepted = sum(1 for item in items if item["accepted"])
+    return {"batchId": batch_id, "total": len(items), "accepted": accepted,
+            "rejected": len(items) - accepted, "jobs": items}
+
+
+@app.get("/api/v1/avatar/render-batch/{batch_id}")
+def get_render_batch(batch_id: str) -> dict:
+    """Live state of every job in a batch, with counts by state and ``done`` once none is still running."""
+    record = batch_store.get("batch", batch_id)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="render batch not found")
+    jobs, counts = [], {}
+    for item in record["items"]:
+        state = {k: item[k] for k in ("index", "jobId", "httpStatus", "detail") if k in item}
+        if item["accepted"]:
+            queued = job_queue.get(item["jobId"])
+            # None means the queue lost the job; say so rather than hide it.
+            state["status"] = queued.status.value if queued else "LOST"
+            if queued is not None:
+                state.update({k: v for k, v in _render_response(item["jobId"], queued).model_dump(
+                    by_alias=True, exclude_none=True).items() if k in ("videoUrl", "error", "progress")})
+        else:
+            state["status"] = "REJECTED"
+        counts[state["status"]] = counts.get(state["status"], 0) + 1
+        jobs.append(state)
+    done = not any(counts.get(name) for name in ("QUEUED", "PROCESSING"))
+    return {"batchId": batch_id, "total": len(jobs), "counts": counts, "done": done, "jobs": jobs}
 
 
 @app.get(

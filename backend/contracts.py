@@ -253,6 +253,25 @@ class AvatarRenderJob(BaseModel):
         return self
 
 
+# The cap is the size the concurrency test (N-08) proved the queue handles at once; a longer list is
+# refused with a 422 that names the limit, never silently truncated.
+MAX_BATCH_JOBS = 50
+
+
+class RenderBatchRequest(BaseModel):
+    """
+    Up to 50 render jobs in one request (T8.1).
+
+    ``jobs`` stays a list of raw objects on purpose: each is validated against ``AvatarRenderJob`` on
+    its own, so one malformed item is reported by index instead of making FastAPI reject the whole
+    request with a single 422.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    jobs: List[Dict[str, Any]] = Field(min_length=1, max_length=MAX_BATCH_JOBS)
+
+
 class RenderJobResponse(BaseModel):
     """What ``GET``/``POST /api/v1/avatar/render-job`` reports back."""
 

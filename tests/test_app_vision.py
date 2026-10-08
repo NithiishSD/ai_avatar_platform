@@ -19,6 +19,7 @@ import render_engine
 from app import app
 from avatar_store import AvatarStore
 from job_queue import InMemoryJobQueue
+from job_store import JobStore
 from vision_fixtures import FakeFaceEngine, gradient_image, synthetic_analysis
 
 HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
@@ -219,9 +220,10 @@ class RenderRouteTests(VisionApiCase):
             return {"engine": engine, "videoUrl": f"/outputs/renders/{job.job_id}.mp4", "outputPath": "x.mp4"}
 
         self.queue = InMemoryJobQueue(runner=runner)
-        patcher = mock.patch.object(app_module, "job_queue", self.queue)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for name, value in ("job_queue", self.queue), ("batch_store", JobStore(":memory:")):
+            patcher = mock.patch.object(app_module, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.add_synthetic()
         self.wav()
 
@@ -292,6 +294,65 @@ class RenderRouteTests(VisionApiCase):
             response = self.client.post("/api/v1/avatar/render-job", json=self.payload(jobId="down"))
         self.assertEqual(response.status_code, 503)
         self.assertIn("redis down", response.json()["detail"])
+
+    # --- batch (T8.1) -------------------------------------------------------------------------
+    def batch(self, jobs, **params):
+        return self.client.post("/api/v1/avatar/render-batch", json={"jobs": jobs}, params=params)
+
+    def wait_batch(self, batch_id):
+        for _ in range(300):
+            body = self.client.get(f"/api/v1/avatar/render-batch/{batch_id}").json()
+            if body["done"]:
+                return body
+            time.sleep(0.02)
+        self.fail("batch did not finish")
+
+    def test_one_bad_item_does_not_reject_the_others(self):
+        no_phonemes = self.payload(jobId="B-bad-shape")
+        del no_phonemes["phonemeTimestamps"]
+        response = self.batch([
+            self.payload(jobId="B1"),
+            self.payload(jobId="B-ghost", avatarId="ghost"),
+            no_phonemes,
+            self.payload(jobId="B1"),  # same id twice in one batch
+            self.payload(jobId="B2"),
+        ])
+        self.assertEqual(response.status_code, 202, response.text)
+        body = response.json()
+        self.assertEqual((body["total"], body["accepted"], body["rejected"]), (5, 2, 3))
+        by_index = {item["index"]: item for item in body["jobs"]}
+        self.assertEqual([by_index[i]["accepted"] for i in range(5)], [True, False, False, False, True])
+        self.assertEqual(by_index[1]["httpStatus"], 404)
+        self.assertIn("not registered", by_index[1]["detail"])
+        self.assertEqual(by_index[2]["httpStatus"], 422)
+        self.assertIn("phonemeTimestamps", by_index[2]["detail"])
+        self.assertEqual(by_index[3]["httpStatus"], 409)
+
+        done = self.wait_batch(body["batchId"])
+        self.assertEqual(done["counts"], {"COMPLETED": 2, "REJECTED": 3})
+        self.assertEqual(sorted(self.ran), [("B1", "blendshape"), ("B2", "blendshape")])
+        completed = [job for job in done["jobs"] if job["status"] == "COMPLETED"]
+        self.assertEqual({job["videoUrl"] for job in completed}, {"/outputs/renders/B1.mp4", "/outputs/renders/B2.mp4"})
+
+    def test_fifty_jobs_are_all_accepted_run_once_and_none_is_lost(self):
+        response = self.batch([self.payload(jobId=f"N{i}") for i in range(50)])
+        self.assertEqual(response.status_code, 202, response.text)
+        done = self.wait_batch(response.json()["batchId"])
+        self.assertEqual(done["counts"], {"COMPLETED": 50})
+        self.assertEqual(sorted(job_id for job_id, _ in self.ran), sorted(f"N{i}" for i in range(50)))
+
+    def test_a_batch_over_the_cap_or_empty_is_refused_whole(self):
+        too_many = self.batch([self.payload(jobId=f"X{i}") for i in range(51)])
+        self.assertEqual(too_many.status_code, 422)
+        self.assertIn("50", too_many.text)
+        self.assertEqual(self.batch([]).status_code, 422)
+        self.assertEqual(self.ran, [])
+
+    def test_batch_passes_the_engine_through_and_unknown_batch_is_404(self):
+        response = self.batch([self.payload(jobId="E1")], engine="sadtalker")
+        self.assertEqual(response.json()["jobs"][0]["httpStatus"], 400)
+        self.assertIn("unknown render engine", response.json()["jobs"][0]["detail"])
+        self.assertEqual(self.client.get("/api/v1/avatar/render-batch/nope").status_code, 404)
 
     def test_face_without_consent_is_403(self):
         provenance.sidecar_path(self.store.get("demo").path).unlink()
