@@ -37,7 +37,9 @@ Auth: `X-API-Key` header when `AUTH_ENABLED=true`. Rate limit: 429 with
 | Method | Path | Task |
 |---|---|---|
 | POST | `/api/v1/provenance/verify` | does a file carry our watermark / manifest | M5 |
-| GET | `/api/v1/audit` | consent audit trail | M5 |
+
+| GET | `/api/v1/audit` | the consent audit trail, newest first; filters `event`, `subject`, `since`, `limit` | 200 / 400 |
+| GET | `/api/v1/audit/verify` | recompute the trail's hash chain | 200 |
 
 ## Live avatar: `WS /api/v1/live`
 

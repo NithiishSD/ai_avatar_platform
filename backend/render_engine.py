@@ -36,12 +36,13 @@ from urllib.parse import unquote, urlparse
 
 import numpy as np
 
+import audit_log
 import gpu_utils
 import manifest as manifest_module
 import video_io
 import video_watermark
 import watermark_engine
-from avatar_store import AvatarStore
+from avatar_store import AvatarConsentError, AvatarStore
 from contracts import AvatarRenderJob, BackgroundSpec, RenderQuality
 from face_animation import (
     AnimationTrack,
@@ -225,7 +226,11 @@ def preflight(job: AvatarRenderJob, engine: Optional[str] = None, store: Optiona
     Returns the resolved audio path. Loads no model.
     """
     name = validate_engine(engine)
-    (store or AvatarStore()).require_usable(job.avatar_id)
+    try:
+        (store or AvatarStore()).require_usable(job.avatar_id)
+    except AvatarConsentError as err:
+        audit_log.shared_audit().record("face_refused", subject=job.avatar_id, basis=None, reason=str(err), job=job.job_id)
+        raise
     audio = resolve_audio_url(job.audio_url)
     if job.background is not None:
         _check_background(job.background)
@@ -528,6 +533,17 @@ def render_job(
             "durationSeconds": round(duration, 3), "engine": engine_name, "quality": job.render_quality.value,
             "background": _describe_background(job.background), "label": bool(label),
         },
+    )
+
+    avatar_provenance = store.get(job.avatar_id).provenance
+    audit = audit_log.shared_audit()
+    audit.record(
+        "manifest_issued", subject=str(manifest_info["manifestId"]), basis=None, video_sha256=manifest_info["videoSha256"],
+        job=job.job_id, avatar=job.avatar_id, watermarked=bool(watermark_result.get("applied")),
+    )
+    audit.record(
+        "face_use", subject=job.avatar_id, basis=str(avatar_provenance.get("consentBasis") or avatar_provenance.get("source") or ""),
+        source=avatar_provenance.get("source"), job=job.job_id, engine=engine_name, manifest=manifest_info["manifestId"],
     )
 
     result = RenderResult(

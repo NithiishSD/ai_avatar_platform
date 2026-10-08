@@ -87,7 +87,7 @@ def speech_record_path(audio_path: Path | str) -> Path:
     return Path(str(audio_path) + SPEECH_RECORD_SUFFIX)
 
 
-def _reference_summary(speaker_wav: Optional[str]) -> Optional[Dict[str, Any]]:
+def reference_summary(speaker_wav: Optional[str]) -> Optional[Dict[str, Any]]:
     """What may be said about a voice reference without naming the speaker."""
     if not speaker_wav or not Path(speaker_wav).is_file():
         return None
@@ -128,7 +128,7 @@ def write_speech_record(
         "mode": mode,
         "language": language,
         "cloneEngine": clone_engine,
-        "voiceReference": _reference_summary(speaker_wav),
+        "voiceReference": reference_summary(speaker_wav),
         "emotion": {"dominant": (emotion or {}).get("dominant"), "intensity": (emotion or {}).get("intensity")} if emotion else None,
         "alignmentMethod": alignment_method,
         "durationSeconds": round(float(duration_seconds), 3),

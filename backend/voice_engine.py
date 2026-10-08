@@ -35,6 +35,7 @@ from audio_utils import validate_and_convert_for_cloning
 import alignment_engine
 import watermark_engine
 from alignment_engine import ForcedAligner
+import audit_log
 import gpu_utils
 import manifest
 import language_registry
@@ -109,14 +110,20 @@ def require_voice_consent(speaker_wav: str) -> None:
         )
     record = provenance.load(path)
     if record is None:
-        raise VoiceConsentRequired(
+        _refuse_voice(path, "no provenance record", VoiceConsentRequired(
             f"'{path.name}' has no provenance record, so it may not be cloned. "
             "Register it with scripts/make_reference.py --human FILE --speaker NAME "
             "--licence LICENCE --consent <basis>, or use --smoke for a synthetic test voice."
-        )
-    usable, reason = record.usability()
+        ))
+    usable, reason = record.usability()  # type: ignore[union-attr]
     if not usable:
-        raise VoiceConsentRequired(f"'{path.name}' may not be cloned: {reason}.")
+        _refuse_voice(path, reason, VoiceConsentRequired(f"'{path.name}' may not be cloned: {reason}."))
+
+
+def _refuse_voice(path: Path, reason: str, error: Exception) -> None:
+    """Write the refusal to the audit trail (by file hash, never by name), then raise it."""
+    audit_log.shared_audit().record("voice_refused", subject=manifest.sha256_file(path), basis=None, reason=reason, file=path.name)
+    raise error
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -815,6 +822,16 @@ class VoiceEngineRouter:
                 )
             except Exception as audit_err:  # noqa: BLE001 - auditing is advisory
                 logger.warning("Quality audit failed: %s", audit_err)
+
+        # A reference recording was used: that goes on the consent trail with the basis it was used under.
+        if model_key in REFERENCE_ENGINES and speaker_wav:
+            reference = manifest.reference_summary(speaker_wav)
+            if reference:
+                audit_log.shared_audit().record(
+                    "voice_use", subject=reference["sha256"], basis=reference["consentBasis"] or reference["source"],
+                    source=reference["source"], model=model_key, engine=clone_engine, language=language,
+                    audio_sha256=manifest.sha256_file(output_path),
+                )
 
         # How this clip was made, tied to its bytes: the render step copies it into the video's manifest.
         try:

@@ -48,8 +48,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+import audit_log
 import avatar_generator
 import live_engine
+import manifest
 import avatar_store
 import language_registry
 from generation_jobs import GenerationJobs
@@ -465,6 +467,10 @@ async def register_avatar_face(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(err)
         ) from err
+    audit_log.shared_audit().record(
+        "face_registered", subject=avatar_id, basis=consent_basis or None, source=provenance.HUMAN,
+        image_sha256=manifest.sha256_file(record.path),
+    )
     return AvatarRegisterResponse(
         avatar=AvatarFaceEntry.model_validate(record.to_dict()),
         quality=_quality_payload(report) if report is not None else None,
@@ -536,6 +542,10 @@ def generate_avatar_face(request: AvatarGenerateRequest) -> AvatarGenerateRespon
             overwrite=request.overwrite,
         )
         record = faces.get(request.avatar_id)
+        audit_log.shared_audit().record(
+            "face_generated", subject=request.avatar_id, basis="synthetic", seed=generated.seed,
+            generator=generated.model, image_sha256=manifest.sha256_file(record.path),
+        )
         return {
             "avatarId": request.avatar_id,
             "imageUrl": record.to_dict()["imageUrl"],
@@ -557,6 +567,25 @@ def get_avatar_generation(task_id: str) -> AvatarGenerateResponse:
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown generation task {task_id!r}")
     return AvatarGenerateResponse.model_validate(job)
+
+
+@app.get("/api/v1/audit")
+def get_audit_trail(event: Optional[str] = None, subject: Optional[str] = None, since: Optional[str] = None, limit: int = 100) -> dict:
+    """
+    The consent audit trail, newest first: every use of a voice or a face, and every refusal, with the
+    basis it happened under. Filter by ``event``, ``subject`` (an avatar id or a recording's hash) and
+    ``since`` (ISO time). Entries hold ids and hashes, never names.
+    """
+    if event and event not in audit_log.EVENTS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"unknown event {event!r}; one of {list(audit_log.EVENTS)}")
+    trail = audit_log.shared_audit()
+    return {"entries": trail.query(event=event, subject=subject, since=since, limit=limit), "head": trail.head(), "events": list(audit_log.EVENTS)}
+
+
+@app.get("/api/v1/audit/verify")
+def verify_audit_trail() -> dict:
+    """Recompute the hash chain: is the trail intact? Reports the first entry where it breaks."""
+    return audit_log.shared_audit().verify_chain()
 
 
 def _avatar_or_http(avatar_id: str, usable: bool = True):

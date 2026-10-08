@@ -506,6 +506,19 @@ class RenderWatermarkAndManifestTests(RenderCase):
         self.assertEqual(document["watermarks"]["video"]["applied"], False)    # the manifest does not claim a mark it lacks
         self.assertIsNone(document["models"]["videoWatermark"])
 
+    def test_a_render_writes_the_face_use_and_the_manifest_to_the_audit_trail(self):
+        from audit_log import AuditLog
+
+        log = AuditLog(":memory:")
+        with mock.patch("audit_log.shared_audit", return_value=log):
+            result = self.render()
+        (issued,) = log.query(event="manifest_issued")
+        (used,) = log.query(event="face_use")
+        self.assertEqual(issued["subject"], result.manifest["manifestId"])
+        self.assertEqual(issued["details"]["video_sha256"], result.manifest["videoSha256"])
+        self.assertEqual((used["subject"], used["basis"], used["details"]["manifest"]), ("demo", "synthetic", result.manifest["manifestId"]))
+        self.assertTrue(log.verify_chain()["valid"])
+
     def test_two_renders_never_share_a_manifest_id(self):
         first = self.render(jobId="A")
         second = self.render(jobId="B")

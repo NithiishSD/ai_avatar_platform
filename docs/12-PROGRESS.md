@@ -47,6 +47,7 @@ records what was verified live, with the real command and result.
 | T4.3 | Done | (this commit) |
 | **M4 gate** | **Passed 8 Oct** (= roadmap Gate 4): `check.sh` 671 tests green, `npx playwright test` 13 passed, `npm run build` clean; N-07 met as defined (first audio → first frame 1.4–1.8 ms), text → first audio ~0.43 s warm | |
 | T5.2 | **Built and unit-tested; live robustness sweep and a person's look (M-07) still to do** | (this commit) |
+| T5.4 | Done | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
@@ -1081,3 +1082,21 @@ Verified:
 
 Not done: the robustness sweep over many clips and transforms for video (as for audio), live-session frames are **not** watermarked (each is a
 JPEG pushed to a socket; stated, not claimed), a person looking for visible artefacts (M-07), the verify endpoint (T5.3), the audit trail (T5.4).
+
+### 2026-10-08 — T5.4 consent audit trail
+
+`backend/audit_log.py`: an append-only SQLite table (same file as the job store) in which every row stores the hash of the
+row before it and its own hash (a chain), so an edited row, a deleted row or a reorder is found by `verify_chain` at the first
+broken link. Events: `voice_use`, `voice_refused`, `face_use`, `face_refused`, `face_registered`, `face_generated`,
+`audio_supplied` (reserved for T8.2), `manifest_issued`. Entries hold ids, hashes, the basis, the request id, the engine, never a
+name (a test checks). Hooks: cloning (use, with the reference's hash and basis; refusals by file hash with the reason), every
+render (`face_use` + `manifest_issued`, which is what lets a watermark's id be traced), live sessions, photo registration, face
+generation, avatar refusals. `GET /api/v1/audit` and `GET /api/v1/audit/verify`.
+
+**Stated limit:** a hash chain cannot show that the *newest* rows were deleted (nothing follows them to break); the head hash is
+what to keep elsewhere, and a test pins this behaviour instead of pretending otherwise. Someone with write access to the file can
+also rewrite the whole chain.
+
+Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, 762 tests OK (24 new); four plants each caught (hash ignoring the details,
+no missing-row check, refusals not recorded, no `face_use` on render). Not done: a live look at the trail after a real clone and
+render through the server (the entries are asserted in unit tests; T5.3's live run will read them back).

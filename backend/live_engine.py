@@ -43,7 +43,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import numpy as np
 
-from avatar_store import AvatarStore
+import audit_log
+from avatar_store import AvatarConsentError, AvatarStore
 from face_animation import AnimationTrack, build_animation, seed_from_job_id, speech_energy_envelope
 from face_engine import FACE_ENGINE_LOCK, shared_face_engine
 from face_warp import PortraitAnimator
@@ -173,7 +174,16 @@ class LiveSession:
 
         import video_io
 
-        image = self.store.load_image(self.avatar_id)  # raises if consent is missing
+        try:
+            image = self.store.load_image(self.avatar_id)  # raises if consent is missing
+        except AvatarConsentError as err:
+            audit_log.shared_audit().record("face_refused", subject=self.avatar_id, basis=None, reason=str(err), live=True)
+            raise
+        provenance_record = self.store.get(self.avatar_id).provenance
+        audit_log.shared_audit().record(
+            "face_use", subject=self.avatar_id, basis=str(provenance_record.get("consentBasis") or provenance_record.get("source") or ""),
+            source=provenance_record.get("source"), live=True, session=self.session_id,
+        )
         width, height = video_io.fit_within(image.shape[1], image.shape[0], self.max_side, self.max_side)
         if (width, height) != (image.shape[1], image.shape[0]):
             image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
