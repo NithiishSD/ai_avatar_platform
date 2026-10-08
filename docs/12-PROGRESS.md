@@ -51,7 +51,8 @@ records what was verified live, with the real command and result.
 | T5.3 | Done | caaf316 |
 | T6.6 | Measured on CPU (8 Oct): offset -4 not reproduced, N-06 **not met**, MOS 4.894; N-10 and the GPU timing wait on M-04; the 10+ language percentage is T8.4 | (this commit) |
 | T8.1 | Done | 5f7fc25 |
-| T8.10 | Done | (this commit) |
+| T8.10 | Done | 2cf36b4 |
+| T8.3 | Done | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
@@ -1191,3 +1192,15 @@ Verified: `scripts/check.sh` ruff clean, pyrefly 0 errors, **795 tests OK** (7 n
 render time mean 1.63 s, p95 6.84 s; after scoring one render `lipSyncScored` 1, LSE-C 4.928, offset 0.
 
 Not done: Prometheus-format output, time-windowed rates, speech-quality (MOS) scores in the report (audits are not stored per clip).
+
+### 2026-10-08 — T8.3 visual quality metrics (LPIPS, SFace identity)
+
+`backend/visual_metrics.py` + `scripts/measure_visual.py`. LPIPS (AlexNet) and SFace cosine similarity of sampled video frames against the source photo, with
+a different registered face as a negative control. SFace needs a detector's box and five points; the project has no YuNet, so the points come from the MediaPipe
+mesh (eye-corner midpoints, nose tip, mouth corners in the subject's-right-first order; a test pins the order).
+
+Live, CPU, 3 fresh renders (`render_avatar.py`, default background): LPIPS 0.065 / 0.080 / 0.045 (target < 0.1, met); identity 97.5% / 95.7% / 96.8%
+(target > 90%, met), different person 0.138 vs the 0.363 same-person threshold. `scripts/check.sh` ruff clean, pyrefly 0 errors, **803 tests OK** (8 new, 2 plants caught).
+
+Not claimed: real faces (rule 3 forbids fetching an identifiable person's photo; both faces here are synthetic); frames rendered with a changed background (the
+reference would differ, not handled); more than one negative-control pair; style-transfer identity numbers (T8.6 will use this module).
