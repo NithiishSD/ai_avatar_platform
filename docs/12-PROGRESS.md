@@ -1414,3 +1414,11 @@ Owner watched the GPU Wav2Lip render: mouth in sync with the words, no box or bl
 met, from M-11). Feedback: only the lips move. Checked in the code: Wav2Lip repaints the lip region and the warp deliberately leaves out jaw shapes underneath it;
 neither engine has any head motion (`face_animation.py` has no head pose track); expression is limited to blinks and brows unless an emotion is chosen.
 **New item I-01 (owner's request): jaw/cheek movement, more expression and natural head motion** — to build after the remaining manual checks.
+
+### 2026-10-08 — M-05 answered; Interrupt bug fixed
+
+Owner's live test: sync ok; **Interrupt stopped the picture but the audio played on** (the browser had the next chunks scheduled; only frames were cleared). Fixed in
+`LivePanel.jsx`: scheduled sources are tracked in a set, stopped on Interrupt, on the server's `interrupted` and on Stop; the panel exposes `data-playing`. E2E
+`live.spec.js` now waits for queued audio, interrupts, and requires `data-playing` 0 within 1 s. Verified against the running studio with a headless probe:
+2 queued chunks -> 0, `stop()` called twice. Microphone: same mouth shape for every word (loudness-only by design) -> I-02. Face looks still -> I-01 extended
+(visible blinks, small expressions, slight head and face motion). Owner also asked for a **UI redesign** (I-03): fewer settings, old development controls removed.

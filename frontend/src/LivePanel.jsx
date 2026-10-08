@@ -55,6 +55,11 @@ export default function LivePanel({ apiBase }) {
   const framesRef = useRef([]);        // decoded frames waiting for their time: {due, bitmap}
   const sayAtRef = useRef(0);
   const countersRef = useRef({ chunks: 0, frames: 0, audioBytes: 0, firstAudioMs: null, firstFrameMs: null });
+  // Every audio chunk already handed to Web Audio and not yet finished. A chunk is scheduled ahead of
+  // time, so stopping the server is not enough: Interrupt must also stop what is queued here, or the
+  // voice keeps talking after the picture has stopped (the owner's M-05 finding).
+  const sourcesRef = useRef(new Set());
+  const [playing, setPlaying] = useState(0);
   const [micBasis, setMicBasis] = useState("");
   const [micOn, setMicOn] = useState(false);
   const micRef = useRef(null);          // {stream, source, processor, sink, pending: Float32Array[]}
@@ -99,6 +104,12 @@ export default function LivePanel({ apiBase }) {
       const source = audio.createBufferSource();
       source.buffer = buf;
       source.connect(audio.destination);
+      sourcesRef.current.add(source);
+      source.onended = () => {
+        sourcesRef.current.delete(source);
+        setPlaying(sourcesRef.current.size);
+      };
+      setPlaying(sourcesRef.current.size);
       source.start(anchorRef.current + presentationMs / 1000);
       c.chunks += 1;
       c.audioBytes += payload.byteLength;
@@ -119,14 +130,26 @@ export default function LivePanel({ apiBase }) {
     publish();
   }, [publish]);
 
+  /* Silence everything already scheduled and forget the timeline, so the next utterance starts fresh. */
+  const silence = useCallback(() => {
+    for (const source of sourcesRef.current) {
+      try { source.stop(); } catch { /* never started or already ended */ }
+    }
+    sourcesRef.current.clear();
+    setPlaying(0);
+    framesRef.current = [];
+    anchorRef.current = 0;
+  }, []);
+
   const stop = useCallback(() => {
+    silence();
     const socket = socketRef.current;
     if (socket && socket.readyState === WebSocket.OPEN) {
       try { socket.send(JSON.stringify({ type: "stop" })); } catch { /* already closing */ }
     }
     socket?.close();
     socketRef.current = null;
-  }, []);
+  }, [silence]);
 
   /* Draw whichever decoded frame is due on the audio clock; one loop for the panel's life. */
   useEffect(() => {
@@ -189,7 +212,7 @@ export default function LivePanel({ apiBase }) {
         setStats((s) => ({ ...s, done: message }));
         setState("ready");
       } else if (message.type === "interrupted") {
-        framesRef.current = [];
+        silence();
         setState("ready");
       } else if (message.type === "error") {
         setError(`${message.code}: ${message.detail}`);
@@ -216,7 +239,7 @@ export default function LivePanel({ apiBase }) {
 
   const interrupt = () => {
     socketRef.current?.send(JSON.stringify({ type: "interrupt" }));
-    framesRef.current = [];
+    silence(); // at once, not when the server's reply arrives
   };
 
   /* Send the samples gathered so far as one PCM16 binary message. */
@@ -288,7 +311,7 @@ export default function LivePanel({ apiBase }) {
   const live = state === "ready" || state === "speaking";
 
   return (
-    <div id="live-panel" data-state={state} data-chunks={stats.chunks} data-frames={stats.frames}>
+    <div id="live-panel" data-state={state} data-chunks={stats.chunks} data-frames={stats.frames} data-playing={playing}>
       <h2 style={{ marginTop: "1.5rem" }}>Live Avatar</h2>
       <div style={card}>
         <label style={small}>

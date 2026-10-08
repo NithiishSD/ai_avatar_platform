@@ -67,7 +67,11 @@ test("interrupt stops the speech and the session stays usable; stop ends it", as
   const panel = page.locator("#live-panel");
   await expect.poll(async () => Number(await panel.getAttribute("data-frames")), { timeout: 60_000 }).toBeGreaterThan(5);
 
+  // Audio for the coming sentences is already queued in the browser: Interrupt must stop it too,
+  // not just the picture (the owner heard the voice carry on, M-05).
+  await expect.poll(async () => Number(await panel.getAttribute("data-playing")), { timeout: 30_000 }).toBeGreaterThan(0);
   await page.locator("#live-interrupt").click();
+  await expect(panel).toHaveAttribute("data-playing", "0", { timeout: 1_000 });
   await expect(panel).toHaveAttribute("data-state", "ready", { timeout: 20_000 });
   await page.waitForTimeout(500); // anything already on the wire lands
   const settled = Number(await panel.getAttribute("data-frames"));
