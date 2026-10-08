@@ -174,8 +174,12 @@ Grouped by theme. Each entry: what was seen, the cause, the fix, and how it was 
 7. **The requirements PDF is unreadable.** Every byte above 0x7F was replaced with
    the UTF-8 replacement character (61,512 of them); all 132 compressed streams fail
    to inflate. It was moved through a text-mode transfer. The roadmap PDF is intact.
-   Consequence: thresholds from the problem statement exist only as a transcription,
-   and the project says so wherever it cites one (`Q-04`).
+   Consequence: for most of the build the problem statement's thresholds existed only as a
+   transcription. **On 8 Oct the owner supplied an intact copy; reading it showed the
+   transcription had mis-recorded several targets** (cloning similarity is 85% *and* 90% as tiers,
+   initiation is < 2 s, premium MOS is > 4.0, streaming latency < 100 ms) **and that the PS asks for things
+   never planned** (audio-driven avatars, batch API, style transfer, super-resolution, LPIPS and identity
+   metrics). `02-REQUIREMENTS.md` lists every difference; M8 in `07-TASKS.md` covers them.
 
 ### 5.3 The pinned-versions trap
 
@@ -390,8 +394,9 @@ Kept here because they taught as much as the bugs in the code.
 - **Docker** (T7.2), the line-by-line **code documentation** and code guide (T7.4), the
   **README** (T7.6), the benchmark re-run including the unexplained −4 frame offset
   (T6.6), and the **final verification** of every definition-of-done item (T7.7).
-- The **problem-statement PDF** must be re-exported or its text pasted; until then its
-  thresholds are the transcribed ones.
+- **Gaps against the real problem statement** (M8): audio + image to video, streaming audio input, batch API, style
+  transfer, super-resolution (1080p+), 50+ customization parameters, LPIPS and identity metrics, 10+ language lip sync,
+  deepfake detection. See `02-REQUIREMENTS.md`.
 - Not measured anywhere: Celery + Redis in a real deployment, several live sessions at
   once, Wav2Lip live, anything on a GPU, a person using the live avatar (M-05).
 

@@ -7,8 +7,8 @@ named. Reported in the final summary.
 |---|---|---|---|
 | Q-01 | Is there target hardware (RTX 4090 / A100) for the final-gate numbers, or are the 6 GB host results the ones that count? | N-06, N-07, N-08, N-10 as "met" | Measure on what exists, report not met where not met |
 | Q-02 | What does "> 95% lip sync accuracy" mean as a measurement? | N-05 as "met" | D-12 |
-| Q-03 | Cloning similarity target: 85% (problem statement) or 90% (roadmap)? | N-02 wording | Report against both |
-| Q-04 | Intact copy of the problem-statement PDF. **8 Oct: the owner said the file in `docs/` (`4895e15d-…_AI_Avatar_Creation_Platform_using_Open_Source_Tech.pdf`, 441,090 bytes, made by headless Chrome 20 Aug 2025) is the only copy. It is unrecoverable:** 61,512 UTF-8 replacement characters (`EF BF BD`), 44% of bytes non-ASCII, all 132 compressed streams fail to inflate, so it was read as text at some point and every byte above 0x7F was destroyed. Needed: the original source page re-exported as a PDF, or the text pasted into the chat | confirming every PS threshold (R-01, R-03, R-22, N-01 to N-04 cite PS) | Use the transcribed thresholds |
+| Q-03 | ~~Cloning similarity target: 85% or 90%?~~ **Resolved 8 Oct from the intact PDF: both: > 85% at Milestone 1, > 90% as the final target.** | — | Report against both (done) |
+| Q-04 | ~~Intact copy of the problem-statement PDF~~ **Resolved 8 Oct: the owner replaced `docs/4895e15d-…pdf` with an intact 20-page copy; read in full and reconciled in `02-REQUIREMENTS.md`** | — | — |
 | Q-05 | A consented human face for demo evidence (photo of a team member with written consent, or a licensed stock photo with a model release) | admissible face evidence | Synthetic `demo` face: usable, never evidence |
 | Q-06 | ~~m1 tracking CLAUDE.md~~ resolved: intended (D-01). Still open: 6 older `main` commits use `feat:`/`fix:` prefixes, and `00bffa1` on `m1` has a co-author trailer. Rewrite either, or leave? | nothing (main has no assistant wording) | Leave; never rewrite pushed history without the owner |
 | Q-07 | Uptime > 99.5% needs a deployed environment. Is there one? | N-11 | Not measured |

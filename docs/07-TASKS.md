@@ -106,3 +106,26 @@ _Status 8 Oct: demonstrated end to end via the API with OpenVoice V2 + Wav2Lip (
 | T7.5 | Placeholder sweep | No TODO/FIXME/XXX/placeholder in tracked code | DoD 12 |
 | T7.6 | README | setup, run, test, deploy | DoD 15 |
 | T7.7 | Final verification | every DoD item run and reported | all |
+
+## M8 — Gaps found by reading the real problem statement (8 Oct 2026)
+
+The intact PDF arrived late in the build; these are what it asks for that M0–M7 did not cover
+(see `02-REQUIREMENTS.md`, "Problem statement, reconciled"). Ordered by what the PS's evaluation
+weights favour (integration 30%, avatar creation 25%, real-time 25%, ethics 20%), cheapest first.
+
+| ID | Task | Acceptance | Covers |
+|---|---|---|---|
+| T8.1 | Batch API | `POST /api/v1/avatar/render-batch` queues N render jobs (cap stated), returns a batch id and per-job ids; `GET` shows each job's state; one bad job does not reject the others; tests incl. concurrency; live with 10 jobs | R-42, N-08 |
+| T8.2 | Audio + image to video (voice-to-avatar) | upload an audio file with a consent basis; the server transcribes it (open ASR) unless a transcript is given, aligns it, renders; the manifest says the audio was supplied, not generated; UI path; unit + live + E2E | R-40 |
+| T8.3 | Visual quality metrics | LPIPS and SFace identity similarity of rendered frames against the source photo, recorded per render and by a script; results against N-12 and N-13 | N-12, N-13 |
+| T8.4 | Lip sync over 10+ languages + the percentage | SyncNet on 10+ languages (MMS-TTS checkpoints fetched), the D-12 "% of 1-second windows within ±1 frame", 30 s render wall-clock | N-05, N-18, N-20 |
+| T8.5 | Streaming audio input to the live avatar | a live session accepts PCM chunks and animates from them, labelled as audio-driven (estimated mouth), not phoneme-aligned; tests; live | R-41 |
+| T8.6 | Style transfer | `style` option (realistic, cartoon, painting, ...) via Stable Diffusion img2img on an avatar; identity similarity (T8.3) reported with each style; derived avatars inherit consent | R-43 |
+| T8.7 | Customization breadth | a documented parameter schema and API, honest count of working parameters vs the PS's 50+ | N-15 |
+| T8.8 | Super-resolution | decide and, if feasible on this hardware, add Real-ESRGAN for 1080p+; otherwise record why not | R-44, N-16 |
+| T8.9 | Abuse prevention and detection | document and test the layers that exist; add a similarity-anomaly alert; state plainly that detecting *others'* deepfakes is not built | R-46 |
+| T8.10 | Monitoring | `GET /api/v1/metrics` (queue depth, job timings, quality scores); test; live | R-51 |
+
+Not planned, with the reason in `11-DECISIONS.md`: custom voice training/fine-tuning (R-45, CPU-infeasible), WebRTC (R-48), user studies
+and native-speaker validation (R-53).
+

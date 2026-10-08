@@ -66,3 +66,31 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | N-09 | 8 Oct, `jitter_metric.py` (static anchor landmarks per frame, % of inter-ocular distance): `demo` blendshape render mean **0.278%**, p95 0.758%, max 0.963% (target < 2%); negative control through the real detector: still photo 0.0%, 5 px shake 3.59%. Unit: `test_jitter_metric.py` | measured — met (upper bound, see method); also Wav2Lip 8 Oct: mean 0.354%, p95 0.834%, max 1.093% |
 | N-10 | not measurable here (no CUDA in sandbox); host measurement requested (M-04) | gap |
 | N-11 | needs a deployment (Q-07) | gap |
+
+### Added from the real problem statement (8 Oct 2026)
+
+| ID | Test / measurement | Status |
+|---|---|---|
+| R-40 | T8.2 | gap |
+| R-41 | T8.5 | gap |
+| R-42 | T8.1 | gap |
+| R-43 | T8.6 | gap |
+| R-44 | T8.8 | gap |
+| R-45 | not planned (CPU-infeasible), D-50 | not built |
+| R-46 | consent, rate limit, watermark, manifest exist; T8.9 adds the rest | partial |
+| R-47 | emotion, speed, pitch only | partial |
+| R-48 | WebSocket used instead, D-46 | not built |
+| R-51 | T8.10 | gap |
+| R-52 | docs 01-15 exist; README and contribution guide T7.6 | partial |
+| R-53 | cannot be done from here | not possible |
+| N-12 | LPIPS < 0.1: T8.3 | gap |
+| N-13 | identity > 90%: T8.3 | gap |
+| N-14 | photo to avatar < 20 s / < 10 s: registration ~2 s, generation 141 s (CPU) | partly measured |
+| N-15 | 50+ parameters: 4 face attributes + background colour | **not met** |
+| N-16 | 1080p+: renders are capped at the photo's size | **not met** |
+| N-17 | TTS < 2 s per 30 s of audio: T8.4 | gap |
+| N-18 | 20+ languages: speech 1,077; lip sync scored on 3 (T8.4) | partial |
+| N-19 | streaming < 100 ms: text to first audio 425-461 ms warm (CPU) | **not met** |
+| N-20 | < 5 s for a 30 s avatar video: T8.4 | gap; **not met on CPU with the marks on** |
+| N-21 | temporal consistency > 95%: jitter 0.28-0.35% (N-09), no 95% definition | measured, undefined |
+
