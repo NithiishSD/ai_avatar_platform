@@ -250,27 +250,38 @@ def resolve_audio_path(raw: str) -> Path:
     """
     Resolve a caller-supplied audio path to a file inside the project.
 
-    Absolute paths are honoured; relative ones are tried against the project
-    root, ``outputs/`` and ``inputs/``. Anything that resolves outside those
-    three roots is rejected, so a path like ``../../etc/passwd`` cannot be used
-    to read arbitrary files through the audit endpoints.
+    Relative paths are looked up under the project root, ``outputs/`` and
+    ``inputs/`` (so ``outputs/speech.wav`` and ``speech.wav`` both work), but
+    whatever they resolve to must lie inside ``inputs/`` or ``outputs/``. The
+    project root itself is NOT an allowed location: it holds ``.env``, the
+    source and the docs, and naming one of those would at best turn the audit
+    endpoints into a file-existence probe. ``../../etc/passwd`` is rejected the
+    same way.
     """
     candidate = Path(raw)
-    roots = (project_root, outputs_dir, inputs_dir)
+    lookup_roots = (project_root, outputs_dir, inputs_dir)
+    roots = (outputs_dir, inputs_dir)
+
+    def allowed(path: Path) -> bool:
+        try:
+            return any(root.resolve() in path.resolve().parents for root in roots)
+        except (ValueError, OSError):  # e.g. an embedded NUL byte
+            return False
+
     if not candidate.is_absolute():
-        for root in roots:
-            option = (root / raw)
-            if option.exists():
+        # Only a lookup that lands inside inputs/ or outputs/ counts. A name
+        # that exists elsewhere in the project (".env") is skipped, so it gets
+        # the same "not found" as a name that exists nowhere.
+        for root in lookup_roots:
+            option = root / raw
+            if allowed(option) and option.exists():
                 candidate = option
                 break
         else:
-            candidate = project_root / raw
+            candidate = outputs_dir / raw
 
     resolved = candidate.resolve()
-    if not any(
-        resolved == root.resolve() or root.resolve() in resolved.parents
-        for root in roots
-    ):
+    if not any(root.resolve() in resolved.parents for root in roots):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="audio path must be inside the project inputs/ or outputs/ folder",
@@ -281,6 +292,57 @@ def resolve_audio_path(raw: str) -> Path:
             detail=f"audio file not found: {raw}",
         )
     return resolved
+
+
+def resolve_voice_reference(raw: str) -> Path:
+    """
+    A cloning reference named by the caller: a file inside ``inputs/``, or a 400.
+
+    "Outside inputs/" and "does not exist" get the *same* answer. Before this,
+    ``speakerWav=/etc/passwd`` answered 403 (it exists, it has no provenance
+    record) while a missing path answered 400, which let any caller test which
+    files exist anywhere on the host.
+    """
+    refusal = HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="speakerWav must be a recording inside the inputs/ folder. Pick one from GET /api/v1/audio/samples.",
+    )
+    candidate = Path(raw)
+    try:
+        resolved = (candidate if candidate.is_absolute() else inputs_dir / raw).resolve()
+    except (ValueError, OSError) as err:  # e.g. an embedded NUL byte
+        raise refusal from err
+    if inputs_dir.resolve() not in resolved.parents or not resolved.is_file():
+        raise refusal
+    return resolved
+
+
+def _scrub(text: str) -> str:
+    """Take server file-system locations out of an error message before a client sees it."""
+    for location, label in ((str(project_root), "<project>"), (str(Path.home()), "~")):
+        text = text.replace(location, label)
+    return text
+
+
+def _audio_failure(what: str, err: Exception) -> HTTPException:
+    """
+    The response for an audio operation that raised.
+
+    A file that is not audio is the caller's problem (422); anything else is
+    ours (500), logged in full under the request id. Neither echoes a server path.
+    """
+    import soundfile as sf
+
+    if isinstance(err, sf.LibsndfileError):
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_scrub(f"{what}: the file is not audio this server can read ({err})"),
+        )
+    logger.exception("%s failed", what)
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=_scrub(f"{what} failed: {err}"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -686,10 +748,7 @@ def align_audio(request: AlignmentRequest) -> AlignmentResponse:
     except FileNotFoundError as err:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(err)) from err
     except Exception as err:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Alignment failed: {str(err)}",
-        ) from err
+        raise _audio_failure("Alignment", err) from err
 
 
 def _job_response(task_id: str, task_status: str, result: dict) -> SynthesisJobResponse:
@@ -719,6 +778,9 @@ def create_synthesis_job(request: AudioSynthesisRequest) -> SynthesisJobResponse
     # the fetch command now, not a queued job that fails (or downloads
     # gigabytes) later, and an unsupported language is a 400 the caller can fix.
     router = get_router()
+    if request.speaker_wav:
+        # Resolved (and confined to inputs/) before anything else looks at it.
+        request = request.model_copy(update={"speaker_wav": str(resolve_voice_reference(request.speaker_wav))})
     try:
         model_key = router.select_model(
             mode=request.mode.value,
@@ -825,10 +887,7 @@ def audit_quality(request: QualityAuditRequest) -> QualityAuditResponse:
     try:
         report = quality_auditor.audit(audio_path, reference_path=reference)
     except Exception as err:  # noqa: BLE001
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Quality audit failed: {err}",
-        ) from err
+        raise _audio_failure("Quality audit", err) from err
     return QualityAuditResponse(audioPath=str(audio_path), report=report.to_dict())
 
 
@@ -849,8 +908,5 @@ def voice_similarity(request: VoiceSimilarityRequest) -> VoiceSimilarityResponse
     try:
         report = quality_auditor.speaker_similarity(reference, generated)
     except Exception as err:  # noqa: BLE001
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Similarity scoring failed: {err}",
-        ) from err
+        raise _audio_failure("Similarity scoring", err) from err
     return VoiceSimilarityResponse(report=report.to_dict())

@@ -156,9 +156,23 @@ class TokenBucketLimiter:
         # identity -> (tokens_remaining, timestamp_of_last_update). A tuple
         # rather than an object: two floats per identity keeps this cheap even
         # with many clients. Unbounded, which is the memory caveat - an
-        # attacker rotating IPs grows this dict (Phase 5's Redis bucket fixes it).
+        # attacker rotating IPs grows this dict, so it is pruned past MAX_BUCKETS.
         self._buckets: Dict[str, Tuple[float, float]] = {}
         self._lock = threading.Lock()
+
+    # Past this many identities, buckets that have refilled completely are
+    # dropped: a full bucket is exactly what a new identity starts with, so
+    # forgetting it changes no decision.
+    MAX_BUCKETS = 10_000
+
+    def _prune(self, now: float) -> None:
+        if len(self._buckets) <= self.MAX_BUCKETS:
+            return
+        self._buckets = {
+            identity: (tokens, last)
+            for identity, (tokens, last) in self._buckets.items()
+            if tokens + (now - last) * self.rate < self.capacity
+        }
 
     def check(self, identity: str, now: Optional[float] = None) -> Tuple[bool, float]:
         """Return (allowed, retry_after_seconds)."""
@@ -170,6 +184,7 @@ class TokenBucketLimiter:
         # The whole read-modify-write must be atomic: two threads could
         # otherwise both read the last token and both be allowed through.
         with self._lock:
+            self._prune(now)
             # An unseen identity starts full, so a first request is never
             # throttled. `now` as the default timestamp means its first refill
             # calculation adds nothing rather than a huge backdated credit.
@@ -300,8 +315,13 @@ class SecurityGate:
             }
 
         if self.config.rate_limit_enabled:
+            # The presented key only names a bucket when auth is on, i.e. when
+            # it has been verified above. With auth off it is whatever the
+            # client typed: honouring it let a caller send a fresh random
+            # X-API-Key on every request, get a fresh bucket each time, and
+            # never be limited (200 of 200 requests allowed, measured).
             allowed, retry_after = self.limiter.check(
-                self.identity(api_key, client_host)
+                self.identity(api_key if self.config.auth_enabled else None, client_host)
             )
             if not allowed:
                 return False, 429, {

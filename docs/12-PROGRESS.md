@@ -40,10 +40,10 @@ records what was verified live, with the real command and result.
 | **M3 gate** | **Passed 8 Oct** (= roadmap Gate 3): `check.sh` 620 tests green, `npx playwright test` 11 passed, `npm run build` clean. Targets inside it: N-02 not met (62.0% English, 43–49% cross-lingual), N-09 met | |
 | T6.3 | Done | (this commit) |
 | T6.4 | Done | (this commit) |
-| T6.5 | Next | |
+| T6.5 | Done — 6 findings fixed (09-SECURITY.md); S-16 and S-18 open | (this commit) |
+| T4.1 | Next | |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
-T6.5 security review ->
 M4 live: T4.1 streaming TTS (`WS /api/v1/live`) -> T4.2 live frames -> T4.3 live UI + E2E -> T4.4 latency ->
 M5: T5.1 audio watermark -> T5.2 video watermark + signed manifest -> T5.3 verify endpoint -> T5.4 audit trail ->
 T6.6 re-run benchmarks (incl. the unexplained blendshape offset -4, see the T7.1 entry) ->
@@ -919,3 +919,22 @@ repeats of used ids: 202 ×60, 409 ×12, all 60 COMPLETED, none failed or lost, 
 all submitted in 0.22 s, drained in 18.8 s (191 jobs/min on ~1.2 s clips; renders run one at a
 time by design). **N-08 met on the in-process queue.** Not run: Celery + Redis (no Redis here),
 so the Redis `SET NX` uniqueness path is covered by the existing fake-Redis unit tests only.
+
+### 2026-10-08 — T6.5 security review
+
+Every control in `09-SECURITY.md` was checked against the code and, where it could be attacked,
+probed against the real app (traversal, SSRF, oracle, upload, CORS, auth ordering, limiter).
+Six findings, all reproduced first and fixed: F1 audio paths could name any project file; F2
+**the rate limiter was bypassable with a rotating `X-API-Key` when auth is off (default): 200 of
+200 allowed, measured; now 30 of 200 live, same as a client with no key**; F3 absolute paths in
+500 bodies; F4 `speakerWav` existence oracle; F5 missing API-level tests; F6 dev Redis/Postgres on
+all interfaces. Details and verification in `09-SECURITY.md`; D-45.
+
+Verified: `check.sh` ruff clean, pyrefly 0 errors, **643 tests OK** (18 new: `test_security_probes.py`,
+`RateLimitIdentityTests`). Plants, each fails the new tests and is restored: project root allowed
+again (2 fail), `speakerWav` confinement removed (1 fail), `identity` using the client key again (1 fail).
+Live: real server, default limiter, 200 requests with a new random key each → 30×200 + 170×429;
+200 with no key → the same. `docker compose config` shows `host_ip: 127.0.0.1` for both ports.
+Existing tests that used temp-folder voices now patch `app.inputs_dir` (the old behaviour was the bug).
+
+Not done: S-16 (Dockerfile does not exist, T7.2), S-18 (M5); the limiter is per process.

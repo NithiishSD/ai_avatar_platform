@@ -157,6 +157,7 @@ class RenderJobApiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             request = {"text": "Hello", "mode": "clone", "speakerWav": reference(tmp, "unknown.wav")}
             with patch("app.synthesize_audio.delay") as delay, \
+                 patch("app.inputs_dir", Path(tmp)), \
                  patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
                 response = self.client.post("/api/v1/audio/synthesize", json=request)
         self.assertEqual(response.status_code, 403)
@@ -172,6 +173,7 @@ class RenderJobApiTests(unittest.TestCase):
                             licence="public domain", consent_basis="open-licence")
             request = {"text": "Hello", "mode": "clone", "speakerWav": wav}
             with patch("app.synthesize_audio.delay", return_value=fake_task) as delay, \
+                 patch("app.inputs_dir", Path(tmp)), \
                  patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
                 response = self.client.post("/api/v1/audio/synthesize", json=request)
         self.assertEqual(response.status_code, 202)
@@ -186,6 +188,7 @@ class RenderJobApiTests(unittest.TestCase):
                             licence="public domain", consent_basis="open-licence")
             request = {"text": "Hello", "mode": "clone", "speakerWav": wav, "cloneEngine": "openvoice-v2"}
             with patch("app.synthesize_audio.delay", return_value=fake_task) as delay, \
+                 patch("app.inputs_dir", Path(tmp)), \
                  patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
                 response = self.client.post("/api/v1/audio/synthesize", json=request)
         self.assertEqual(response.status_code, 202)
