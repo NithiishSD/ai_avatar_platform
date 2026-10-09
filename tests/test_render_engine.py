@@ -265,11 +265,12 @@ class RenderJobTests(RenderCase):
         self.assertEqual(len(seen["face_box"]), 4)
         self.assertFalse(warp.call_args.kwargs["include_mouth"])
 
-    def fake_sadtalker(self, frames=20, size=512, device="cuda"):
-        """Replace the SadTalker child with one that writes a real 25 fps MP4 of grey frames."""
+    def fake_sadtalker(self, frames=20, size=64, device="cuda"):
+        """Replace the SadTalker child with one that writes a real 25 fps MP4 of grey frames, and the
+        Real-ESRGAN sharpener with a 4x pixel repeat, so no model is loaded."""
         import sadtalker_engine
 
-        calls = {}
+        calls = {"upscaled": 0}
 
         def render(image, audio_path, pose_style, still):
             calls.update(shape=image.shape, pose_style=pose_style, still=still)
@@ -281,6 +282,16 @@ class RenderJobTests(RenderCase):
                     writer.write(np.full((size, size, 3), 128, dtype=np.uint8))
             return sadtalker_engine.SadTalkerResult(path, device, 2345 if device == "cuda" else None, 1.0)
 
+        class FakeResolver:
+            available = True
+
+            def upscale(self, frame):
+                calls["upscaled"] += 1
+                return np.repeat(np.repeat(frame, 4, axis=0), 4, axis=1)
+
+        patcher = mock.patch("render_engine._frame_resolver", return_value=FakeResolver())
+        patcher.start()
+        self.addCleanup(patcher.stop)
         return calls, render
 
     def test_sadtalker_frames_replace_the_warp_and_report_themselves(self):
@@ -300,20 +311,29 @@ class RenderJobTests(RenderCase):
         self.assertEqual(result.blink_count, 0)
         self.assertEqual(calls["shape"], (512, 512, 3))
         self.assertFalse(calls["still"])
+        self.assertEqual(calls["upscaled"], 20)  # every SadTalker frame is sharpened
         self.assertFalse((self.tmp / "st").exists())  # the child's folder is cleaned up
 
     def test_sadtalker_still_mode_and_honest_warnings(self):
         self.wav(1.0)
-        calls, render = self.fake_sadtalker(frames=25, size=256, device="cpu")
+        calls, render = self.fake_sadtalker(frames=25, device="cpu")
         job = self.job(motionIntensity=0.0, emotionVector={"happy": 0.0, "neutral": 0.5, "eyeblinkRate": 1.0, "joy": 0.8})
         with mock.patch("sadtalker_engine.missing", return_value=[]), mock.patch("sadtalker_engine.render", side_effect=render):
             result = render_engine.render_job(job, engine="sadtalker", store=self.store)
         self.assertTrue(calls["still"])
-        # A 256 px video is resized to the job's 512 px frame, not passed through at the wrong size.
+        # SadTalker's small frames are scaled to the job's 512 px frame, not passed through at the wrong size.
         self.assertEqual((result.width, result.height), (512, 512))
         text = " ".join(result.warnings)
         self.assertIn("no emotion input", text)
         self.assertIn("ran on the cpu", text)
+
+    def test_sadtalker_without_real_esrgan_says_the_frames_were_not_sharpened(self):
+        self.wav(1.0)
+        _, render = self.fake_sadtalker(frames=25)
+        with mock.patch("sadtalker_engine.missing", return_value=[]), mock.patch("sadtalker_engine.render", side_effect=render), \
+             mock.patch("render_engine._frame_resolver", return_value=mock.Mock(available=False)):
+            result = render_engine.render_job(self.job(), engine="sadtalker", store=self.store)
+        self.assertIn("without sharpening", " ".join(result.warnings))
 
     def test_failed_render_leaves_no_partial_file(self):
         self.wav(1.0)

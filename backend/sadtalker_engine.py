@@ -20,16 +20,25 @@ the audio (ExpNet for the mouth and cheeks, PoseVAE for the head), and then a fa
 (some nod more, some sway). We pick one per job from the job id, so a re-render is the same video and
 different jobs do not all move alike.
 
-**Full-frame paste-back.** SadTalker animates a 256x256 crop around the face. In ``full`` mode it
-pastes each animated crop back into the original photo, so the output has the photo's size and
-background. Head motion therefore happens inside the crop; the shoulders and background stay still.
+**Whole-picture animation (``resize`` mode).** SadTalker can either animate a crop around the face
+and paste it back into the still photo (``full``), or animate the whole picture shrunk to 256x256
+(``resize``). The first version used ``full``; the owner watched it (M-12) and saw the shoulders
+and the outer hair stand still while the head moved, with the crop's edge out of step with the
+face. In ``resize`` mode the face renderer moves everything it sees together (head, hair, neck,
+shoulders), as in the head-and-shoulders videos it was trained on, so there is no paste-back edge.
+Measured on ``demo``: movement in the bottom (shoulder) band 24.8 grey levels vs 20.4 with ``full``,
+background corners 0.9 vs 2.2.
 
-**Padding.** SadTalker crops generously around the face and pastes the animated crop back with
-OpenCV's ``seamlessClone``, which refuses a crop that reaches past the image edge. A close portrait
-(the face filling the frame, like ``demo``) always does. So the photo is padded on every side with
-its own edge pixels repeated outward before SadTalker sees it (repeated, not mirrored: a mirrored
-border could contain a mirrored half-face for the detector to find), and every output frame is cut
-back to the original area (``SadTalkerResult.pad``).
+**Square padding.** ``resize`` squeezes any picture into a square, which would distort a portrait or
+landscape photo's face. So the photo is first padded to a square with its own edge pixels repeated
+outward (repeated, not mirrored: a mirrored border could contain a mirrored half-face for the
+detector to find), and the caller cuts each frame back to the photo's area (``SadTalkerResult.box``).
+A photo whose face is small in a large frame comes out soft, because the whole square is animated at
+256 px.
+
+**Sharpening.** The 256 px frames are enlarged by Real-ESRGAN in the render engine
+(``render_engine._sadtalker_frames``), which restores most of the photo's sharpness (Laplacian
+variance 91 vs the photo's 103 and plain resizing's 18 on ``demo``) at ~36 ms a frame on the GPU.
 
 **Why a separate process.** SadTalker is run as ``python sadtalker_engine.py --child ...`` instead of
 being imported into the API server, for three reasons:
@@ -89,10 +98,11 @@ SADTALKER_FILES: Dict[str, Tuple[str, str, int]] = {
     "checkpoints/SadTalker_V0.0.2_256.safetensors": (
         f"{_RELEASE}/SadTalker_V0.0.2_256.safetensors",
         "c211f5d6de003516bf1bbda9f47049a4c9c99133b1ab565c6961e5af16477bff", 725_066_984),
-    # The mapping net turns coefficients into the renderer's motion; full mode uses 00109.
-    "checkpoints/mapping_00109-model.pth.tar": (
-        f"{_RELEASE}/mapping_00109-model.pth.tar",
-        "84a8642468a3fcfdd9ab6be955267043116c2bec2284686a5262f1eaf017f64c", 155_779_231),
+    # The mapping net turns coefficients into the renderer's motion; ``resize`` mode uses 00229
+    # (00109 belongs to ``full`` mode, which is not used).
+    "checkpoints/mapping_00229-model.pth.tar": (
+        f"{_RELEASE}/mapping_00229-model.pth.tar",
+        "62a1e06006cc963220f6477438518ed86e9788226c62ae382ddc42fbcefb83f1", 155_521_183),
     # Face detector (RetinaFace) and 98-point landmark model used to crop and align the photo.
     "gfpgan/weights/detection_Resnet50_Final.pth": (
         f"{_FACEXLIB}/detection_Resnet50_Final.pth",
@@ -145,8 +155,9 @@ class SadTalkerResult:
     device: str                 # "cuda" or "cpu", as the child reported it
     peak_vram_mb: Optional[int]  # the child's own peak (None on CPU)
     seconds: float
-    # Pixels of padding added on every side; frame[pad:pad + h, pad:pad + w] is the original area.
-    pad: int = 0
+    # Where the photo sits in the padded square, as fractions of the square's side:
+    # (top, left, height, width). Fractions, because the frames come back at 256 px, not the photo's size.
+    box: Tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
 
 
 def missing() -> List[str]:
@@ -197,12 +208,16 @@ def render(image_rgb: np.ndarray, audio_path: Path, pose_style: int, still: bool
 
     work = Path(tempfile.mkdtemp(prefix="sadtalker-"))
     source = work / "source.png"
-    # Half the longer side on every side: SadTalker's crop is about twice the face box, so even a
-    # face that fills the frame fits. Even, so the padded size stays even for the H.264 encoder.
-    pad = (max(image_rgb.shape[:2]) // 2) & ~1
-    padded = cv2.copyMakeBorder(image_rgb, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
+    # Pad the short side so the photo is centred in a square (see "Square padding" above).
+    # ponytail: the whole square is animated at 256 px, so a small face in a wide or full-body photo
+    # comes out soft; crop a head-and-shoulders square around the face and paste it back if such
+    # photos become common.
+    height, width = image_rgb.shape[:2]
+    side = max(height, width)
+    top, left = (side - height) // 2, (side - width) // 2
+    square = cv2.copyMakeBorder(image_rgb, top, side - height - top, left, side - width - left, cv2.BORDER_REPLICATE)
     # OpenCV writes BGR; the pipeline's frames are RGB.
-    cv2.imwrite(str(source), cv2.cvtColor(padded, cv2.COLOR_RGB2BGR))
+    cv2.imwrite(str(source), cv2.cvtColor(square, cv2.COLOR_RGB2BGR))
     command = [
         sys.executable, str(Path(__file__).resolve()), "--child",
         "--driven_audio", str(Path(audio_path).resolve()),
@@ -210,7 +225,7 @@ def render(image_rgb: np.ndarray, audio_path: Path, pose_style: int, still: bool
         "--result_dir", str(work / "out"),
         "--checkpoint_dir", "checkpoints",
         "--size", "256",
-        "--preprocess", "full",
+        "--preprocess", "resize",
         "--pose_style", str(pose_style),
     ] + (["--still"] if still else [])
     if not gpu_utils.cuda_available():
@@ -247,7 +262,7 @@ def render(image_rgb: np.ndarray, audio_path: Path, pose_style: int, still: bool
         device=report.get("DEVICE", "unknown"),
         peak_vram_mb=int(peak) if peak and peak.isdigit() else None,
         seconds=seconds,
-        pad=pad,
+        box=(top / side, left / side, height / side, width / side),
     )
 
 

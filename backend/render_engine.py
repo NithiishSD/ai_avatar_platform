@@ -76,6 +76,7 @@ from face_animation import (
 )
 from face_engine import FACE_ENGINE_LOCK, FaceAnalysis, shared_face_engine, shared_segmenter
 from face_warp import PortraitAnimator
+from super_resolution import SuperResolver
 
 logger = logging.getLogger(__name__)
 
@@ -548,6 +549,17 @@ def _warp_frames(
         yield animator.render(weights, track.pose(index))
 
 
+_FRAME_RESOLVER: Optional[SuperResolver] = None
+
+
+def _frame_resolver() -> SuperResolver:
+    """A Real-ESRGAN instance on the GPU (when present) for SadTalker's frames, created on first use."""
+    global _FRAME_RESOLVER
+    if _FRAME_RESOLVER is None:
+        _FRAME_RESOLVER = SuperResolver(device="cuda" if gpu_utils.cuda_available() else "cpu")
+    return _FRAME_RESOLVER
+
+
 def _sadtalker_frames(
     job: AvatarRenderJob, image: np.ndarray, audio_path: Path, total: int, warnings: List[str]
 ) -> Tuple[Iterator[np.ndarray], sadtalker_engine.SadTalkerResult]:
@@ -555,8 +567,9 @@ def _sadtalker_frames(
     Run SadTalker on the prepared photo and return exactly ``total`` RGB frames at the job's fps.
 
     The photo is the one every engine uses (super-resolved, resized, background replaced), so the
-    output has the same size and background. SadTalker writes 25 fps; ``read_frames`` resamples to
-    ``targetFps`` with ffmpeg. Returns the frame iterator and the run (for its peak VRAM and for
+    output has the same size and background. SadTalker writes 256 px frames of the padded square at
+    25 fps; each is sharpened, cut back to the photo's area and scaled to the job's size, and
+    ``read_frames`` resamples to ``targetFps`` with ffmpeg. Returns the frame iterator and the run (for its peak VRAM and for
     ``sadtalker_engine.cleanup``).
     """
     import cv2
@@ -579,6 +592,12 @@ def _sadtalker_frames(
     if run.device != "cuda":
         warnings.append(f"SadTalker ran on the {run.device}, which is many times slower than the GPU")
     height, width = image.shape[:2]
+    # The 256 px frames are sharpened with Real-ESRGAN on the GPU when there is one (~36 ms a frame;
+    # the shared resolver stays on the CPU for the one-off photo enlargement).
+    resolver = _frame_resolver()
+    if not resolver.available:
+        warnings.append("Real-ESRGAN is missing, so SadTalker's 256 px frames were enlarged without sharpening "
+                        "(fetch it with: python scripts/fetch_vision_models.py --only realesrgan)")
 
     def frames() -> Iterator[np.ndarray]:
         last: Optional[np.ndarray] = None
@@ -586,14 +605,15 @@ def _sadtalker_frames(
         for frame in video_io.read_frames(run.video_path, fps=job.target_fps):
             if produced == total:
                 break
-            # Cut away the padding sadtalker_engine added around the photo.
-            frame = frame[run.pad:frame.shape[0] - run.pad, run.pad:frame.shape[1] - run.pad]
-            # The cut is the photo's size; the resize guards against an encoder rounding it.
-            if frame.shape[:2] != (height, width):
-                frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
-            else:
-                # read_frames wraps ffmpeg's bytes read-only; the label is drawn in place, so copy.
-                frame = frame.copy()
+            if resolver.available:
+                frame = resolver.upscale(frame)
+            # Cut the photo's area out of the padded square, in this frame's own pixels.
+            side = frame.shape[0]
+            top, left, box_h, box_w = (round(v * side) for v in run.box)
+            frame = frame[top:top + box_h, left:left + box_w]
+            # A new array either way: read_frames wraps ffmpeg's bytes read-only, and the label is
+            # drawn in place.
+            frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
             last = frame
             produced += 1
             yield frame

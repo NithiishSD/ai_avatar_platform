@@ -109,7 +109,8 @@ class RenderTests(EngineCase):
         command = seen["command"]
         self.assertEqual(seen["cwd"], self.root)
         self.assertEqual(command[2], "--child")
-        self.assertEqual(command[command.index("--preprocess") + 1], "full")
+        # resize: the whole picture is animated, so the shoulders and hair move with the head (M-12).
+        self.assertEqual(command[command.index("--preprocess") + 1], "resize")
         self.assertEqual(command[command.index("--pose_style") + 1], "7")
         self.assertNotIn("--still", command)
         self.assertNotIn("--cpu", command)
@@ -118,6 +119,18 @@ class RenderTests(EngineCase):
         self.assertTrue(result.video_path.is_file())
         sadtalker_engine.cleanup(result)
         self.assertFalse(result.video_path.exists())
+
+    def test_a_portrait_photo_is_padded_to_a_square_and_its_box_reported(self):
+        import cv2
+
+        run, seen = self.fake_child()
+        portrait = np.full((60, 40, 3), 200, dtype=np.uint8)
+        with mock.patch("subprocess.run", side_effect=run), mock.patch("gpu_utils.cuda_available", return_value=False):
+            result = sadtalker_engine.render(portrait, self.audio, pose_style=0, still=False)
+        self.addCleanup(sadtalker_engine.cleanup, result)
+        source = cv2.imread(seen["command"][seen["command"].index("--source_image") + 1])
+        self.assertEqual(source.shape[:2], (60, 60))
+        self.assertEqual(result.box, (0.0, 10 / 60, 1.0, 40 / 60))
 
     def test_still_and_cpu_flags(self):
         run, seen = self.fake_child(stdout="SADTALKER_DEVICE=cpu\n")

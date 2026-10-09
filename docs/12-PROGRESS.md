@@ -65,7 +65,7 @@ records what was verified live, with the real command and result.
 | T8.4 | Done — Wav2Lip meets the lip-sync percentage on 13 languages, blendshape does not; N-20 not met | 0eb03a9 |
 | T8.7 | Built and measured; the Stable Diffusion words wait on M-08 | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
-| T8.11 | Built and verified live (CLI and API); **waiting on M-12** (the owner watches it) | (this commit) |
+| T8.11 | Built and verified live; owner's first look (M-12) found still shoulders, fixed (D-64); **waiting on the M-12 re-check of `st-live-2`** | b61f6a0 + (this commit) |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
 M5: T5.1 audio watermark -> T5.2 video watermark + signed manifest -> T5.3 verify endpoint -> T5.4 audit trail ->
@@ -1533,3 +1533,27 @@ Verified live, GPU (RTX 4050 visible here), `demo` face:
 
 Compared on lip sync: Wav2Lip LSE-C 9-11 offset 0, SadTalker ~8 offset -1, blendshape 3-5. SadTalker is the slowest engine (about 8x real time vs Wav2Lip's
 ~0.15x) and the only one that moves the whole head. Waiting on M-12: the owner watching it.
+
+### 2026-10-09 — M-12 answered: still shoulders and out-of-step hair; SadTalker switched to whole-picture animation
+
+Owner played `st-live-1.mp4`: the part below the face (shoulders, below the neck) did not move, and hair edges and small body parts at the edges did not move
+or were out of step with the face. Cause: `full` mode animates a crop around the face and pastes it into the still photo; outside the crop nothing moves and
+the crop's edge is blended between moving and still.
+
+Tried on the same audio and photo (`demo`, `st-live-1.wav`), raw SadTalker output, motion map = max over time of |frame - first frame|:
+- `full` (current): head 28.1, shoulder band 20.4, corners 2.2; the map shows a hard horizontal cut across the hair and a patch on the right shoulder.
+- `extfull`: head 17.1, shoulders 22.8, corners 1.5; larger crop, still a boundary, less head motion. 40.0 s, 2,920 MiB.
+- `resize`: head 23.7, shoulders 24.8, corners 0.9; the map follows the outline of the whole figure, no boundary. 38.1 s, 2,698 MiB. Output is 256 px.
+- Sharpening the 256 px frames to 512: plain bicubic face sharpness (Laplacian variance) 18, Real-ESRGAN 91, photo 103; background flicker 0.02 vs 0.03.
+  Real-ESRGAN per frame: CPU 547 ms, **GPU 36.4 ms, 53 MiB**.
+
+Built (D-64): `resize` mode on the photo padded to a square, `SadTalkerResult.box` (fractions) to cut it back, a GPU Real-ESRGAN instance for the frames
+(`render_engine._frame_resolver`), warning when Real-ESRGAN is missing. `mapping_00229` (sha256 62a1e060…, 155,521,183 bytes) replaces `00109` (deleted).
+Tests: square padding and box, `--preprocess resize`, every frame sharpened, the missing-sharpener warning. `scripts/check.sh` -> **897 tests OK**, ruff and
+pyrefly clean.
+
+Live, GPU: `scripts/render_avatar.py ... --face demo --engine sadtalker --job-id st-live-2 --metric` (same sentence as `st-live-1`) ->
+`outputs/renders/st-live-2.mp4`, 151 frames 512x512, gap 0.015 s, **render 44.31 s (7.35x real time), peak 2,698 MiB, offset -1, LSE-C 9.376, LSE-D 6.683**.
+Against `st-live-1`: motion map without a crop boundary (head 16.2, shoulders 16.0, corners 0.7; the two jobs use different pose styles, so the amplitudes are
+not a like-for-like comparison), face sharpness 102 vs 26 (photo 103), background flicker 0.02 both. Close-up: skin and sweater texture smoothed by
+Real-ESRGAN. Waiting on the owner's re-check (M-12).
