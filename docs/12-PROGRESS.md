@@ -65,7 +65,7 @@ records what was verified live, with the real command and result.
 | T8.4 | Done — Wav2Lip meets the lip-sync percentage on 13 languages, blendshape does not; N-20 not met | 0eb03a9 |
 | T8.7 | Built and measured; the Stable Diffusion words wait on M-08 | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
-| T8.11 | Built and verified live; owner's first look (M-12) found still shoulders, fixed (D-64); **waiting on the M-12 re-check of `st-live-2`** | b61f6a0 + (this commit) |
+| T8.11 | Done — signed off by the owner (M-12, 9 Oct) after the whole-picture fix (D-64) | b61f6a0, 2ccf00e |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
 M5: T5.1 audio watermark -> T5.2 video watermark + signed manifest -> T5.3 verify endpoint -> T5.4 audit trail ->
@@ -1557,3 +1557,8 @@ Live, GPU: `scripts/render_avatar.py ... --face demo --engine sadtalker --job-id
 Against `st-live-1`: motion map without a crop boundary (head 16.2, shoulders 16.0, corners 0.7; the two jobs use different pose styles, so the amplitudes are
 not a like-for-like comparison), face sharpness 102 vs 26 (photo 103), background flicker 0.02 both. Close-up: skin and sweater texture smoothed by
 Real-ESRGAN. Waiting on the owner's re-check (M-12).
+
+### 2026-10-09 — M-12 re-check: T8.11 signed off
+
+Owner played `outputs/renders/st-live-2.mp4` (SadTalker, whole picture animated, frames sharpened): "it looks better now". The still shoulders and
+out-of-step hair edges reported on `st-live-1` are resolved. T8.11 Done.
