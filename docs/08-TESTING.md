@@ -26,7 +26,7 @@ Status: **pass** (test exists and passes) · **measured** (number recorded) ·
 | R-03 | OpenVoice V2 live clone through the API (T2.6b); XTTS-v2 live clone, 6 sentences, `measure_clone_similarity.py` (T2.1) | pass |
 | R-04 | XTTS-v2 cross-lingual, live: Spanish, Hindi, French (T3.3); OpenVoice V2 in Hindi over MMS-TTS (T2.6b) | pass (speaks the language, voice carries over only partly: see N-02 note) |
 | R-05 | `test_alignment_engine.py`, `test_alignment_method.py`, `test_alignment_accuracy.py`; E2E `synthesis.spec.js` (measured, not estimated) | pass |
-| R-06 | `test_mms_engine.py`, `test_language_registry.py`, `test_romanizer.py` | pass |
+| R-06 | `test_mms_engine.py` (incl. `ScriptMismatchTests`: English typed with Hindi selected is refused with the fix; Hindi with one English word is spoken), `test_language_registry.py`, `test_romanizer.py`; live 9 Oct: English text refused for Hindi (0% of letters in the alphabet) and Tamil (3%), Hindi text spoken | pass |
 | R-07 | `test_emotion_engine.py` | pass |
 | R-08 | `test_quality_auditor.py` (incl. partial-SQUIM fallback) | pass |
 | R-09 | `test_voice_engine.py` prosody tests | pass |

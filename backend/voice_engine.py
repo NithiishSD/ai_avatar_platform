@@ -78,7 +78,7 @@ import model_registry
 import protected_voices
 import provenance
 from emotion_engine import EmotionProsodyEngine
-from mms_engine import MMSTTSEngine, MMSRomanizationRequired
+from mms_engine import MMSRomanizationRequired, MMSScriptMismatch, MMSTTSEngine
 from openvoice_engine import OpenVoiceEngine
 from bark_engine import BarkEngine, BarkUnavailable
 from quality_auditor import SpeechQualityAuditor
@@ -683,9 +683,10 @@ class VoiceEngineRouter:
             payload.update({"backend": "mms-tts", "romanized": result.romanized})
             return result.sample_rate, result.duration_seconds, payload
 
-        except MMSRomanizationRequired:
-            # A missing romanizer is a configuration problem, not a model
-            # failure; surface it instead of silently degrading quality.
+        except (MMSRomanizationRequired, MMSScriptMismatch):
+            # A missing romanizer is a configuration problem and text in the
+            # wrong script is the user's input, not a model failure: surface
+            # either as it is, without the network hint added below.
             raise
 
         except Exception as exc:  # noqa: BLE001 - re-raised with the language named

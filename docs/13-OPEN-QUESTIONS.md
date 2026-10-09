@@ -12,6 +12,7 @@ named. Reported in the final summary.
 | Q-05 | A consented human face for demo evidence. **Owner, 9 Oct: any face used is within the rules and regulations.** No photo has been supplied yet; one still needs registering with a provenance sidecar (M-01 shows how) before it counts as evidence | admissible face evidence | Synthetic `demo` face: usable, never evidence |
 | Q-06 | ~~Rewrite the 6 `feat:`/`fix:` commits on `main` and the trailer on `00bffa1`?~~ **Resolved 9 Oct: leave them.** | — | Pushed history stays as it is |
 | Q-07 | ~~Is there a deployed environment for uptime?~~ **Resolved 9 Oct: no; a local demo only.** N-11 cannot be measured and is reported as not applicable | — | — |
+| Q-09 | Should the studio translate a script into the chosen language (open models: M2M100 418M MIT, or opus-mt per language pair), or keep refusing text in another script as now (D-65)? With the same alphabet (English typed with French chosen) it is still read aloud with French pronunciation | translation feature | Refuse other scripts; no translation |
 | Q-08 | ~~Cloud / GPU autoscaling budget?~~ **Resolved 9 Oct: none; local demo only.** The K8s item is not planned | — | Docker Compose |
 
 ## Manual checks for the owner

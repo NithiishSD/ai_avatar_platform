@@ -15,6 +15,7 @@ import numpy as np
 import soundfile as sf
 import torch
 
+import mms_engine
 from mms_engine import (
     MMSLanguageNotSupported,
     MMSRomanizationRequired,
@@ -61,9 +62,15 @@ class FakeModel:
 
 
 class FakeTokenizer:
-    def __init__(self, is_uroman: bool = False):
+    def __init__(self, is_uroman: bool = False, alphabet=None):
         self.is_uroman = is_uroman
         self.last_text = None
+        # Like VitsTokenizer: characters outside the alphabet are dropped (None keeps everything).
+        self.alphabet = alphabet
+
+    def prepare_for_tokenization(self, text):
+        lowered = text.lower()
+        return (lowered if self.alphabet is None else "".join(c for c in lowered if c in self.alphabet)), {}
 
     def __call__(self, text, return_tensors=None):
         self.last_text = text
@@ -148,6 +155,37 @@ class SynthesisTests(unittest.TestCase):
             self.engine.synthesize("loud", "hi", self.out)
         audio, _ = sf.read(self.out)
         self.assertLessEqual(float(np.max(np.abs(audio))), 1.0 + 1e-6)
+
+
+class ScriptMismatchTests(unittest.TestCase):
+    """English typed with a non-Latin language selected: refused, never a crash or a second of noise."""
+
+    def setUp(self):
+        self.engine = MMSTTSEngine(device="cpu")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.out = Path(self.tmp.name) / "out.wav"
+        # A Devanagari-only alphabet, as the Hindi checkpoint has, plus the space.
+        self.devanagari = FakeTokenizer(alphabet=set("नमसतेआपकैसह ािीुूेैोौंँ्"))
+
+    def test_english_text_for_hindi_is_refused_with_the_fix(self):
+        with patched_engine(self.engine, tokenizer=self.devanagari):
+            with self.assertRaises(mms_engine.MMSScriptMismatch) as ctx:
+                self.engine.synthesize("Hello everyone, welcome to the demo.", "hin", self.out)
+        message = str(ctx.exception)
+        self.assertIn("Hindi", message)
+        self.assertIn("does not translate", message)
+        self.assertFalse(self.out.exists())
+
+    def test_hindi_text_with_one_english_word_is_spoken(self):
+        with patched_engine(self.engine, tokenizer=self.devanagari):
+            self.engine.synthesize("नमस्ते आप कैसे हैं demo", "hin", self.out)
+        self.assertTrue(self.out.exists())
+
+    def test_coverage(self):
+        self.assertEqual(mms_engine.letter_coverage("abc", ""), 0.0)
+        self.assertEqual(mms_engine.letter_coverage("ab, cd!", "abcd"), 1.0)
+        self.assertEqual(mms_engine.letter_coverage("123 ...", ""), 1.0)
 
 
 class UromanTests(unittest.TestCase):

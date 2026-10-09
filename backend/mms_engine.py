@@ -69,6 +69,23 @@ class MMSRomanizationRequired(RuntimeError):
     """Raised when a uroman checkpoint is selected but no romanizer is available."""
 
 
+class MMSScriptMismatch(ValueError):
+    """The text is mostly in letters the chosen language's model does not have (e.g. English typed
+    with Hindi selected). Nothing is translated, so speaking it would produce near-silence."""
+
+
+# Below this share of the text's letters surviving the tokenizer, the request is refused. Real
+# scripts in the right language keep ~100%; a few borrowed Latin words in Hindi text keep far more
+# than half; English sent to a Devanagari model keeps 0%.
+MIN_LETTER_COVERAGE = 0.5
+
+
+def letter_coverage(text: str, kept: str) -> float:
+    """Share of the letters in ``text`` that are still present in ``kept`` (1.0 when there are none)."""
+    letters = sum(ch.isalpha() for ch in text)
+    return 1.0 if letters == 0 else min(1.0, sum(ch.isalpha() for ch in kept) / letters)
+
+
 @dataclass(frozen=True)
 class MMSSynthesisResult:
     """What one MMS-TTS synthesis produced; immutable (``frozen=True``)."""
@@ -247,6 +264,20 @@ class MMSTTSEngine:
             converted = self._romanize(prepared, info)
             romanized = converted != prepared
             prepared = converted
+
+        # The tokenizer silently drops every character outside the model's alphabet. English typed with
+        # a non-Latin language selected loses all of it: the model then either crashes on an empty
+        # input or speaks a second of noise. Measure what survives and refuse with the fix instead.
+        # Nothing here translates; the text must already be in the chosen language.
+        kept, _ = tokenizer.prepare_for_tokenization(prepared)
+        coverage = letter_coverage(prepared, kept)
+        if coverage < MIN_LETTER_COVERAGE:
+            raise MMSScriptMismatch(
+                f"The script is not written in {info.name}: only {coverage:.0%} of its letters are in the "
+                f"{info.name} speech model's alphabet, so almost nothing would be spoken. The platform reads "
+                f"text aloud in the language chosen; it does not translate. Write the script in {info.name}, "
+                "or choose the language the script is written in."
+            )
 
         # These are attributes on the cached model, so a value set here also
         # applies to later calls for this language that do not pass one.

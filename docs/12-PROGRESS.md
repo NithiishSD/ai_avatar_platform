@@ -1562,3 +1562,17 @@ Real-ESRGAN. Waiting on the owner's re-check (M-12).
 
 Owner played `outputs/renders/st-live-2.mp4` (SadTalker, whole picture animated, frames sharpened): "it looks better now". The still shoulders and
 out-of-step hair edges reported on `st-live-1` are resolved. T8.11 Done.
+
+### 2026-10-09 — owner report: another language + English script gave a 1-second clip
+
+Owner chose a non-English language in the studio, typed the script in English, and got a video about 1 s long with some sound. Reproduced through the API
+(`POST /api/v1/audio/synthesize`, `mode: fast`, the English sentence "Hello everyone, welcome to the demo. ..."): Hindi FAILED with a PyTorch dtype error
+(the tokenizer had dropped every Latin letter, leaving an empty input); French spoke 7.5 s of English read in French. The platform has no translation step:
+the text goes to the chosen language's MMS model, and VITS tokenizers silently drop characters outside their alphabet.
+
+Fixed (D-65): `mms_engine.synthesize` measures the share of letters that survive `tokenizer.prepare_for_tokenization` and raises `MMSScriptMismatch` below 50%,
+naming the language and saying nothing is translated; the router passes it through without the network hint. Tests: `ScriptMismatchTests` (3).
+
+Live, real checkpoints (API restarted on the new code): English text -> **hin refused (0% of letters), tam refused (3%)**; fra SUCCESS 7.6 s and spa SUCCESS 6.0 s
+(same alphabet: read with their pronunciation, not detectable from letters); Hindi text "नमस्ते, आप सबका इस प्रदर्शन में स्वागत है।" -> SUCCESS 3.63 s.
+`scripts/check.sh` -> ruff and pyrefly clean, **900 tests OK**. Open for the owner: whether to add translation (13).
