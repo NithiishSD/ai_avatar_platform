@@ -16,6 +16,7 @@ browser / SDK ──HTTP──> app.py (FastAPI) ──> voice_engine.py ──>
                            ├──> job_queue.py ──worker thread──> render_engine.py ──> face_engine.py (MediaPipe)
                            │       (job_store.py, SQLite)              │               face_animation.py + face_warp.py
                            │                                           │               or wav2lip_engine.py
+                           │                                           │               or sadtalker_engine.py (child process)
                            │                                           ├─> video_watermark.py (VideoSeal), video_io.py (ffmpeg)
                            │                                           └─> manifest.py (signed record), audit_log.py
                            │
@@ -85,7 +86,8 @@ to `POST /api/v1/avatar/render-job`.
    the audio's loudness.
 4. **The frames**: the blendshape engine warps the photo per frame (`face_warp.PortraitAnimator`,
    a triangle-mesh warp); the Wav2Lip engine (`wav2lip_engine.py`) instead repaints the mouth from
-   the audio. The "AI-generated" label is stamped on.
+   the audio; the SadTalker engine (`sadtalker_engine.py`) replaces the warp and moves the whole head
+   from the audio, in a separate process. The "AI-generated" label is stamped on.
 5. **The video mark**: frames are marked with VideoSeal in windows of 32 as they stream to the
    encoder (`video_watermark.py`), so memory stays bounded.
 6. **Encoding**: `video_io.VideoWriter` pipes raw frames into ffmpeg and muxes the audio. The mark is
@@ -135,6 +137,7 @@ Where each idea is explained in the code the first time it appears.
 | Face landmarks, head pose, quality gate | `face_engine.py` |
 | Mesh warping a photo | `face_warp.py` |
 | Neural lip sync | `wav2lip_engine.py` |
+| 3DMM coefficients, pose styles, running a model in a child process | `sadtalker_engine.py` |
 | ffmpeg pipes, muxing, probing | `video_io.py` |
 | Video watermark windows, bit accuracy | `video_watermark.py` |
 | Signed manifests (Ed25519 + SHA-256) | `manifest.py` |

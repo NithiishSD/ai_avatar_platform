@@ -59,7 +59,7 @@ class VisionAuditTests(unittest.TestCase):
         keys = [s.key for s in audit_vision_weights()]
         self.assertEqual(
             keys,
-            ["videoseal", "face-landmarker", "selfie-segmenter", "multiclass-segmenter", "wav2lip", "syncnet", "sface", "realesrgan",
+            ["videoseal", "face-landmarker", "selfie-segmenter", "multiclass-segmenter", "wav2lip", "sadtalker", "syncnet", "sface", "realesrgan",
              "avatar-diffusion"],
         )
 

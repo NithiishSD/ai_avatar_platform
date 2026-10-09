@@ -421,10 +421,12 @@ export default function CreateVideo({ apiBase }) {
               </select>
             </label>
             <label className="field"><span>Lip-sync model</span>
-              {/* Wav2Lip is offered only when FacePicker reported it installed. */}
+              {/* Wav2Lip and SadTalker are offered only when FacePicker reported them installed. */}
               <select id="engine-select" value={engine} onChange={(e) => setEngine(e.target.value)}>
                 <option value="blendshape">Standard (fast)</option>
                 <option value="wav2lip" disabled={!engines.wav2lip}>High quality (Wav2Lip){engines.wav2lip ? "" : " - not installed"}</option>
+                {/* SadTalker moves the whole head, jaw and expression; head movement there is only on or off. */}
+                <option value="sadtalker" disabled={!engines.sadtalker}>Whole head moves (SadTalker){engines.sadtalker ? "" : " - not installed"}</option>
               </select>
             </label>
           </div>

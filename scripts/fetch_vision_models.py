@@ -13,6 +13,7 @@ Flags:
   --only face-landmarker,syncnet   fetch just these keys
   --all                            include the large default-off models
   --accept-licence wav2lip         required for models under a restricted licence
+  --only sadtalker                 the SadTalker head-motion engine (code checkout + weights, ~1.1 GB)
   --dry-run                        print the plan and the disk cost, download nothing
   --yes                            skip the confirmation prompt
 
@@ -261,6 +262,33 @@ def _fetch_wav2lip() -> None:
     )
 
 
+def _fetch_sadtalker() -> None:
+    """
+    SadTalker: a git checkout of the pinned commit, then its four weight files, each pinned by SHA-256.
+
+    The code is executed by the render engine, so the checkout is verified to be exactly
+    ``SADTALKER_COMMIT`` (a moved branch or a re-pointed tag cannot change what runs).
+    """
+    import subprocess
+
+    from sadtalker_engine import SADTALKER_COMMIT, SADTALKER_DIR, SADTALKER_FILES, SADTALKER_REPO
+
+    if not (SADTALKER_DIR / ".git").is_dir():
+        subprocess.run(["git", "clone", "--quiet", SADTALKER_REPO, str(SADTALKER_DIR)], check=True)
+    # Detached checkout of the exact commit; --quiet keeps the "detached HEAD" lecture out of the log.
+    subprocess.run(["git", "-C", str(SADTALKER_DIR), "checkout", "--quiet", SADTALKER_COMMIT], check=True)
+    head = subprocess.run(["git", "-C", str(SADTALKER_DIR), "rev-parse", "HEAD"], check=True,
+                          capture_output=True, text=True).stdout.strip()
+    if head != SADTALKER_COMMIT:
+        raise RuntimeError(f"SadTalker checkout is at {head}, expected {SADTALKER_COMMIT}")
+    for relative, (url, sha256, size) in SADTALKER_FILES.items():
+        destination = SADTALKER_DIR / relative
+        # Re-runs skip what is already complete (exact size), like the audit.
+        if destination.is_file() and destination.stat().st_size == size:
+            continue
+        download_file(url, destination, min_bytes=size, sha256=sha256)
+
+
 def _fetch_avatar_diffusion() -> None:
     """
     Half-precision safetensors only.
@@ -376,7 +404,7 @@ SPECS: List[VisionSpec] = [
         note="avatar generator, style transfer, hair / clothing edits",
         fetch=_fetch_avatar_diffusion,
     ),
-    # The only default-off and licence-gated entry: non-commercial weights are
+    # The licence-gated entry: non-commercial weights are
     # never fetched by a plain run, and never without --accept-licence wav2lip.
     VisionSpec(
         key="wav2lip",
@@ -387,6 +415,16 @@ SPECS: List[VisionSpec] = [
         note="neural lip sync; the blendshape engine renders without it",
         fetch=_fetch_wav2lip,
         licence_gate="wav2lip",
+    ),
+    VisionSpec(
+        # Default-off for its size and because it needs extra packages (sadtalker_engine.SADTALKER_PIP).
+        key="sadtalker",
+        name="SadTalker 256 (+ facexlib face detector)",
+        approx_gb=1.1,
+        default=False,
+        licence="Apache-2.0 (OpenTalker/SadTalker); MIT (xinntao/facexlib)",
+        note="whole-head motion and expression from the audio; the 'sadtalker' render engine",
+        fetch=_fetch_sadtalker,
     ),
 ]
 

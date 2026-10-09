@@ -101,7 +101,7 @@ def main() -> int:
     parser.add_argument("--language", default="en")
     # None means "let the server pick its default clone engine"; choices= makes argparse reject typos.
     parser.add_argument("--clone-engine", default=None, choices=["xtts-v2", "openvoice-v2"])
-    parser.add_argument("--engine", default="wav2lip", choices=["blendshape", "wav2lip"], help="lip-sync engine")
+    parser.add_argument("--engine", default="wav2lip", choices=["blendshape", "wav2lip", "sadtalker"], help="lip-sync engine")
     parser.add_argument("--job-id", default=None)
     parser.add_argument("--json", action="store_true", help="print the evidence as JSON")
     args = parser.parse_args()

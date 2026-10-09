@@ -10,7 +10,7 @@ was made, and no voice or face is used without a recorded consent basis.
 | Area | What you get |
 |---|---|
 | Speech | Kokoro (fast English), XTTS-v2 voice cloning (17 languages), OpenVoice V2 tone-colour cloning, Bark dialogue, MMS-TTS (1,077 languages); six emotion presets, speed and pitch control; forced alignment to millisecond phoneme timings |
-| Avatar video | A registered photo animated by a blendshape rig (CPU) or Wav2Lip (neural lip sync); background colour or image replacement; 512 px preview or 1080p (a small photo is enlarged once with Real-ESRGAN) |
+| Avatar video | A registered photo animated by a blendshape rig (CPU), Wav2Lip (neural lip sync) or SadTalker (whole head, jaw and expression from the audio; `fetch_vision_models.py --only sadtalker`); background colour or image replacement; 512 px preview or 1080p (a small photo is enlarged once with Real-ESRGAN) |
 | Your own audio | Upload a recording and a photo; without a transcript the words are recognised (Whisper) and aligned |
 | Faces | Register a consented photo, generate a synthetic face (Stable Diffusion 1.5), or restyle one (realistic, cartoon, painting, sketch) with its identity similarity reported |
 | Live avatar | WebSocket session: type text, or speak into the microphone, and get audio and frames back sentence by sentence |

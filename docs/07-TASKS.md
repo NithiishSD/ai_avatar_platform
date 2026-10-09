@@ -125,6 +125,7 @@ weights favour (integration 30%, avatar creation 25%, real-time 25%, ethics 20%)
 | T8.8 | Super-resolution | decide and, if feasible on this hardware, add Real-ESRGAN for 1080p+; otherwise record why not | R-44, N-16 |
 | T8.9 | Abuse prevention and detection | document and test the layers that exist; add a similarity-anomaly alert; state plainly that detecting *others'* deepfakes is not built | R-46 |
 | T8.10 | Monitoring | `GET /api/v1/metrics` (queue depth, job timings, quality scores); test; live | R-51 |
+| T8.11 | SadTalker engine (owner's I-01, option 2) | `?engine=sadtalker`: a pinned SadTalker checkout run in a child process moves the whole head, jaw and expression from the audio; preflight refuses with the fetch command when anything is missing; watermark, label, manifest and audit unchanged; studio option; unit tests with the child mocked; live render with SyncNet, peak VRAM and timing; the owner watches it (M-12) | R-13, N-05, N-10 |
 
 Not planned, with the reason in `11-DECISIONS.md`: custom voice training/fine-tuning (R-45, CPU-infeasible), WebRTC (R-48), user studies
 and native-speaker validation (R-53).

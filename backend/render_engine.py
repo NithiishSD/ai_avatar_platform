@@ -9,12 +9,15 @@ the emotion vector, the quality tier and the frame rate. The steps are
     timestamps + audio loudness    -> per-frame blendshape weights
     weights -> frames -> (optional Wav2Lip mouth) -> H.264 + AAC MP4
 
-Two engines, chosen by name and reported by name in the result:
+Three engines, chosen by name and reported by name in the result:
 
 * ``blendshape`` -- CPU mesh warp driven by the viseme timeline. Always
   available, needs no GPU.
 * ``wav2lip`` -- neural mouth from the audio itself; the warp still supplies
   blinks and brows. Needs the licence-gated checkpoint.
+* ``sadtalker`` -- a 3-D-aware network moves the whole head, jaw, cheeks and
+  expression from the audio (``sadtalker_engine``); it replaces the warp
+  entirely. Needs its code and weights (Apache-2.0) and, in practice, the GPU.
 
 There is no fallback between them. A job that asks for ``wav2lip`` without the
 checkpoint fails with the command that fetches it; it does not quietly come
@@ -58,6 +61,7 @@ import numpy as np
 import audit_log
 import gpu_utils
 import manifest as manifest_module
+import sadtalker_engine
 import video_io
 import video_watermark
 import watermark_engine
@@ -86,7 +90,8 @@ RENDERS_DIR = OUTPUTS_DIR / "renders"
 # The engine names are part of the API (the ``engine`` query parameter and the result's ``engine``).
 ENGINE_BLENDSHAPE = "blendshape"
 ENGINE_WAV2LIP = "wav2lip"
-ENGINES = (ENGINE_BLENDSHAPE, ENGINE_WAV2LIP)
+ENGINE_SADTALKER = "sadtalker"
+ENGINES = (ENGINE_BLENDSHAPE, ENGINE_WAV2LIP, ENGINE_SADTALKER)
 
 # The largest frame each quality tier may produce. A photo is never enlarged
 # to reach it (see ``video_io.fit_within``).
@@ -229,7 +234,7 @@ class RenderResult:
     energy_gated: bool = False            # whether audio loudness was used to close the mouth in silences
     blink_count: int = 0
     unknown_visemes: Dict[str, int] = field(default_factory=dict)  # viseme -> times it fell back to rest
-    peak_vram_mb: Optional[int] = None    # measured only for wav2lip, the engine that uses the GPU
+    peak_vram_mb: Optional[int] = None    # measured only for the GPU engines (wav2lip, sadtalker)
     background: Optional[str] = None      # a short description of a replaced background, or None
     # Set when a small photo was enlarged with super-resolution to reach the 1080P_HQ box (T8.8).
     super_resolution: Optional[Dict[str, object]] = None
@@ -313,6 +318,14 @@ def preflight(job: AvatarRenderJob, engine: Optional[str] = None, store: Optiona
                 "the 'wav2lip' engine has no checkpoint. It is under a research / "
                 f"non-commercial licence, so a person has to opt in: {VISION_FETCH_COMMAND} "
                 "--only wav2lip --accept-licence wav2lip. Or render with engine 'blendshape'."
+            )
+    if name == ENGINE_SADTALKER:
+        # Same rule: name every missing piece and its fix, never quietly render with another engine.
+        problems = sadtalker_engine.missing()
+        if problems:
+            raise RenderError(
+                "the 'sadtalker' engine cannot run: " + "; ".join(problems)
+                + ". Or render with engine 'blendshape'."
             )
     return audio
 
@@ -535,6 +548,64 @@ def _warp_frames(
         yield animator.render(weights, track.pose(index))
 
 
+def _sadtalker_frames(
+    job: AvatarRenderJob, image: np.ndarray, audio_path: Path, total: int, warnings: List[str]
+) -> Tuple[Iterator[np.ndarray], sadtalker_engine.SadTalkerResult]:
+    """
+    Run SadTalker on the prepared photo and return exactly ``total`` RGB frames at the job's fps.
+
+    The photo is the one every engine uses (super-resolved, resized, background replaced), so the
+    output has the same size and background. SadTalker writes 25 fps; ``read_frames`` resamples to
+    ``targetFps`` with ffmpeg. Returns the frame iterator and the run (for its peak VRAM and for
+    ``sadtalker_engine.cleanup``).
+    """
+    import cv2
+
+    intensity = 1.0 if job.motion_intensity is None else job.motion_intensity
+    # SadTalker has no amplitude knob for head motion: 0 keeps the photo's pose, anything else moves.
+    if intensity not in (0.0, 1.0):
+        warnings.append("SadTalker only switches head motion on or off: motionIntensity 0 is still, any other value is its natural motion")
+    emotions = job.emotion_vector.model_dump(exclude_none=True, exclude={"neutral", "eyeblink_rate"})
+    if any(value > 0 for value in emotions.values()):
+        warnings.append("SadTalker takes no emotion input: its expression comes from the audio, so the emotion vector was not used")
+    try:
+        run = sadtalker_engine.render(
+            image, audio_path,
+            pose_style=sadtalker_engine.pose_style_for(seed_from_job_id(job.job_id)),
+            still=intensity == 0.0,
+        )
+    except sadtalker_engine.SadTalkerError as err:
+        raise RenderError(str(err)) from err
+    if run.device != "cuda":
+        warnings.append(f"SadTalker ran on the {run.device}, which is many times slower than the GPU")
+    height, width = image.shape[:2]
+
+    def frames() -> Iterator[np.ndarray]:
+        last: Optional[np.ndarray] = None
+        produced = 0
+        for frame in video_io.read_frames(run.video_path, fps=job.target_fps):
+            if produced == total:
+                break
+            # Cut away the padding sadtalker_engine added around the photo.
+            frame = frame[run.pad:frame.shape[0] - run.pad, run.pad:frame.shape[1] - run.pad]
+            # The cut is the photo's size; the resize guards against an encoder rounding it.
+            if frame.shape[:2] != (height, width):
+                frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+            else:
+                # read_frames wraps ffmpeg's bytes read-only; the label is drawn in place, so copy.
+                frame = frame.copy()
+            last = frame
+            produced += 1
+            yield frame
+        if last is None:
+            raise RenderError("SadTalker produced a video with no frames")
+        # Resampling can end a frame or two short of the audio; hold the last frame to the end.
+        for _ in range(total - produced):
+            yield last
+
+    return frames(), run
+
+
 def render_job(
     job: AvatarRenderJob,
     engine: Optional[str] = None,
@@ -618,7 +689,12 @@ def render_job(
     # An internal consistency check: the track and the encoder cut-off below must agree on frames.
     assert total == frame_count_for(duration, job.target_fps)
     peak_vram: Optional[int] = None
-    if engine_name == ENGINE_WAV2LIP:
+    # Set only by the SadTalker branch: its temporary folder, deleted once the frames are encoded.
+    sadtalker_run = None
+    if engine_name == ENGINE_SADTALKER:
+        frames, sadtalker_run = _sadtalker_frames(job, image, audio_path, total, warnings)
+        peak_vram = sadtalker_run.peak_vram_mb
+    elif engine_name == ENGINE_WAV2LIP:
         from wav2lip_engine import face_box_from_bbox, shared_wav2lip_engine
 
         # Wav2Lip needs to know where the face is: the landmark box, padded below the chin as the
@@ -695,6 +771,8 @@ def render_job(
         # Runs on success too, when the partial file is already gone (hence missing_ok); on failure
         # it removes the half-written file.
         partial.unlink(missing_ok=True)
+        if sadtalker_run is not None:
+            sadtalker_engine.cleanup(sadtalker_run)
     # Report the file's own frame count when ffmpeg kept a different number than we rendered.
     if media.frame_count and media.frame_count != total:
         warnings.append(f"{total} frames were rendered but the file holds {media.frame_count}")
@@ -746,9 +824,11 @@ def render_job(
         duration_seconds=duration,
         render_seconds=time.perf_counter() - started,
         media=media.to_dict(),
-        energy_gated=track.energy_gated,
-        blink_count=len(track.blink_times),
-        unknown_visemes=track.unknown_visemes,
+        # The warp's numbers describe a SadTalker video not at all (it makes its own blinks and mouth),
+        # so they are reported as zero / empty rather than borrowed from a track that was not drawn.
+        energy_gated=track.energy_gated and not sadtalker_run,
+        blink_count=0 if sadtalker_run else len(track.blink_times),
+        unknown_visemes={} if sadtalker_run else track.unknown_visemes,
         peak_vram_mb=peak_vram,
         background=_describe_background(job.background),
         super_resolution=super_res,

@@ -18,7 +18,7 @@ lazily on first use and one heavy model is resident at a time.
                         │
         ┌───────────────┼────────────────────────────┐
    voice_engine     alignment_engine            render_engine
-   (5 TTS engines)  (MMS_FA → visemes)          (blendshape | wav2lip)
+   (5 TTS engines)  (MMS_FA → visemes)          (blendshape | wav2lip | sadtalker)
         │                                            │
    quality_auditor                       face_engine, face_animation,
    (SQUIM, ECAPA)                        face_warp, video_io, lipsync_metric
@@ -54,6 +54,7 @@ lazily on first use and one heavy model is resident at a time.
 | `backend/video_io.py` | ffmpeg encode/mux, ffprobe |
 | `backend/render_engine.py` | `AvatarRenderJob` → MP4; preflight; engines; label |
 | `backend/wav2lip_engine.py` | Wav2Lip network and inference |
+| `backend/sadtalker_engine.py` | SadTalker in a child process: whole-head motion from audio, padding, compatibility patches |
 | `backend/lipsync_metric.py` | SyncNet LSE-C / LSE-D / offset |
 | `frontend/src/App.jsx` | Creator studio: synthesis, clone picker, emotions, visemes |
 | `frontend/src/AvatarPanel.jsx` | Avatar picker, landmark canvas, registration, render, video, score |

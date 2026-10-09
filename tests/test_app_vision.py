@@ -271,7 +271,7 @@ class RenderRouteTests(VisionApiCase):
             (self.payload(avatarId="ghost"), {}, 404, "not registered"),
             (self.payload(audioUrl="s3://bucket/x.wav"), {}, 400, "/outputs/"),
             (self.payload(audioUrl="http://testserver/outputs/missing.wav"), {}, 400, "not found"),
-            (self.payload(), {"engine": "sadtalker"}, 400, "unknown render engine"),
+            (self.payload(), {"engine": "liveportrait"}, 400, "unknown render engine"),
         ]
         for body, params, code, fragment in cases:
             response = self.client.post("/api/v1/avatar/render-job", json=body, params=params)
@@ -349,7 +349,7 @@ class RenderRouteTests(VisionApiCase):
         self.assertEqual(self.ran, [])
 
     def test_batch_passes_the_engine_through_and_unknown_batch_is_404(self):
-        response = self.batch([self.payload(jobId="E1")], engine="sadtalker")
+        response = self.batch([self.payload(jobId="E1")], engine="liveportrait")
         self.assertEqual(response.json()["jobs"][0]["httpStatus"], 400)
         self.assertIn("unknown render engine", response.json()["jobs"][0]["detail"])
         self.assertEqual(self.client.get("/api/v1/avatar/render-batch/nope").status_code, 404)
@@ -380,7 +380,7 @@ class RenderRouteTests(VisionApiCase):
     def test_voice_to_avatar_refuses_an_unusable_face_before_reading_the_audio(self):
         with mock.patch("voice_to_avatar.prepare") as prepare:
             self.assertEqual(self.v2a(avatarId="ghost").status_code, 404)
-            self.assertEqual(self.v2a(engine="sadtalker").status_code, 400)
+            self.assertEqual(self.v2a(engine="liveportrait").status_code, 400)
         prepare.assert_not_called()
 
     def test_voice_to_avatar_reports_a_bad_recording_as_422_with_the_reason(self):

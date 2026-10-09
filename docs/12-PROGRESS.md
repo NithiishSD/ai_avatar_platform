@@ -65,6 +65,7 @@ records what was verified live, with the real command and result.
 | T8.4 | Done — Wav2Lip meets the lip-sync percentage on 13 languages, blendshape does not; N-20 not met | 0eb03a9 |
 | T8.7 | Built and measured; the Stable Diffusion words wait on M-08 | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
+| T8.11 | Built and verified live (CLI and API); **waiting on M-12** (the owner watches it) | (this commit) |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
 M5: T5.1 audio watermark -> T5.2 video watermark + signed manifest -> T5.3 verify endpoint -> T5.4 audit trail ->
@@ -1498,3 +1499,37 @@ in `live_engine` sits above the wrong constants.
 Owner's answers (9 Oct): Q-01 the RTX 4050 is the final hardware; Q-02 the 95% is the problem statement's figure, D-12 stays the measurement;
 Q-05 face use is within the rules, but no photo supplied yet; Q-06 leave history as it is; Q-07/Q-08 local demo only, no deployment, so N-11 is
 not applicable.
+
+### 2026-10-09 — T8.11 SadTalker render engine (I-01, option 2)
+
+Owner's chosen next step after the 2-D whole-portrait motion: SadTalker. `backend/sadtalker_engine.py` (new), `render_engine.py` (`ENGINE_SADTALKER`,
+preflight, `_sadtalker_frames`), `model_registry.check_sadtalker`, `/health` and the face listing report it, fetch spec `sadtalker`, studio option
+"Whole head moves (SadTalker)", `render_avatar.py` / `clone_to_video.py` accept it. Design in D-63.
+
+Installed (D-63): `kornia==0.7.4 yacs==0.1.8 pydub==0.25.1 imageio-ffmpeg==0.5.1`, then `--no-deps facexlib==0.3.0 filterpy==1.4.5`; numpy 1.26.4,
+transformers 4.47.1 and OpenCV 4.11.0 unchanged. Code checked out at `cd4c0465` into `.models/sadtalker`; weights 1.18 GB, SHA-256 pinned.
+
+Problems met on the first live runs, each fixed:
+1. GitHub downloads stalled at ~130 MB for 5 minutes; resumed with `curl -C -` and a stall timeout.
+2. `align_img`: `np.array([w, h, s, t[0], t[1]])` with 1-element arrays is refused by numpy >= 1.24 ("inhomogeneous shape"). The child replaces the name the
+   preprocessor calls with a copy that uses `.item()` (patch 4; the pinned upstream files are not edited).
+3. Paste-back: `cv2.seamlessClone` asserted (`roi.x + roi.width <= m.cols`) because the crop around a frame-filling face (`demo`) reaches past the edge. The
+   photo is now padded by half its longer side with repeated edge pixels and each output frame cut back.
+4. Unit test caught a real bug before any live run: frames from `video_io.read_frames` are read-only and the AI label is drawn in place; they are copied.
+
+Verified live, GPU (RTX 4050 visible here), `demo` face:
+- CLI: `PYTHONPATH=backend backend/.conda/bin/python scripts/render_avatar.py --text "The quick brown fox jumps over the lazy dog. Then it looks around and
+  smiles at everyone." --face demo --engine sadtalker --job-id st-live-1 --metric` -> `outputs/renders/st-live-1.mp4`, 151 frames 512x512, video 6.04 s /
+  audio 6.025 s, **render 46.05 s (7.64x real time)**, **peak VRAM 2,788 MiB** (child, reserved), **SyncNet offset -1, LSE-C 8.355, LSE-D 7.489**.
+- Motion: mean frame-to-frame change 1.21 grey levels in the head region, 0.02 in the background corners, 0.68 in the bottom band; a one-frame-per-second strip
+  shows head tilt and turn, brow and expression changes and the mouth opening, no visible seam around the pasted crop. The face is slightly softer than
+  the photo (256 px model).
+- API (own server on :8010, Kokoro already on the GPU in that process): `scripts/clone_to_video.py --api http://localhost:8010 --voice
+  inputs/ljspeech_reference.wav --face demo --clone-engine openvoice-v2 --engine sadtalker --job-id st-api-1` -> COMPLETED, engine `sadtalker`, 119 frames,
+  38.8 s, peak 2,788 MiB, watermark applied and read back, no warnings; offset -1, LSE-C 7.918.
+- `scripts/check.sh` -> ruff clean, pyrefly 0 errors, **895 tests OK**; `npm run lint` clean, `npm run build` clean; `scripts/doctor.py` 41 pass, 3 warn,
+  0 fail (`PASS sadtalker 1.2 GB`); `_fetch_sadtalker()` on the installed copy: commit verified, nothing re-downloaded.
+- Not run: the E2E suite (only an extra `<option>` changed in the UI; the next milestone gate runs it).
+
+Compared on lip sync: Wav2Lip LSE-C 9-11 offset 0, SadTalker ~8 offset -1, blendshape 3-5. SadTalker is the slowest engine (about 8x real time vs Wav2Lip's
+~0.15x) and the only one that moves the whole head. Waiting on M-12: the owner watching it.

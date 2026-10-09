@@ -76,7 +76,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--mode", default=None, help="fast | clone | high_quality | dialogue | multilingual")
     parser.add_argument("--language", default="en")
     parser.add_argument("--emotion", default=None)
-    parser.add_argument("--engine", default=None, help="blendshape (default) or wav2lip")
+    parser.add_argument("--engine", default=None, help="blendshape (default), wav2lip or sadtalker")
     parser.add_argument("--quality", default="PREVIEW", choices=["PREVIEW", "1080P_HQ"])
     parser.add_argument("--fps", type=int, default=25)
     parser.add_argument("--job-id", default=None)

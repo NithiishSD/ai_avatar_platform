@@ -359,17 +359,19 @@ def _render_engines() -> dict:
 
     Returns ``{engine name: bool}``. The blendshape engine needs no extra
     weights, so it is always True; Wav2Lip is True only when its checkpoint is
-    on disk. Reported by ``/health`` and the face listing so the studio can
+    on disk, SadTalker only when its code, weights and packages are. Reported by ``/health`` and the face listing so the studio can
     grey out an engine that would be refused.
     """
     # A function-level import: the module is loaded on the first call, not
     # when app.py is imported. Several routes below use the same pattern for
     # modules only they need.
+    import sadtalker_engine
     from wav2lip_engine import shared_wav2lip_engine
 
     return {
         render_engine.ENGINE_BLENDSHAPE: True,
         render_engine.ENGINE_WAV2LIP: shared_wav2lip_engine().available,
+        render_engine.ENGINE_SADTALKER: sadtalker_engine.available(),
     }
 
 
@@ -1206,7 +1208,7 @@ def _render_response(job_id: str, queued_job) -> RenderJobResponse:
 )
 def create_render_job(job: AvatarRenderJob, engine: Optional[str] = None) -> RenderJobResponse:
     """
-    Queue a render. ``?engine=blendshape|wav2lip`` picks the lip-sync engine.
+    Queue a render. ``?engine=blendshape|wav2lip|sadtalker`` picks the lip-sync engine.
 
     A job that could never render -- unknown avatar, an image without
     consent, audio this server cannot read, an engine with no weights -- is

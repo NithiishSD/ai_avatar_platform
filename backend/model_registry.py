@@ -603,6 +603,25 @@ def check_videoseal(key: str = "videoseal", name: str = "VideoSeal 1.0 (invisibl
     return ModelWeightStatus(key=key, name=name, source=str(CHECKPOINT), present=True, size_bytes=size, detail="weights present")
 
 
+def check_sadtalker(key: str = "sadtalker", name: str = "SadTalker (head motion and expression)") -> ModelWeightStatus:
+    """SadTalker needs its pinned code checkout, four weight files at their exact sizes and five packages."""
+    import sadtalker_engine
+
+    problems = sadtalker_engine.missing()
+    size = sum(
+        (sadtalker_engine.SADTALKER_DIR / relative).stat().st_size
+        for relative in sadtalker_engine.SADTALKER_FILES
+        if (sadtalker_engine.SADTALKER_DIR / relative).is_file()
+    )
+    return ModelWeightStatus(
+        key=key, name=name, source=str(sadtalker_engine.SADTALKER_DIR), present=not problems, size_bytes=size,
+        # Default-off like Wav2Lip: absent means only that the 'sadtalker' engine is unavailable.
+        detail="weights present" if not problems else "; ".join(problems)
+        + ". The 'sadtalker' render engine is unavailable; the blendshape engine still renders",
+        fix="" if not problems else sadtalker_engine.FETCH_COMMAND,
+    )
+
+
 def check_bark(key: str = "bark", name: str = "Bark small (dialogue)") -> ModelWeightStatus:
     """Bark needs its model files and the presets for both dialogue speakers."""
     from bark_engine import BARK_FILES, BARK_REPO, DIALOGUE_VOICES, PRESET_PARTS
@@ -773,6 +792,7 @@ def audit_vision_weights() -> List[ModelWeightStatus]:
                 "--only wav2lip --accept-licence wav2lip"
             ),
         ),
+        check_sadtalker(),
         check_local_file(
             "syncnet",
             "SyncNet v2 (LSE-C / LSE-D lip-sync metric)",

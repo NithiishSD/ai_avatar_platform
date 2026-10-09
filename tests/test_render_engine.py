@@ -136,7 +136,7 @@ class PlanningTests(RenderCase):
         self.assertEqual(render_engine.validate_engine(None), "blendshape")
         self.assertEqual(render_engine.validate_engine(" Wav2Lip "), "wav2lip")
         with self.assertRaises(RenderError):
-            render_engine.validate_engine("sadtalker")
+            render_engine.validate_engine("liveportrait")
         with mock.patch.dict("os.environ", {"RENDER_ENGINE": "wav2lip"}):
             self.assertEqual(render_engine.validate_engine(None), "wav2lip")
 
@@ -167,6 +167,14 @@ class PreflightTests(RenderCase):
             with self.assertRaises(RenderError) as ctx:
                 render_engine.preflight(self.job(), engine="wav2lip", store=self.store)
         self.assertIn("--accept-licence wav2lip", str(ctx.exception))
+
+    def test_sadtalker_without_its_files_fails_loudly_instead_of_falling_back(self):
+        self.wav()
+        with mock.patch("sadtalker_engine.missing", return_value=["the SadTalker code is not checked out (fetch it)"]):
+            with self.assertRaises(RenderError) as ctx:
+                render_engine.preflight(self.job(), engine="sadtalker", store=self.store)
+        self.assertIn("not checked out", str(ctx.exception))
+        self.assertIn("blendshape", str(ctx.exception))
 
 
 @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg / ffprobe not installed")
@@ -256,6 +264,56 @@ class RenderJobTests(RenderCase):
         self.assertEqual(seen["frame_count"], 25)
         self.assertEqual(len(seen["face_box"]), 4)
         self.assertFalse(warp.call_args.kwargs["include_mouth"])
+
+    def fake_sadtalker(self, frames=20, size=512, device="cuda"):
+        """Replace the SadTalker child with one that writes a real 25 fps MP4 of grey frames."""
+        import sadtalker_engine
+
+        calls = {}
+
+        def render(image, audio_path, pose_style, still):
+            calls.update(shape=image.shape, pose_style=pose_style, still=still)
+            folder = self.tmp / "st" / "out"
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / "result.mp4"
+            with video_io.VideoWriter(path, size, size, 25) as writer:
+                for _ in range(frames):
+                    writer.write(np.full((size, size, 3), 128, dtype=np.uint8))
+            return sadtalker_engine.SadTalkerResult(path, device, 2345 if device == "cuda" else None, 1.0)
+
+        return calls, render
+
+    def test_sadtalker_frames_replace_the_warp_and_report_themselves(self):
+        self.wav(1.0)
+        # 20 frames at 25 fps for 1 s of audio: the last frame must be held to reach 25.
+        calls, render = self.fake_sadtalker(frames=20)
+        with mock.patch("sadtalker_engine.missing", return_value=[]), \
+             mock.patch("sadtalker_engine.render", side_effect=render), \
+             mock.patch("render_engine._warp_frames") as warp:
+            result = render_engine.render_job(self.job(), engine="sadtalker", store=self.store)
+        warp.assert_not_called()
+        self.assertEqual(result.engine, "sadtalker")
+        self.assertEqual(result.frame_count, 25)
+        self.assertEqual((result.width, result.height), (512, 512))
+        self.assertEqual(result.peak_vram_mb, 2345)
+        # The warp's blink model did not draw this video, so it reports none.
+        self.assertEqual(result.blink_count, 0)
+        self.assertEqual(calls["shape"], (512, 512, 3))
+        self.assertFalse(calls["still"])
+        self.assertFalse((self.tmp / "st").exists())  # the child's folder is cleaned up
+
+    def test_sadtalker_still_mode_and_honest_warnings(self):
+        self.wav(1.0)
+        calls, render = self.fake_sadtalker(frames=25, size=256, device="cpu")
+        job = self.job(motionIntensity=0.0, emotionVector={"happy": 0.0, "neutral": 0.5, "eyeblinkRate": 1.0, "joy": 0.8})
+        with mock.patch("sadtalker_engine.missing", return_value=[]), mock.patch("sadtalker_engine.render", side_effect=render):
+            result = render_engine.render_job(job, engine="sadtalker", store=self.store)
+        self.assertTrue(calls["still"])
+        # A 256 px video is resized to the job's 512 px frame, not passed through at the wrong size.
+        self.assertEqual((result.width, result.height), (512, 512))
+        text = " ".join(result.warnings)
+        self.assertIn("no emotion input", text)
+        self.assertIn("ran on the cpu", text)
 
     def test_failed_render_leaves_no_partial_file(self):
         self.wav(1.0)
