@@ -43,8 +43,12 @@ Concepts used here:
   * *Pipelining*. Sentence k+1 is submitted for synthesis before sentence k's frames are rendered, so
     the two overlap in time instead of running back to back.
   * *PCM16*. Raw audio as signed 16-bit integers, one per sample; -32768..32767 maps to -1.0..1.0.
+  * *Thread pools*. A ``ThreadPoolExecutor`` owns a fixed number of worker threads and a queue of
+    calls waiting for them. ``max_workers`` caps how many run at once; the rest wait their turn.
 """
 
+# Stores every type annotation as a string instead of evaluating it when the module loads (PEP 563),
+# so a hint may name a class defined further down the file.
 from __future__ import annotations
 
 import asyncio
@@ -153,6 +157,8 @@ def split_sentences(text: str, max_chars: int = MAX_CHUNK_CHARS) -> List[str]:
     return [p for p in pieces if any(ch.isalnum() for ch in p)]
 
 
+# @dataclass writes __init__, __repr__ and __eq__ from the annotated fields below, so a plain
+# record type needs no boilerplate.
 @dataclass
 class ChunkAudio:
     """One synthesised sentence: audio, its measured timing, and what made it.
@@ -186,6 +192,8 @@ class LiveEvent:
 
     kind: str
     payload: bytes = b""
+    # default_factory builds a fresh dict per event; a plain ``= {}`` default would be one dict
+    # shared by every instance (dataclasses refuse it for that reason).
     meta: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -212,6 +220,12 @@ class LiveSession:
         voice: Optional[str] = None,
         motion_intensity: float = 1.0,
     ) -> None:
+        """Store the settings from the client's start message; nothing slow happens until ``open``.
+
+        ``router`` is the shared voice router, ``store`` the consent-enforcing face store. The
+        rest mirror the start message: ``max_side`` caps the frame size in pixels, ``speaker_wav``
+        is an already-confined path inside ``inputs/`` (clone mode only).
+        """
         self.router = router
         self.voice = voice
         self.motion_intensity = motion_intensity
@@ -410,6 +424,8 @@ async def stream_text(session: LiveSession, text: str, with_frames: bool = True)
     )
     try:
         for k in range(len(sentences)):
+            # Always set here: it is None only after the last sentence was taken. The assert says so
+            # for the type checker.
             assert pending is not None
             chunk: ChunkAudio = await pending
             # Queue sentence k+1 now, so it synthesises while sentence k is being rendered and sent.
@@ -487,6 +503,7 @@ async def stream_audio_chunk(session: LiveSession, index: int, pcm16: bytes, sam
     event. No audio is sent back; the client already has it. The frames sit on the same timeline
     as text speech, so a session can mix the two.
     """
+    # The loop this coroutine runs on, as in stream_text.
     loop = asyncio.get_running_loop()
     # Validate before any work is queued, so a bad chunk costs nothing.
     check_pcm(pcm16, sample_rate)

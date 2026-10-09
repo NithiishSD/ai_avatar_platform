@@ -58,7 +58,7 @@ records what was verified live, with the real command and result.
 | T8.2 | Done | 0a74a50 |
 | T8.8 | Done — 1080p met by super-resolving the photo; a person's look waits on M-09 | 3980a94 |
 | T8.6 | Done — built and measured; a person's look waits on M-10 | 79dd00f |
-| T7.4 | **Partial, paused by the owner**: 48 files documented (comment-only, proven); 17 files still below 35% | 206805a |
+| T7.4 | Done (resumed at the owner's request, 9 Oct): every application file >= 35% explanation density | 206805a + (this commit) |
 | T7.2 | Done | 8da4461 + (this commit) |
 | T7.6 | Done (README rewritten) | 8da4461 |
 | T7.7 | Done — every DoD item run (results below); open items are the owner's manual checks and the paused T7.4 | (this commit) |
@@ -1469,3 +1469,19 @@ nor let others free it. Worse, the failed load was cached, so every later synthe
 (1,500 MB VideoSeal, 400 MB AudioSeal) before loading on CUDA, a full card is not cached as a permanent failure, both register releasers, and every model call
 goes through `gpu_utils.retry_after_freeing` (free the other models, retry once). Tests: retry once on OOM, re-raise other errors and a second OOM, no cached
 failure on a full card. `scripts/check.sh` **883 tests OK**; **E2E 18 passed (1.4 min), 0 GPU memory errors**.
+
+### 2026-10-09 — T7.4 documentation pass completed
+
+Resumed at the owner's request. Four workers on disjoint sets documented the 21 files still below 35% (by then including the files added on 8-9 Oct): the frontend
+(`App.jsx`, `CreateVideo.jsx`, `FacePicker.jsx`, `LivePanel.jsx`, `ProvenancePanel.jsx`, `main.jsx`, `voices.js`), `app.py` and `live_engine.py`, the speech
+modules (`voice_engine`, `alignment_engine`, `bark_engine`, `mms_engine`), and vision + scripts (`face_engine`, `lipsync_metric`, `wav2lip_engine`,
+`watermark_engine`, `render_avatar.py`, `gpu_benchmark.py`, `measure_audio_visemes.py`, `check_comment_only.py`). `app.py` went from 17 % to 41 %.
+
+Verified independently (not from the workers' reports): `scripts/check_comment_only.py` -> 14 of 14 changed Python files comment/docstring-only; the frontend
+production bundle has the same content hashes as before the pass (`index-B9WFBrLN.js`, `index-DS3w0ska.css`), so no JSX changed; `npm run lint` clean; ruff clean;
+**every application file (backend, scripts, SDK, frontend) at or above 35 %**. One fix by hand: a paragraph the frontend worker inserted mid-sentence in the
+`App.jsx` header comment. DoD 12: one HTML `placeholder` attribute remains (D-61).
+
+Things the workers found while reading (comments now say what the code does; left for a code task): the acoustic-fallback comment in `alignment_engine` says
+pauses 0.5x / silences 1.0x but the code uses 0.6 for both; `VoiceEngineRouter._mms_failed` is read but never set any more; a "one synthesis at a time" note
+in `live_engine` sits above the wrong constants.
