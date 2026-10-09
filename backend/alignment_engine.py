@@ -763,8 +763,8 @@ class ForcedAligner:
             ]
 
         # Allocate time slices proportionally
-        # Vowels get ~1.5x weight, consonants 1.0x, short pauses 0.5x, silences 1.0x
-        # (As written, the code gives both pause kinds, SP and SIL, 0.6.)
+        # Vowels get 1.5x weight, consonants 1.0x, and both pause kinds (SP word
+        # gaps, SIL sentence ends) 0.6x.
         # Vowels are held longer than consonants in real speech, which is why
         # they get the larger share.
         weights = []

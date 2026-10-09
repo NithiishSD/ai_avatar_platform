@@ -294,10 +294,8 @@ class VoiceEngineRouter:
         # Set when Bark's weights are present but it fails to load (e.g. out
         # of memory): dialogue then degrades visibly to Kokoro (D-26).
         self._bark_failed = False
-        # Read by select_model; nothing in this file sets it any more (see the
-        # comment in _synthesize_mms on why one language's failure must not
-        # disable MMS for every language).
-        self._mms_failed = False
+        # There is no MMS failure flag: one language failing must not disable
+        # MMS for every language (see the comment in _synthesize_mms).
 
         # Lets the vision side make room on the 6 GB card before it loads a
         # model (golden rule 5). Everything reloads lazily on the next call.
@@ -395,21 +393,16 @@ class VoiceEngineRouter:
                     f"{language_registry.supported_count()} supported languages. "
                     "Use mode='high_quality' (Higgs) or mode='clone' (XTTS-v2)."
                 )
-            if self._mms_failed:
-                # Higgs if it still loads, else XTTS-v2 as the last resort.
-                logger.warning("MMS-TTS unavailable — falling back to Higgs for %s", language)
-                return "xtts-v2" if self._higgs_failed else "higgs-tts-2"
             return "mms-tts"
 
         # 5/6. Non-English: prefer MMS-TTS coverage, else Higgs.
         if normalized_lang not in _KOKORO_ENGLISH_CODES:
-            if info.mms_supported and not self._mms_failed:
+            if info.mms_supported:
                 return "mms-tts"
             if self._higgs_failed:
                 raise ValueError(
                     f"Language '{language}' has no available backend: MMS-TTS "
-                    f"{'failed to load' if info.mms_supported else 'has no checkpoint'} "
-                    "and Higgs TTS 2 failed to load. "
+                    "has no checkpoint for it and Higgs TTS 2 failed to load. "
                     "Use mode='clone' with XTTS-v2 for multilingual synthesis."
                 )
             return "higgs-tts-2"
@@ -700,8 +693,8 @@ class VoiceEngineRouter:
             # *after* preflight, so it bypassed the weights check: Higgs's
             # loader would have started an 11.6 GB download of a model this
             # stack cannot run. One language failing (say, its checkpoint not
-            # cached while offline) also set _mms_failed and disabled MMS for
-            # every other language. Now the failure is this request's alone.
+            # cached while offline) also set a router-wide MMS failure flag and
+            # disabled MMS for every other language. Now the failure is this request's alone.
             logger.error("MMS-TTS failed for %s (%s)", language, exc)
             raise RuntimeError(
                 f"MMS-TTS could not synthesise {info.name} ({info.iso3}): "

@@ -103,12 +103,6 @@ class RouterSelectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.router.select_model(mode="fast", language="ja")
 
-    def test_both_multilingual_backends_failed_raises(self):
-        self.router._higgs_failed = True
-        self.router._mms_failed = True
-        with self.assertRaises(ValueError):
-            self.router.select_model(mode="fast", language="es")
-
     def test_bark_failed_falls_back_to_kokoro_for_dialogue(self):
         self.router._bark_failed = True
         self.assertEqual(self.router.select_model(mode="dialogue"), "kokoro")
@@ -380,7 +374,7 @@ class MMSFailureTests(unittest.TestCase):
         load_higgs.assert_not_called()
         self.assertIn("hin", str(caught.exception))
         # One language failing must not switch MMS off for every other one.
-        self.assertFalse(router._mms_failed)
+        self.assertEqual(router.select_model(mode="fast", language="es"), "mms-tts")
 
 
 class HiggsLoadingTests(unittest.TestCase):

@@ -90,9 +90,6 @@ JPEG_QUALITY = 80
 # run-on paragraph does not become one long synthesis before any audio is sent.
 MAX_CHUNK_CHARS = 220
 
-# One synthesis at a time across every session (the router serialises anyway;
-# this keeps the queue visible and bounded). Rendering is numpy/OpenCV and may
-# run two at a time.
 # Streaming *audio* input (R-41): the client sends its own speech as PCM16 chunks and the face
 # follows it. There is no transcript, so there are no phonemes to align: the mouth opens and
 # closes with the loudness of the audio. That is an estimate, and every message about it says so.
@@ -106,8 +103,9 @@ MIN_AUDIO_REFERENCE = 0.02
 # room noise sits around -50 to -60 dBFS and would otherwise flicker the mouth open.
 NOISE_GATE = 0.01
 
-# The two worker pools named in the note above "Streaming audio input": one synthesis thread shared
-# by every session, two render threads. Named threads make them easy to spot in a stack dump.
+# The two worker pools. One synthesis at a time across every session (the router serialises anyway;
+# this keeps the queue visible and bounded). Rendering is numpy/OpenCV and may run two at a time.
+# Named threads make them easy to spot in a stack dump.
 _SYNTH_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-synth")
 _RENDER_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="live-render")
 

@@ -5,14 +5,14 @@ named. Reported in the final summary.
 
 | ID | Question | Blocks | Default meanwhile |
 |---|---|---|---|
-| Q-01 | Is there target hardware (RTX 4090 / A100) for the final-gate numbers, or are the 6 GB host results the ones that count? | N-06, N-07, N-08, N-10 as "met" | Measure on what exists, report not met where not met |
-| Q-02 | What does "> 95% lip sync accuracy" mean as a measurement? | N-05 as "met" | D-12 |
+| Q-01 | ~~Target hardware for the final-gate numbers?~~ **Resolved 9 Oct: the RTX 4050 (6 GB) is the most there is; its results are the ones that count.** | — | GPU numbers from the host are final |
+| Q-02 | ~~What does "> 95% lip sync accuracy" mean?~~ **Resolved 9 Oct: it is the accuracy the hackathon problem statement asks for, with no further definition.** D-12's measurement (% of 1-second windows within ±1 frame) stays the one compared against 95% | — | D-12 |
 | Q-03 | ~~Cloning similarity target: 85% or 90%?~~ **Resolved 8 Oct from the intact PDF: both: > 85% at Milestone 1, > 90% as the final target.** | — | Report against both (done) |
 | Q-04 | ~~Intact copy of the problem-statement PDF~~ **Resolved 8 Oct: the owner replaced `docs/4895e15d-…pdf` with an intact 20-page copy; read in full and reconciled in `02-REQUIREMENTS.md`** | — | — |
-| Q-05 | A consented human face for demo evidence (photo of a team member with written consent, or a licensed stock photo with a model release) | admissible face evidence | Synthetic `demo` face: usable, never evidence |
-| Q-06 | ~~m1 tracking CLAUDE.md~~ resolved: intended (D-01). Still open: 6 older `main` commits use `feat:`/`fix:` prefixes, and `00bffa1` on `m1` has a co-author trailer. Rewrite either, or leave? | nothing (main has no assistant wording) | Leave; never rewrite pushed history without the owner |
-| Q-07 | Uptime > 99.5% needs a deployed environment. Is there one? | N-11 | Not measured |
-| Q-08 | Cloud deployment / GPU autoscaling budget? | roadmap Phase 6 K8s item | Docker Compose |
+| Q-05 | A consented human face for demo evidence. **Owner, 9 Oct: any face used is within the rules and regulations.** No photo has been supplied yet; one still needs registering with a provenance sidecar (M-01 shows how) before it counts as evidence | admissible face evidence | Synthetic `demo` face: usable, never evidence |
+| Q-06 | ~~Rewrite the 6 `feat:`/`fix:` commits on `main` and the trailer on `00bffa1`?~~ **Resolved 9 Oct: leave them.** | — | Pushed history stays as it is |
+| Q-07 | ~~Is there a deployed environment for uptime?~~ **Resolved 9 Oct: no; a local demo only.** N-11 cannot be measured and is reported as not applicable | — | — |
+| Q-08 | ~~Cloud / GPU autoscaling budget?~~ **Resolved 9 Oct: none; local demo only.** The K8s item is not planned | — | Docker Compose |
 
 ## Manual checks for the owner
 

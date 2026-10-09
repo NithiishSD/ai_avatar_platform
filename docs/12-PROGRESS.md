@@ -1485,3 +1485,16 @@ production bundle has the same content hashes as before the pass (`index-B9WFBrL
 Things the workers found while reading (comments now say what the code does; left for a code task): the acoustic-fallback comment in `alignment_engine` says
 pauses 0.5x / silences 1.0x but the code uses 0.6 for both; `VoiceEngineRouter._mms_failed` is read but never set any more; a "one synthesis at a time" note
 in `live_engine` sits above the wrong constants.
+
+### 2026-10-09 — three code issues from the documentation pass fixed; owner's answers to the open questions
+
+- `alignment_engine`: the comment claimed pauses 0.5x and silences 1.0x; the code gives both 0.6. Comment corrected, code unchanged (D-62).
+- `voice_engine`: `VoiceEngineRouter._mms_failed` removed with the two `select_model` branches that read it (it was never set any more), and the
+  "MMS failed to load" wording in the no-backend error. Tests: the planted-flag test removed (unreachable state); `MMSFailureTests` now checks
+  that after one language fails, `es` still routes to `mms-tts`.
+- `live_engine`: the "one synthesis at a time" note moved from above the audio-input constants onto `_SYNTH_POOL` / `_RENDER_POOL`.
+- Verified: `scripts/check.sh` -> ruff clean, pyrefly 0 errors, **882 tests OK** (883 before, minus the removed test).
+
+Owner's answers (9 Oct): Q-01 the RTX 4050 is the final hardware; Q-02 the 95% is the problem statement's figure, D-12 stays the measurement;
+Q-05 face use is within the rules, but no photo supplied yet; Q-06 leave history as it is; Q-07/Q-08 local demo only, no deployment, so N-11 is
+not applicable.
