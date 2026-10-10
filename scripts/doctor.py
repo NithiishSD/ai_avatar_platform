@@ -21,7 +21,7 @@ The three severities mean:
   * WARN - the project still runs, but something is degraded or optional
     (no GPU, an optional package, no reference files yet).
   * FAIL - something the project cannot work without. Any FAIL makes the
-    exit code 1; the Definition of Done in CLAUDE.md requires 0 FAIL.
+    exit code 1; the project's Definition of Done requires 0 FAIL.
 
 How the script is built: every check is a small function that calls
 ``record()`` one or more times. ``main()`` runs them all through
@@ -50,7 +50,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # not set on the command line.
 sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 
-# The project pins Python 3.10 (see CLAUDE.md, "Hard constraints"); base conda
+# The project pins Python 3.10 (see the project constraints); base conda
 # is 3.14 and cannot install the pinned packages.
 EXPECTED_PYTHON = (3, 10)
 # The project's own conda environment. Comparing sys.prefix with it tells us

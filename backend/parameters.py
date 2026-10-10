@@ -132,7 +132,7 @@ def catalogue() -> Dict[str, Any]:
             "visualMeasuredWorking": count(lambda r: r["group"] in visual and r["status"] == M),
         },
         # "met" is hard-coded False: the visual rows are fewer than TARGET, and a target is never
-        # redefined as met (CLAUDE.md, autonomy rules).
+        # redefined as met (project rule: a target is reported as not met, never redefined).
         "target": {"appearanceParameters": TARGET, "met": False,
                    "note": "N-15 asks for 50+ appearance parameters; only the 'visual' counts above describe the avatar's look, and fewer than that are verified"},
         "measuredBy": "scripts/measure_parameters.py (8 Oct 2026, CPU); see docs/08-TESTING.md N-15",
