@@ -9,6 +9,20 @@ The table is data, not code: ``backend/data/mms_tts_languages.json`` is
 regenerated from
 ``https://dl.fbaipublicfiles.com/mms/tts/all-tts-languages.html`` and the SIL
 ISO-639-3 code table. Nothing here downloads anything at runtime.
+
+Where it sits: ``voice_engine.VoiceEngineRouter`` calls ``resolve`` to decide
+which TTS engine can speak a requested language, and the API exposes
+``search`` and ``resolve`` for the studio's language picker.
+
+Language codes, explained once:
+
+* **ISO-639-1** is the two-letter code (``en``, ``hi``).
+* **ISO-639-3** is the three-letter code (``eng``, ``hin``). It covers far
+  more languages, so MMS-TTS names its checkpoints with it.
+* **ISO-639-2b** is an older three-letter set that sometimes differs from 639-3
+  (``fre`` versus ``fra`` for French); the alias map folds it in.
+* **BCP-47** tags add a region or script after a dash (``pt-BR``). Only the
+  first part matters for choosing a voice model.
 """
 
 from __future__ import annotations
@@ -31,8 +45,14 @@ XTTS_LANGUAGES = {
     "ru", "nl", "cs", "ar", "zh", "ja", "hu", "ko", "hi",
 }
 
+# XTTS-v2's own spelling of a language, where it differs from ISO-639-1:
+# Coqui lists Chinese as "zh-cn".
+_XTTS_SPELLING = {"zh": "zh-cn"}
+
 # Scripts MMS-TTS cannot tokenize directly; the checkpoint's tokenizer sets
 # ``is_uroman`` and the text must be romanized before synthesis.
+# The ranges are Unicode blocks from U+0370 (Greek) upward, which hold mostly
+# non-Latin scripts. Any such character in the text is enough to warn.
 _NON_LATIN_HINT = re.compile(
     r"[Ͱ-᳿Ḁ-ỿⰀ-퟿豈-﫿]"
 )
@@ -42,6 +62,7 @@ _NON_LATIN_HINT = re.compile(
 class LanguageInfo:
     """Resolved description of one requested language code."""
 
+    # The code exactly as the caller sent it, kept for error messages and the UI.
     requested: str
     iso3: str
     name: str
@@ -51,6 +72,7 @@ class LanguageInfo:
     is_english: bool
 
     def to_dict(self) -> dict:
+        """The camelCase JSON shape the API returns for this language."""
         return {
             "requested": self.requested,
             "iso3": self.iso3,
@@ -62,21 +84,28 @@ class LanguageInfo:
         }
 
 
+# lru_cache(maxsize=1) on a no-argument function means "read the JSON once,
+# on first use, then hand back the same dict". It is lazy, so importing this
+# module stays cheap, and every later lookup is a dict access.
 @lru_cache(maxsize=1)
 def _load() -> dict:
+    """Parse the bundled language table (cached after the first call)."""
     with DATA_PATH.open(encoding="utf-8") as handle:
         return json.load(handle)
 
 
 def _mms_languages() -> Dict[str, str]:
+    """ISO-639-3 code -> language name, for every MMS-TTS checkpoint."""
     return _load()["languages"]
 
 
 def _aliases() -> Dict[str, str]:
+    """Two-letter and 639-2b codes -> ISO-639-3."""
     return _load()["aliases"]
 
 
 def _iso_names() -> Dict[str, str]:
+    """ISO-639-3 code -> name for every ISO language, including ones MMS lacks."""
     return _load()["isoNames"]
 
 
@@ -92,6 +121,8 @@ def to_iso3(code: str) -> Optional[str]:
     base = normalize_code(code)
     if not base:
         return None
+    # A three-letter code is taken as-is when it is a real ISO-639-3 code; otherwise
+    # it may be a 639-2b spelling, which the alias map translates.
     if len(base) == 3:
         if base in _mms_languages() or base in _iso_names():
             return base
@@ -99,7 +130,28 @@ def to_iso3(code: str) -> Optional[str]:
     return _aliases().get(base)
 
 
+def xtts_code(code: str) -> Optional[str]:
+    """
+    The code XTTS-v2 expects for a language, or None if it cannot speak it.
+
+    The studio sends ISO-639-3 codes (``spa``, ``hin``) because that is how the
+    MMS-TTS catalogue is keyed, while XTTS-v2 takes ISO-639-1 (``es``, ``hi``).
+    Passing ``spa`` through used to reach the model unchanged, and
+    ``xtts_supported`` called Spanish unsupported. Both spellings now resolve.
+    """
+    iso3 = to_iso3(code)
+    if not iso3:
+        return None
+    # Compare in ISO-639-3 space so "es", "spa" and "es-MX" all match "es".
+    # sorted() keeps the answer deterministic if two candidates ever matched.
+    for candidate in sorted(XTTS_LANGUAGES):
+        if to_iso3(candidate) == iso3:
+            return _XTTS_SPELLING.get(candidate, candidate)
+    return None
+
+
 def is_english(code: str) -> bool:
+    """True for any spelling of English (``en``, ``en-GB``, ``eng``)."""
     return (code or "").strip().lower() in ENGLISH_CODES or to_iso3(code) == "eng"
 
 
@@ -123,8 +175,9 @@ def resolve(code: str) -> LanguageInfo:
         iso3=iso3 or "",
         name=name,
         mms_supported=supported,
+        # Meta publishes one checkpoint per language under this naming scheme.
         mms_model=f"facebook/mms-tts-{iso3}" if supported else None,
-        xtts_supported=normalize_code(requested) in XTTS_LANGUAGES,
+        xtts_supported=xtts_code(requested) is not None,
         is_english=is_english(requested),
     )
 
@@ -141,6 +194,8 @@ def needs_romanization(code: str, text: str = "") -> bool:
     The authoritative answer lives on the loaded tokenizer (``is_uroman``);
     this is the cheap pre-check used for UI hints and routing warnings.
     """
+    # Only the text is inspected today; ``code`` is accepted so callers do not
+    # change when a per-language table is added.
     if _NON_LATIN_HINT.search(text or ""):
         return True
     return False
@@ -154,6 +209,7 @@ def search(query: str = "", limit: int = 50) -> List[LanguageInfo]:
         for iso3, name in _mms_languages().items()
         if not needle or needle in name.lower() or needle in iso3
     ]
+    # Tuples sort by their first item, so this orders by language name.
     matches.sort()
     if limit > 0:
         matches = matches[:limit]
@@ -161,8 +217,10 @@ def search(query: str = "", limit: int = 50) -> List[LanguageInfo]:
 
 
 def supported_count() -> int:
+    """How many languages MMS-TTS can speak, per the bundled table."""
     return len(_mms_languages())
 
 
 def catalogue_source() -> str:
+    """Where the bundled table came from, returned by the language-list endpoint."""
     return _load()["source"]

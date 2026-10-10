@@ -22,7 +22,7 @@ well-formed and typed - no defensive checks scattered through the code."
 """
 
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -157,6 +157,29 @@ class EmotionVector(BaseModel):
     excitement: Optional[float] = Field(default=None, ge=0, le=1)
 
 
+class BackgroundSpec(BaseModel):
+    """
+    Optional render setting: replace the photo's background (R-16).
+
+    Exactly one of ``color`` (``#rrggbb``) or ``imageUrl`` (a file the worker is
+    allowed to read: this API's own ``/outputs/`` URL or a ``file://`` path
+    inside ``outputs/`` / ``inputs/``). It is an *optional field added to the
+    frozen contract*, which is the only way the contract may grow: a job
+    without it renders exactly as before.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    color: Optional[str] = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    image_url: Optional[str] = Field(default=None, alias="imageUrl", min_length=1)
+
+    @model_validator(mode="after")
+    def exactly_one_source(self):
+        if (self.color is None) == (self.image_url is None):
+            raise ValueError("background needs exactly one of 'color' or 'imageUrl'")
+        return self
+
+
 class AvatarRenderJob(BaseModel):
     """
     **The frozen contract.** Everything the renderer needs to make one video.
@@ -192,6 +215,11 @@ class AvatarRenderJob(BaseModel):
     emotion_vector: EmotionVector = Field(alias="emotionVector")
     render_quality: RenderQuality = Field(alias="renderQuality")
     target_fps: int = Field(alias="targetFps", ge=1, le=120)
+    # Optional extension (T3.1). Absent = keep the photo's own background.
+    background: Optional[BackgroundSpec] = None
+    # How much the head and shoulders move while talking (I-01): 0 = a still photo, 1 = natural, up to
+    # 2 = lively. Optional and absent by default (the renderer then uses 1), so older jobs are unchanged.
+    motion_intensity: Optional[float] = Field(default=None, alias="motionIntensity", ge=0.0, le=2.0)
 
     # A field_validator runs on one field. The @classmethod is required by
     # Pydantic v2 (the validator belongs to the class, not an instance - it runs
@@ -226,6 +254,25 @@ class AvatarRenderJob(BaseModel):
                 raise ValueError("phoneme timestamp exceeds durationSeconds")
             previous_start = timestamp.start_ms
         return self
+
+
+# The cap is the size the concurrency test (N-08) proved the queue handles at once; a longer list is
+# refused with a 422 that names the limit, never silently truncated.
+MAX_BATCH_JOBS = 50
+
+
+class RenderBatchRequest(BaseModel):
+    """
+    Up to 50 render jobs in one request (T8.1).
+
+    ``jobs`` stays a list of raw objects on purpose: each is validated against ``AvatarRenderJob`` on
+    its own, so one malformed item is reported by index instead of making FastAPI reject the whole
+    request with a single 422.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    jobs: List[Dict[str, Any]] = Field(min_length=1, max_length=MAX_BATCH_JOBS)
 
 
 class RenderJobResponse(BaseModel):
@@ -318,7 +365,18 @@ class AudioSynthesisRequest(BaseModel):
         description="Run the MOS/PESQ speech quality auditor on the generated audio",
     )
     speaker_wav: Optional[str] = Field(default=None, alias="speakerWav")
+    # Which engine clones in mode="clone". Optional, defaulting to XTTS-v2, so
+    # existing callers are unchanged; the pattern rejects anything else at the
+    # edge. Explicit on purpose: the router never switches cloners on its own.
+    clone_engine: Optional[str] = Field(
+        default=None,
+        alias="cloneEngine",
+        pattern="^(xtts-v2|openvoice-v2)$",
+        description="Cloning engine for mode='clone': 'xtts-v2' (default) or 'openvoice-v2'",
+    )
     output_filename: str = Field(default="speech.wav", alias="outputFilename", min_length=1)
+    # Which Kokoro speaker (GET /api/v1/audio/voices), so a voice can match the face; Kokoro only.
+    voice: Optional[str] = Field(default=None, max_length=32)
 
     @field_validator("text")
     @classmethod
@@ -353,6 +411,7 @@ class AudioSynthesisResponse(BaseModel):
     emotion: Optional[Dict[str, Any]] = Field(default=None)
     quality_report: Optional[Dict[str, Any]] = Field(default=None, alias="qualityReport")
     language: Optional[Dict[str, Any]] = Field(default=None)
+    watermark: Optional[Dict[str, Any]] = Field(default=None)
 
 
 class SynthesisJobResponse(BaseModel):
@@ -378,8 +437,13 @@ class SynthesisJobResponse(BaseModel):
     alignment_method: Optional[str] = Field(default=None, alias="alignmentMethod")
     emotion: Optional[Dict[str, Any]] = Field(default=None)
     quality_report: Optional[Dict[str, Any]] = Field(default=None, alias="qualityReport")
+    # Why a FAILED task failed (the engine's own message, server paths removed). Without it a
+    # client saw only "FAILED" and had to read the server log to learn what to fix.
+    error: Optional[str] = Field(default=None)
     language: Optional[Dict[str, Any]] = Field(default=None)
     latency_ms: Optional[float] = Field(default=None, alias="latencyMs")
+    # Whether (and how verifiably) the audio carries this platform's watermark.
+    watermark: Optional[Dict[str, Any]] = None
 
 
 class AlignmentRequest(BaseModel):
@@ -593,6 +657,117 @@ class AvatarRegisterResponse(BaseModel):
     # Optional because a synthetic avatar is registered by the generator, which
     # has already run the gate and does not re-report it.
     quality: Optional[FaceQualityResponse] = None
+
+
+class LiveStartMessage(BaseModel):
+    """
+    First message of a live session (``WS /api/v1/live``): who speaks, how, and at what size.
+
+    ``apiKey`` rides in the message because a browser's WebSocket constructor
+    cannot set headers; the ``X-API-Key`` header is accepted too.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    type: Literal["start"]
+    avatar_id: str = Field(alias="avatarId", pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    api_key: Optional[str] = Field(default=None, alias="apiKey", max_length=256)
+    language: str = Field(default="en", min_length=2, max_length=16)
+    mode: Literal["fast", "clone"] = "fast"
+    emotion: Optional[str] = Field(default=None, max_length=32)
+    emotion_intensity: float = Field(default=1.0, alias="emotionIntensity", ge=0.0, le=1.0)
+    # A live frame must be cheap enough to render in real time on a CPU, so the
+    # default is smaller than a file render's 512 px.
+    fps: int = Field(default=25, ge=5, le=30)
+    max_side: int = Field(default=384, alias="maxSide", ge=128, le=640)
+    speaker_wav: Optional[str] = Field(default=None, alias="speakerWav", max_length=1024)
+    clone_engine: Optional[Literal["xtts-v2", "openvoice-v2"]] = Field(default=None, alias="cloneEngine")
+    # The Kokoro speaker for fast mode, as for a file render (GET /api/v1/audio/voices).
+    voice: Optional[str] = Field(default=None, max_length=32)
+    # Head-and-shoulder movement, as for a file render (0 still .. 2 lively).
+    motion_intensity: float = Field(default=1.0, alias="motionIntensity", ge=0.0, le=2.0)
+
+
+class LiveSayMessage(BaseModel):
+    """Speak this text now (sentence by sentence)."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    type: Literal["say"]
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class LiveControlMessage(BaseModel):
+    """``interrupt`` stops the current speech and keeps the session; ``stop`` ends it; ``audio_end`` closes an audio stream."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    type: Literal["interrupt", "stop", "audio_end"]
+
+
+class LiveAudioStartMessage(BaseModel):
+    """
+    Switch a live session to the client's own speech (R-41): binary messages that follow are
+    16-bit little-endian mono PCM at ``sampleRate``, each at most 2 s, and the avatar's mouth follows
+    them. The voice is a person's, so the client states the basis it is used under; it goes on the
+    audit trail as ``audio_supplied``.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    type: Literal["audio_start"]
+    sample_rate: int = Field(alias="sampleRate", ge=8000, le=48000)
+    consent_basis: Literal["speaker-recorded", "written-consent", "open-licence"] = Field(alias="consentBasis")
+
+
+class AvatarGenerateRequest(BaseModel):
+    """
+    Ask for a synthetic face (T3.2). Attributes are fixed choices, not a free
+    prompt: see ``avatar_generator`` for why a prompt could not be trusted to
+    describe nobody. The allowed values are served by
+    ``GET /api/v1/avatar/generate/options``.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    avatar_id: str = Field(alias="avatarId", pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    age: Literal["young", "adult", "middle-aged", "older"] = "adult"
+    presentation: Literal["person", "man", "woman"] = "person"
+    hair: Literal["short-dark", "short-light", "long-dark", "long-light", "grey", "bald"] = "short-dark"
+    glasses: bool = False
+    seed: int = Field(default=0, ge=0, le=2**31 - 1)
+    # Each attempt is a full diffusion run (about 10 s on a GPU, minutes on a
+    # CPU), so the retries and steps are capped to bound one request's cost.
+    attempts: int = Field(default=4, ge=1, le=8)
+    steps: int = Field(default=30, ge=10, le=50)
+    overwrite: bool = False
+
+
+class AvatarStylizeRequest(BaseModel):
+    """
+    Restyle a registered avatar (T8.6): ``style`` is a fixed choice (``GET /api/v1/avatar/styles``),
+    the result is registered as ``newAvatarId`` and inherits the source's provenance. Poll it with
+    ``GET /api/v1/avatar/generate/{taskId}``.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    avatar_id: str = Field(alias="avatarId", pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    style: Literal["realistic", "cartoon", "painting", "sketch"]
+    new_avatar_id: str = Field(alias="newAvatarId", pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    seed: int = Field(default=0, ge=0, le=2**31 - 1)
+    steps: int = Field(default=30, ge=10, le=50)
+
+
+class AvatarGenerateResponse(BaseModel):
+    """Poll state of a generation: QUEUED / PROCESSING / COMPLETED / FAILED."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    task_id: str = Field(alias="taskId")
+    status: str
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
 
 
 class LipSyncScoreResponse(BaseModel):

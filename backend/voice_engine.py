@@ -15,28 +15,190 @@ Fallbacks: Dia → Kokoro, Higgs → XTTS-v2, MMS → Higgs → XTTS-v2.
 Phase 3 post-processing runs after whichever backend produced the audio:
 emotion prosody (blended with the caller's speed/pitch in a single transform),
 forced alignment, then the optional MOS/PESQ quality audit.
+
+Where this sits in the pipeline
+-------------------------------
+This module is the audio half's front door. The API (and the live session)
+hands it a script plus options; it returns a ``SynthesisResult`` with a WAV
+path, the phoneme timestamps the vision side lip-syncs to, and a record of
+which engine actually spoke. Nothing downstream needs to know which model ran.
+
+Current state of the matrix above (it is kept as the original plan):
+dialogue is served by Bark (``bark_engine``), not Dia, because Dia cannot run
+on this stack (``model_registry.UNRUNNABLE``); a dialogue that Bark cannot
+load is spoken by Kokoro and the response says so. ``mode="clone"`` accepts
+two engines, XTTS-v2 (the default) and OpenVoice V2 (see ``CLONE_ENGINES``).
+After prosody, every clip is watermarked before it is aligned and audited.
+
+Concepts used throughout, explained once here:
+
+**The router.** One class decides *which* model serves a request from the
+caller's intent (``mode``) and language, then calls that model. The caller
+never names a model directly, so models can be swapped without changing the
+API. ``select_model`` is the whole decision; the ``_synthesize_*`` methods
+are the engines.
+
+**Lazy loading, one heavy model at a time.** Nothing is loaded at startup.
+Each model is loaded the first time a request needs it and kept in an
+attribute until ``release`` drops it. The GPU has 6 GB, so another component
+(the vision side) can call ``gpu_utils`` to make every registered model
+release itself before it loads its own. Requests are also serialised by a
+lock so two of them never load models at the same moment.
+
+**Preflight refusals.** Before any model is touched, ``preflight`` checks the
+cheap things that would make the request fail anyway: consent for a reference
+voice, weights on disk, a language the engine can speak. Failing there costs
+milliseconds and returns a clear error; failing inside a loader could start a
+multi-gigabyte download or waste minutes of synthesis.
 """
 
 import os
+import threading
 import time
 import math
+import re
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 
 import torch
 import soundfile as sf
 import numpy as np
 
-from audio_utils import validate_and_convert_for_cloning, AudioValidationError
+from audio_utils import validate_and_convert_for_cloning
+import alignment_engine
+import watermark_engine
 from alignment_engine import ForcedAligner
+import audit_log
+import gpu_utils
+import manifest
 import language_registry
+import model_registry
+import protected_voices
+import provenance
 from emotion_engine import EmotionProsodyEngine
-from mms_engine import MMSTTSEngine, MMSRomanizationRequired
+from mms_engine import MMSRomanizationRequired, MMSScriptMismatch, MMSTTSEngine
+from openvoice_engine import OpenVoiceEngine
+from bark_engine import BarkEngine, BarkUnavailable
 from quality_auditor import SpeechQualityAuditor
 
 logger = logging.getLogger(__name__)
+
+
+class ModelWeightsMissing(RuntimeError):
+    """
+    The engine a request needs has no weights on disk.
+
+    Raised *before* any loader runs. Without it, ``from_pretrained`` would
+    have started a multi-gigabyte download in the middle of a request - the
+    first time someone picked high quality or dialogue - while the startup log
+    claimed such requests "fall back to another model". The message names the
+    command that fixes it (golden rule 7).
+    """
+
+    def __init__(self, model_key: str, detail: str, fix: str = "") -> None:
+        self.model_key = model_key
+        fix = fix or f"{model_registry.MODEL_FETCH_COMMAND} --only {model_key}"
+        # "Fetch it with" only when fetching is the fix: for an engine this
+        # stack cannot run, that advice would cost gigabytes and change nothing.
+        remedy = f"Fetch it with: {fix}" if fix.startswith(model_registry.MODEL_FETCH_COMMAND) else f"Fix: {fix}"
+        super().__init__(f"{model_key} is not available: {detail}. {remedy}")
+
+
+# Engines that condition on a reference recording - that is, clone a voice.
+# Only for these does a supplied speaker_wav actually get used.
+REFERENCE_ENGINES = frozenset({"xtts-v2", "higgs-tts-2", "openvoice-v2"})
+# Peak process memory each engine adds on a CPU host, measured 8 Oct 2026 by
+# loading it alone and synthesising once (ru_maxrss minus the bare router):
+# XTTS-v2 4157 MiB, Bark 1840, OpenVoice V2 1637, Kokoro 1101, SD 1.5 6610.
+# Rounded up; ``gpu_utils.ensure_host_memory`` unloads the others when short.
+XTTS_RAM_MB = 4200
+# Engines a caller may ask for in mode="clone"; the first is the default.
+CLONE_ENGINES = ("xtts-v2", "openvoice-v2")
+
+
+class VoiceConsentRequired(PermissionError):
+    """
+    The reference voice has no consent on record, so it may not be cloned.
+
+    A PermissionError because it is exactly that: the request is well formed,
+    but this recording is not ours to use. The API turns it into a 403.
+    """
+
+
+def require_voice_consent(speaker_wav: str) -> None:
+    """
+    Refuse to clone a recording unless its provenance permits it.
+
+    Same rule as faces (`provenance.usability`): synthetic speech depicts no
+    real person and is always usable; a human recording needs a recorded
+    consent basis; a recording with no sidecar is refused - silence is not
+    consent. Before this check nothing on the cloning path asked at all.
+    """
+    path = Path(speaker_wav)
+    if not path.is_file():
+        # Checked first so a typo is reported as a missing file, not as a
+        # missing consent record for a file that does not exist.
+        raise FileNotFoundError(
+            f"Reference audio not found: '{speaker_wav}'. "
+            "Pick one from GET /api/v1/audio/samples."
+        )
+    record = provenance.load(path)
+    if record is None:
+        _refuse_voice(path, "no provenance record", VoiceConsentRequired(
+            f"'{path.name}' has no provenance record, so it may not be cloned. "
+            "Register it with scripts/make_reference.py --human FILE --speaker NAME "
+            "--licence LICENCE --consent <basis>, or use --smoke for a synthetic test voice."
+        ))
+    usable, reason = record.usability()  # type: ignore[union-attr]
+    if not usable:
+        _refuse_voice(path, reason, VoiceConsentRequired(f"'{path.name}' may not be cloned: {reason}."))
+    # Consent exists, but the voice may still belong to someone on the protected list (T8.9).
+    alert = protected_voices.shared().check(path, kind="reference", subject=manifest.sha256_file(path))
+    if alert:
+        _refuse_voice(path, f"matches protected voice {alert['protectedId']} (similarity {alert['similarity']})", VoiceConsentRequired(
+            f"'{path.name}' sounds like a voice on the protected list (similarity {alert['similarity']} >= {alert['threshold']}), "
+            "so it may not be cloned. The match is recorded in the audit trail as abuse_alert."
+        ))
+
+
+def _refuse_voice(path: Path, reason: str, error: Exception) -> None:
+    """Write the refusal to the audit trail (by file hash, never by name), then raise it."""
+    audit_log.shared_audit().record("voice_refused", subject=manifest.sha256_file(path), basis=None, reason=reason, file=path.name)
+    raise error
+
+
+# Kokoro speaker voices this server offers (American English, the pipeline loaded here). Each is a
+# small file in the Hugging Face cache, fetched by scripts/fetch_models.py --only kokoro; a voice not on
+# disk is refused instead of being downloaded mid-request. The owner asked for the voice to match the
+# face, so the studio offers these by gender; "af_heart" stays the default.
+KOKORO_REPO = "hexgrad/Kokoro-82M"
+KOKORO_VOICES = {
+    "af_heart": {"gender": "female", "name": "Heart"},
+    "af_bella": {"gender": "female", "name": "Bella"},
+    "am_michael": {"gender": "male", "name": "Michael"},
+    "am_adam": {"gender": "male", "name": "Adam"},
+}
+DEFAULT_KOKORO_VOICE = "af_heart"
+
+
+def kokoro_voice_present(voice: str) -> bool:
+    """Whether this voice's file is already in the local Hugging Face cache (no network)."""
+    from huggingface_hub import try_to_load_from_cache
+
+    return isinstance(try_to_load_from_cache(KOKORO_REPO, f"voices/{voice}.pt"), str)
+
+
+def check_kokoro_voice(voice: Optional[str]) -> None:
+    """Refuse an unknown voice, or one whose file is missing, with how to fix it (raises ValueError)."""
+    if voice is None:
+        return
+    if voice not in KOKORO_VOICES:
+        raise ValueError(f"unknown voice {voice!r}; one of {sorted(KOKORO_VOICES)} (GET /api/v1/audio/voices)")
+    if not kokoro_voice_present(voice):
+        raise ValueError(f"voice {voice!r} is not on disk; fetch it with: {model_registry.MODEL_FETCH_COMMAND} --only kokoro")
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
@@ -58,23 +220,39 @@ _HIGGS_DEFAULT_VOICE = "default"
 # Dia speaker tag pattern — if text contains [S1] or [S2] triggers Dia
 # ---------------------------------------------------------------------------
 _DIA_SPEAKER_TAGS = {"[S1]", "[S2]", "[s1]", "[s2]"}
+_TAG_PATTERN = re.compile(r"\[(?:S|s)[12]\]")
 
 
 @dataclass(frozen=True)
 class SynthesisResult:
+    """
+    Everything one synthesis produced, returned to the API layer.
+
+    ``frozen=True`` makes instances immutable, so a result cannot be edited
+    after the router built it. ``model`` names the engine that actually
+    spoke, which may differ from the one first selected (see Bark below).
+    """
+
     output_path: str
     sample_rate: int
     duration_seconds: float
     latency_ms: float
     model: str
     mode: str
+    # Millisecond phoneme/viseme timings for lip-sync; None unless requested.
     phoneme_timestamps: Optional[list] = None
     # "mms_fa" when the timestamps were measured from the audio,
     # "acoustic-fallback" when they were only estimated from the text.
     alignment_method: Optional[str] = None
+    # What the prosody step applied, from EmotionProsodyEngine.
     emotion: Optional[dict] = None
+    # MOS/PESQ scores and their method, when audit_quality was requested.
     quality_report: Optional[dict] = None
+    # The resolved language plus the backend that served it.
     language: Optional[dict] = None
+    # What the audio watermark step did: {"applied": bool, ...}. Always present, so an
+    # unmarked clip can never be mistaken for a marked one (golden rule 1).
+    watermark: Optional[dict] = None
 
 
 
@@ -87,6 +265,8 @@ class VoiceEngineRouter:
     """
 
     def __init__(self, device: Optional[str] = None):
+        """Pick the device and create the engine wrappers; no model weights load here."""
+        # An explicit device wins; otherwise use CUDA when PyTorch can see it.
         if device is not None:
             self.device = device
         else:
@@ -97,32 +277,43 @@ class VoiceEngineRouter:
         self.kokoro_pipeline = None   # Kokoro-82M
         self.xtts_model = None        # XTTS-v2
         self._higgs_pipe = None       # Higgs TTS 2 (3B)
-        self._dia_model = None        # Dia-1.6B
-        self._dia_processor = None
 
         # Phase 3 engines. All three are cheap to construct and load lazily.
         self._mms = MMSTTSEngine(device=self.device)
+        self._openvoice = OpenVoiceEngine(device=self.device)
+        self._bark = BarkEngine(device=self.device)
         self._emotion = EmotionProsodyEngine()
         self._auditor: Optional[SpeechQualityAuditor] = None
 
-        # Track load failures to avoid retrying broken models
+        # Re-entrant: synthesize() can call itself through a fallback.
+        self._synthesis_lock = threading.RLock()
+
+        # Track load failures to avoid retrying broken models.
+        # select_model reads these flags to route around an engine that failed.
         self._higgs_failed = False
-        self._dia_failed = False
-        self._mms_failed = False
+        # Set when Bark's weights are present but it fails to load (e.g. out
+        # of memory): dialogue then degrades visibly to Kokoro (D-26).
+        self._bark_failed = False
+        # There is no MMS failure flag: one language failing must not disable
+        # MMS for every language (see the comment in _synthesize_mms).
 
         # Lets the vision side make room on the 6 GB card before it loads a
         # model (golden rule 5). Everything reloads lazily on the next call.
-        import gpu_utils
-
         gpu_utils.register_releaser("tts-router", self.release)
 
     def release(self) -> None:
         """Drop the heavy TTS models from memory; they reload on next use."""
+        # Setting a handle to None drops this object's reference; the memory is
+        # freed once nothing else holds the model.
         self.kokoro_pipeline = None
         self.xtts_model = None
         self._higgs_pipe = None
-        self._dia_model = None
-        self._dia_processor = None
+        # The engine wrappers and shared aligner/watermark models own their own
+        # handles, so each is asked to release itself.
+        self._openvoice.release()
+        self._bark.release()
+        alignment_engine.release_shared_models()
+        watermark_engine.shared_watermarker().release()
 
     @property
     def auditor(self) -> SpeechQualityAuditor:
@@ -142,6 +333,7 @@ class VoiceEngineRouter:
         quality: str = "balanced",
         style: Optional[str] = None,
         text: str = "",
+        clone_engine: Optional[str] = None,
     ) -> str:
         """
         Returns the canonical model key for the given request parameters.
@@ -156,23 +348,32 @@ class VoiceEngineRouter:
           7. fast mode English → kokoro
           8. Unknown mode → raise ValueError
         """
+        # "en_US" and "EN-us" both become "en-us", the form _KOKORO_ENGLISH_CODES uses.
         normalized_lang = language.lower().replace("_", "-")
+        # resolve() maps any accepted code to one LanguageInfo, including
+        # whether MMS-TTS has a checkpoint for it.
         info = language_registry.resolve(language)
 
         # 1. Dialogue detection
         is_dialogue_mode = mode == "dialogue"
         is_dialogue_style = (style or "").lower() in {"dialogue", "multi-speaker"}
+        # Speaker tags alone are enough: a script written as a dialogue is
+        # routed to the dialogue engine even in the default "fast" mode.
         has_speaker_tags = any(tag in text for tag in _DIA_SPEAKER_TAGS)
 
         if is_dialogue_mode or is_dialogue_style or has_speaker_tags:
-            if self._dia_failed:
-                logger.warning("Dia unavailable — falling back to Kokoro for dialogue request")
+            # Bark, not Dia: Dia cannot run on this stack (model_registry.UNRUNNABLE).
+            if self._bark_failed:
+                logger.warning("Bark failed to load — falling back to Kokoro for dialogue request")
                 return "kokoro"
-            return "dia-1.6b"
+            return "bark"
 
-        # 2. Voice cloning
+        # 2. Voice cloning, with the engine the caller chose (XTTS-v2 by default)
         if mode == "clone":
-            return "xtts-v2"
+            engine = clone_engine or CLONE_ENGINES[0]
+            if engine not in CLONE_ENGINES:
+                raise ValueError(f"cloneEngine must be one of {list(CLONE_ENGINES)}, got {engine!r}")
+            return engine
 
         # 3. Explicit high quality mode
         if mode == "high_quality" or quality == "high":
@@ -192,20 +393,16 @@ class VoiceEngineRouter:
                     f"{language_registry.supported_count()} supported languages. "
                     "Use mode='high_quality' (Higgs) or mode='clone' (XTTS-v2)."
                 )
-            if self._mms_failed:
-                logger.warning("MMS-TTS unavailable — falling back to Higgs for %s", language)
-                return "xtts-v2" if self._higgs_failed else "higgs-tts-2"
             return "mms-tts"
 
         # 5/6. Non-English: prefer MMS-TTS coverage, else Higgs.
         if normalized_lang not in _KOKORO_ENGLISH_CODES:
-            if info.mms_supported and not self._mms_failed:
+            if info.mms_supported:
                 return "mms-tts"
             if self._higgs_failed:
                 raise ValueError(
                     f"Language '{language}' has no available backend: MMS-TTS "
-                    f"{'failed to load' if info.mms_supported else 'has no checkpoint'} "
-                    "and Higgs TTS 2 failed to load. "
+                    "has no checkpoint for it and Higgs TTS 2 failed to load. "
                     "Use mode='clone' with XTTS-v2 for multilingual synthesis."
                 )
             return "higgs-tts-2"
@@ -220,23 +417,105 @@ class VoiceEngineRouter:
             "'high_quality', 'dialogue', 'multilingual'."
         )
 
+    @staticmethod
+    def xtts_language(language: str) -> str:
+        """XTTS-v2's code for ``language`` (``spa`` -> ``es``), or a refusal naming the alternative."""
+        code = language_registry.xtts_code(language)
+        if code is None:
+            raise ValueError(
+                f"XTTS-v2 cannot speak '{language}'. It covers "
+                f"{', '.join(sorted(language_registry.XTTS_LANGUAGES))}; use "
+                "cloneEngine='openvoice-v2' to clone into any of the 1077 MMS-TTS languages."
+            )
+        return code
+
+    def openvoice_base(self, language: str) -> str:
+        """
+        The engine that speaks the words OpenVoice then re-timbres.
+
+        Kokoro for English, MMS-TTS for any language it has a checkpoint for -
+        which is what makes OpenVoice a cross-lingual cloner here.
+        """
+        if language.lower().replace("_", "-") in _KOKORO_ENGLISH_CODES:
+            return "kokoro"
+        if language_registry.resolve(language).mms_supported:
+            return "mms-tts"
+        raise ValueError(
+            f"OpenVoice clones over a base voice, and no base engine speaks '{language}': "
+            "Kokoro covers English and MMS-TTS its 1077 languages. Use cloneEngine='xtts-v2'."
+        )
+
+    def preflight(
+        self, model_key: str, speaker_wav: Optional[str] = None, language: str = "en"
+    ) -> None:
+        """
+        Everything that must hold before a loader runs, cheapest first.
+
+        Consent before weights: a recording we may not use is refused whatever
+        is installed. Shared by the API route (so the refusal happens before
+        anything is queued) and synthesize() (so no other caller skips it).
+        """
+        # A non-cloning engine ignores speaker_wav, so it needs no consent check.
+        if speaker_wav and model_key in REFERENCE_ENGINES:
+            require_voice_consent(speaker_wav)
+        self.require_weights(model_key)
+        # Every clip is watermarked (see _watermark_output), so the AudioSeal
+        # weights are as much a requirement as the speech model's.
+        if self.watermark_enabled():
+            self.require_weights("audioseal")  # refused up front, not after minutes of synthesis
+        if model_key == "xtts-v2" and speaker_wav:
+            # A language XTTS cannot speak is a 400 now, not a failure minutes into the job.
+            self.xtts_language(language)
+        if model_key == "openvoice-v2":
+            # Its base voice must be installed too, or the job would fail late.
+            self.require_weights(self.openvoice_base(language))
+
+    def require_weights(self, model_key: str) -> None:
+        """
+        Raise ModelWeightsMissing unless ``model_key``'s weights are on disk.
+
+        Audited fresh on every call (about 5 ms; filesystem checks only, no
+        torch), so weights fetched while the server runs are picked up without
+        a restart. A key the audit does not know is let through.
+        """
+        for status in model_registry.audit_model_weights():
+            if status.key == model_key and not status.present:
+                raise ModelWeightsMissing(model_key, status.detail, status.fix)
+
     # ------------------------------------------------------------------
     # Model Loaders (lazy, cached)
     # ------------------------------------------------------------------
 
     def load_kokoro_realtime(self) -> None:
         """Loads Kokoro-82M for real-time sub-100ms streaming generation."""
+        # Already loaded: the lazy-loading pattern makes repeat calls free.
         if self.kokoro_pipeline is not None:
             return
         print(f"\n[Loading Model] Kokoro v1.0 (82M) on {self.device.upper()}...")
+        # Imported here, not at the top, so importing this module does not
+        # pull in the Kokoro package until a request actually needs it.
         from kokoro import KPipeline
+        # lang_code "a" is Kokoro's American English pipeline, the one the
+        # KOKORO_VOICES above belong to.
         self.kokoro_pipeline = KPipeline(lang_code="a", device=self.device)
         print(" -> Kokoro v1.0 loaded.")
 
     def load_xtts_cloning(self) -> None:
-        """Loads XTTS-v2 for zero-shot voice cloning."""
+        """
+        Loads XTTS-v2 for zero-shot voice cloning.
+
+        *Zero-shot* means no training on the target speaker: at synthesis time
+        XTTS-v2 encodes the reference recording into conditioning (a speaker
+        embedding plus latents describing the voice) and generates new speech
+        conditioned on it. The reference therefore only has to be passed with
+        each request; nothing is fine-tuned or saved.
+        """
         if self.xtts_model is not None:
             return
+        # On CPU the 4 GB of weights live in system RAM; unload other models
+        # first if there is not room (see XTTS_RAM_MB above).
+        if self.device == "cpu":
+            gpu_utils.ensure_host_memory(XTTS_RAM_MB, "XTTS-v2")
         print(f"\n[Loading Model] XTTS-v2 on {self.device.upper()}...")
         from TTS.api import TTS
         self.xtts_model = TTS(model_name="tts_models/multilingual/multi-dataset/xtts_v2")
@@ -254,6 +533,7 @@ class VoiceEngineRouter:
         """
         if self._higgs_pipe is not None:
             return True
+        # A load that failed once is not retried on every request.
         if self._higgs_failed:
             return False
 
@@ -261,67 +541,42 @@ class VoiceEngineRouter:
         try:
             from transformers import pipeline as hf_pipeline
 
+            # transformers pipelines take a device index: 0 is the first GPU, -1 is CPU.
             device_arg = 0 if self.device == "cuda" else -1
             self._higgs_pipe = hf_pipeline(
                 "text-to-speech",
                 model="bosonai/higgs-tts-2-3b-base",
                 device=device_arg,
+                # Half precision halves GPU memory; CPUs run float32.
                 torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
             )
             print(" -> Higgs TTS 2 (3B) loaded.")
             return True
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - cached failure, logged and reported
             logger.error("Higgs TTS 2 failed to load: %s", exc)
             self._higgs_failed = True
             print(f" -> [WARNING] Higgs TTS 2 load failed: {exc}")
-            return False
-
-    def load_dia(self) -> bool:
-        """
-        Loads Dia-1.6B (nari-labs/Dia-1.6B) via transformers AutoModel API.
-        Returns True on success, False on failure.
-        Caches failure in self._dia_failed.
-        """
-        if self._dia_model is not None:
-            return True
-        if self._dia_failed:
-            return False
-
-        print(f"\n[Loading Model] Dia-1.6B on {self.device.upper()}...")
-        try:
-            from transformers import AutoProcessor, AutoModel
-
-            model_id = "nari-labs/Dia-1.6B"
-            self._dia_processor = AutoProcessor.from_pretrained(model_id)
-            self._dia_model = AutoModel.from_pretrained(
-                model_id,
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-                device_map=self.device if self.device == "cuda" else None,
-            )
-            if self.device == "cpu":
-                self._dia_model = self._dia_model.to("cpu")
-            print(" -> Dia-1.6B loaded.")
-            return True
-        except Exception as exc:
-            logger.error("Dia-1.6B failed to load: %s", exc)
-            self._dia_failed = True
-            print(f" -> [WARNING] Dia-1.6B load failed: {exc}")
             return False
 
     # ------------------------------------------------------------------
     # Synthesis Backends
     # ------------------------------------------------------------------
 
-    def _synthesize_kokoro(self, text: str, output_path: Path) -> tuple[int, float]:
-        """Run Kokoro-82M synthesis. Returns (sample_rate, duration_seconds)."""
+    def _synthesize_kokoro(self, text: str, output_path: Path, voice: Optional[str] = None) -> tuple[int, float]:
+        """Run Kokoro-82M synthesis with one of ``KOKORO_VOICES``. Returns (sample_rate, duration_seconds)."""
         self.load_kokoro_realtime()
+        # Tells the type checker the attribute is set after loading.
         assert self.kokoro_pipeline is not None
-        print(f"\n[Kokoro] Synthesizing: '{text[:80]}...'")
-        generator = self.kokoro_pipeline(text, voice="af_heart", speed=1.0)
+        voice = voice or DEFAULT_KOKORO_VOICE
+        print(f"\n[Kokoro] Synthesizing ({voice}): '{text[:80]}...'")
+        generator = self.kokoro_pipeline(text, voice=voice, speed=1.0)
+        # The pipeline yields one (graphemes, phonemes, audio) triple per
+        # segment of text; only the audio is kept and joined.
         chunks = [audio for _, _, audio in generator]
         if not chunks:
             raise RuntimeError("Kokoro returned no audio chunks")
         audio = np.concatenate(chunks)
+        # Kokoro always produces 24 kHz audio.
         sample_rate = 24000
         sf.write(output_path, audio, sample_rate)
         return sample_rate, len(audio) / sample_rate
@@ -355,13 +610,17 @@ class VoiceEngineRouter:
         self.load_xtts_cloning()
         assert self.xtts_model is not None
         print(f"\n[XTTS-v2] Cloning from '{ready_path.name}', text: '{text[:80]}...'")
-        lang_code = language.split("-")[0].lower()  # "en-US" → "en"
+        lang_code = self.xtts_language(language)
+        # The reference is passed on every call: XTTS-v2 computes its
+        # conditioning from it here (see load_xtts_cloning).
         self.xtts_model.tts_to_file(
             text=text,
             speaker_wav=str(ready_path),
             language=lang_code,
             file_path=str(output_path),
         )
+        # XTTS-v2 outputs 24 kHz; the duration is read from the written file
+        # because tts_to_file returns no audio array.
         sample_rate = 24000
         duration = float(sf.info(output_path).duration)
         return sample_rate, duration
@@ -400,43 +659,6 @@ class VoiceEngineRouter:
         duration = len(audio_array) / sample_rate
         return int(sample_rate), duration
 
-    def _synthesize_dia(
-        self,
-        text: str,
-        output_path: Path,
-    ) -> tuple[int, float]:
-        """
-        Run Dia-1.6B multi-speaker dialogue synthesis.
-        Text should use [S1] / [S2] speaker tags.
-        Falls back to Kokoro on load failure.
-        Returns (sample_rate, duration_seconds).
-        """
-        if not self.load_dia():
-            print("[WARN] Dia unavailable — falling back to Kokoro")
-            # Strip [S1]/[S2] tags before passing to Kokoro
-            clean_text = text
-            for tag in _DIA_SPEAKER_TAGS:
-                clean_text = clean_text.replace(tag, "")
-            clean_text = " ".join(clean_text.split())
-            return self._synthesize_kokoro(clean_text, output_path)
-
-        print(f"\n[Dia-1.6B] Dialogue synthesis: '{text[:80]}...'")
-        assert self._dia_model is not None
-        assert self._dia_processor is not None
-
-        # Tokenize using the Dia processor
-        inputs = self._dia_processor(text=text, return_tensors="pt")
-        inputs = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in inputs.items()}
-
-        with torch.no_grad():
-            output = self._dia_model.generate(**inputs)
-
-        audio_array = output.squeeze().cpu().numpy().astype(np.float32)
-        sample_rate = 44100  # Dia native output rate
-        sf.write(output_path, audio_array, sample_rate)
-        duration = len(audio_array) / sample_rate
-        return sample_rate, duration
-
     def _synthesize_mms(
         self,
         text: str,
@@ -453,6 +675,7 @@ class VoiceEngineRouter:
         """
         info = language_registry.resolve(language)
         try:
+            # MMSTTSEngine handles checkpoint caching and romanisation itself.
             result = self._mms.synthesize(
                 text=text, language=language, output_path=output_path
             )
@@ -460,33 +683,107 @@ class VoiceEngineRouter:
             payload.update({"backend": "mms-tts", "romanized": result.romanized})
             return result.sample_rate, result.duration_seconds, payload
 
-        except MMSRomanizationRequired:
-            # A missing romanizer is a configuration problem, not a model
-            # failure; surface it instead of silently degrading quality.
+        except (MMSRomanizationRequired, MMSScriptMismatch):
+            # A missing romanizer is a configuration problem and text in the
+            # wrong script is the user's input, not a model failure: surface
+            # either as it is, without the network hint added below.
             raise
 
-        except Exception as exc:  # noqa: BLE001 - any load failure degrades gracefully
-            logger.warning("MMS-TTS failed for %s (%s) — falling back", language, exc)
-            self._mms_failed = True
-            payload = info.to_dict()
-            payload["fallbackReason"] = str(exc)
+        except Exception as exc:  # noqa: BLE001 - re-raised with the language named
+            # This used to fall back to Higgs, then XTTS-v2. That path ran
+            # *after* preflight, so it bypassed the weights check: Higgs's
+            # loader would have started an 11.6 GB download of a model this
+            # stack cannot run. One language failing (say, its checkpoint not
+            # cached while offline) also set a router-wide MMS failure flag and
+            # disabled MMS for every other language. Now the failure is this request's alone.
+            logger.error("MMS-TTS failed for %s (%s)", language, exc)
+            raise RuntimeError(
+                f"MMS-TTS could not synthesise {info.name} ({info.iso3}): "
+                f"{str(exc).splitlines()[0]}. A language it has not cached needs network "
+                "on first use, or: python scripts/fetch_models.py --only mms-tts"
+            ) from exc
 
-            if not self._higgs_failed:
-                sample_rate, duration = self._synthesize_higgs(text, output_path, speaker_wav)
-                payload["backend"] = "higgs-tts-2 (MMS fallback)"
-                return sample_rate, duration, payload
+    def _synthesize_bark(self, text: str, output_path: Path) -> tuple[int, float, str]:
+        """
+        Two-speaker dialogue with Bark; Kokoro if Bark fails to load.
 
-            sample_rate, duration = self._synthesize_xtts(
-                text, output_path, speaker_wav, language
+        Returns (sample_rate, duration_seconds, engine_that_spoke).
+
+        A load failure with weights present (missing weights never get here:
+        preflight refuses them) degrades to Kokoro with the speaker tags
+        removed, and is cached so later requests route straight to Kokoro.
+        `model_used` then names Kokoro, so the fallback is never silent.
+        """
+        try:
+            sample_rate, duration, turns = self._bark.synthesize_dialogue(text, output_path)
+            print(f"[Bark] {turns} turn(s), {duration:.2f}s")
+            return sample_rate, duration, "bark"
+        except BarkUnavailable as exc:
+            logger.error("Bark unavailable (%s); dialogue falls back to Kokoro", exc)
+            self._bark_failed = True
+            # Kokoro has one voice per call, so the [S1]/[S2] tags would be
+            # read aloud; strip them and collapse the leftover whitespace.
+            clean = " ".join(_TAG_PATTERN.sub(" ", text).split())
+            sample_rate, duration = self._synthesize_kokoro(clean, output_path)
+            return sample_rate, duration, "kokoro"
+
+    def _synthesize_openvoice(
+        self,
+        text: str,
+        output_path: Path,
+        speaker_wav: Optional[str],
+        language: str,
+    ) -> tuple[int, float, str]:
+        """
+        Speak with the base engine, then re-timbre it as the reference speaker.
+
+        OpenVoice is a *tone converter*, not a text-to-speech model: it keeps
+        the words and rhythm of an existing clip and swaps its timbre for the
+        reference speaker's. So this runs two steps, base synthesis then
+        conversion, and the language coverage is that of the base engine.
+
+        Returns (sample_rate, duration_seconds, base_engine_key).
+        """
+        import tempfile
+
+        if not speaker_wav:
+            raise FileNotFoundError(
+                "Voice cloning requires a reference recording (30-60 s). "
+                "Pick one from GET /api/v1/audio/samples."
             )
-            payload["backend"] = "xtts-v2 (MMS fallback)"
-            return sample_rate, duration, payload
+        speaker_path = Path(speaker_wav)
+        # Same reference preparation as XTTS-v2: validated, 24 kHz mono.
+        ready = validate_and_convert_for_cloning(speaker_path, converted_dir=speaker_path.parent / ".converted")
+        base_key = self.openvoice_base(language)
+        # The base clip is an intermediate, not an output: a temporary file
+        # that is removed whatever happens.
+        with tempfile.TemporaryDirectory() as scratch:
+            base_wav = Path(scratch) / "base.wav"
+            if base_key == "kokoro":
+                self._synthesize_kokoro(text, base_wav)
+            else:
+                self._mms.synthesize(text=text, language=language, output_path=base_wav)
+            print(f"\n[OpenVoice V2] Re-timbring {base_key} speech as '{ready.name}'")
+            sample_rate, duration = self._openvoice.convert(base_wav, ready, output_path)
+        return sample_rate, duration, base_key
 
     # ------------------------------------------------------------------
     # Main Public Interface
     # ------------------------------------------------------------------
 
-    def synthesize(
+    def synthesize(self, *args, **kwargs) -> SynthesisResult:
+        """
+        Synthesize speech (see ``_synthesize`` for the parameters), one call at a time.
+
+        The router holds lazily-loaded models and per-model state, and one heavy
+        model should be resident at a time (golden rule 5), so two simultaneous
+        calls (two REST requests, or a live session beside a REST request) must
+        not load or run models at once. The lock makes them take turns.
+        """
+        with self._synthesis_lock:
+            return self._synthesize(*args, **kwargs)
+
+    def _synthesize(
         self,
         text: str,
         mode: str = "fast",
@@ -502,6 +799,8 @@ class VoiceEngineRouter:
         emotion_intensity: float = 1.0,
         emotion_vector: Optional[dict] = None,
         audit_quality: bool = False,
+        clone_engine: Optional[str] = None,
+        voice: Optional[str] = None,
     ) -> SynthesisResult:
         """
         Synthesize speech using the automatically selected model.
@@ -533,11 +832,19 @@ class VoiceEngineRouter:
             quality=quality,
             style=style,
             text=text,
+            clone_engine=clone_engine,
         )
+        # The one place every synthesis path passes through before a loader
+        # runs: no request can trigger a download or clone an unconsented voice.
+        self.preflight(model_key, speaker_wav, language)
+        check_kokoro_voice(voice)
 
+        # Latency is measured from here, so it covers synthesis and every
+        # post-processing step, but not routing or preflight.
         start_time = time.time()
         output_path = OUTPUT_DIR / output_filename
         language_info = language_registry.resolve(language).to_dict()
+        # Overwritten below when the engine that spoke differs from the one selected.
         language_info["backend"] = model_key
 
         print(
@@ -548,7 +855,7 @@ class VoiceEngineRouter:
         )
 
         if model_key == "kokoro":
-            sample_rate, duration = self._synthesize_kokoro(text, output_path)
+            sample_rate, duration = self._synthesize_kokoro(text, output_path, voice)
 
         elif model_key == "xtts-v2":
             sample_rate, duration = self._synthesize_xtts(
@@ -558,13 +865,26 @@ class VoiceEngineRouter:
         elif model_key == "higgs-tts-2":
             sample_rate, duration = self._synthesize_higgs(text, output_path, speaker_wav)
 
-        elif model_key == "dia-1.6b":
-            sample_rate, duration = self._synthesize_dia(text, output_path)
+        elif model_key == "bark":
+            sample_rate, duration, spoke = self._synthesize_bark(text, output_path)
+            if spoke != "bark":
+                # Bark failed to load and Kokoro spoke instead: say so, so the
+                # response's model never names an engine that did not run.
+                model_key = spoke
+                language_info["backend"] = f"{spoke} (Bark unavailable)"
 
         elif model_key == "mms-tts":
             sample_rate, duration, language_info = self._synthesize_mms(
                 text, output_path, language, speaker_wav
             )
+
+        elif model_key == "openvoice-v2":
+            sample_rate, duration, base_key = self._synthesize_openvoice(
+                text, output_path, speaker_wav, language
+            )
+            # Two engines made this clip; both are named (golden rule 1).
+            language_info["backend"] = f"openvoice-v2 (base: {base_key})"
+            language_info["baseEngine"] = base_key
 
         else:
             raise ValueError(f"Internal error: unknown model key '{model_key}'")
@@ -573,6 +893,8 @@ class VoiceEngineRouter:
         # Both are time-stretch + pitch-shift operations, so they are combined
         # into one transform rather than applied in sequence.
         extra_rate = float(speed) if speed is not None else 1.0
+        # A pitch multiplier becomes semitones: an octave (x2) is 12
+        # semitones, so the shift is 12 * log2(multiplier).
         extra_semitones = 12.0 * math.log2(float(pitch)) if pitch is not None and pitch > 0 else 0.0
 
         emotion_report = None
@@ -586,6 +908,8 @@ class VoiceEngineRouter:
                 extra_semitones=extra_semitones,
             )
             emotion_report = application.to_dict()
+            # Time-stretching changes the length, so the reported duration and
+            # rate come from the processed file.
             if application.applied:
                 duration = application.duration_seconds
                 sample_rate = application.sample_rate
@@ -597,11 +921,18 @@ class VoiceEngineRouter:
         except Exception as prosody_err:  # noqa: BLE001 - keep the raw audio
             logger.warning("Prosody / emotion post-processing failed: %s", prosody_err)
 
+        # ---- Phase 5: inaudible watermark on every generated clip (R-32) -----
+        # After prosody (the mark must survive nothing we do ourselves) and before alignment and
+        # the quality audit, so both see the audio that is actually delivered.
+        watermark_result = self._watermark_output(output_path)
+
         # Generate millisecond phoneme/viseme timestamps if requested
         phoneme_timestamps = None
         alignment_method = None
         if return_alignment:
             try:
+                # Forced alignment finds when each phoneme of the known
+                # transcript is spoken in the audio; see alignment_engine.
                 aligner = ForcedAligner(device=self.device)
                 timestamps = aligner.align(
                     audio_path_or_tensor=str(output_path),
@@ -609,7 +940,9 @@ class VoiceEngineRouter:
                     sample_rate=sample_rate,
                     language=language,
                 )
+                # by_alias gives the camelCase field names the API contract uses.
                 phoneme_timestamps = [t.model_dump(by_alias=True) for t in timestamps]
+                # Recorded so the response says whether timing was measured or estimated.
                 alignment_method = aligner.last_method
                 print(
                     f"[Aligner] Extracted {len(phoneme_timestamps)} phoneme/viseme timestamps "
@@ -617,7 +950,9 @@ class VoiceEngineRouter:
                 )
                 if alignment_method == "acoustic-fallback":
                     print(f"[Aligner] WARNING: timing is estimated, not measured: {aligner.last_fallback_reason}")
-            except Exception as align_err:
+            except Exception as align_err:  # noqa: BLE001 - speech is still returned
+                # The audio is good without timestamps; the response simply
+                # carries none, which callers can see.
                 logger.warning("Forced alignment failed: %s", align_err)
 
         # ---- Phase 3: automated speech quality audit ------------------------
@@ -635,6 +970,35 @@ class VoiceEngineRouter:
             except Exception as audit_err:  # noqa: BLE001 - auditing is advisory
                 logger.warning("Quality audit failed: %s", audit_err)
 
+        # A consented reference can still yield a voice that sounds like a protected person: check the clip too.
+        if model_key in REFERENCE_ENGINES and speaker_wav:
+            output_alert = protected_voices.shared().check(output_path, kind="output", subject=manifest.sha256_file(output_path))
+            if output_alert:
+                logger.warning("ABUSE ALERT: the cloned clip %s sounds like protected voice %s (similarity %s); recorded in the audit trail",
+                               Path(output_path).name, output_alert["protectedId"], output_alert["similarity"])
+
+        # A reference recording was used: that goes on the consent trail with the basis it was used under.
+        if model_key in REFERENCE_ENGINES and speaker_wav:
+            reference = manifest.reference_summary(speaker_wav)
+            if reference:
+                audit_log.shared_audit().record(
+                    "voice_use", subject=reference["sha256"], basis=reference["consentBasis"] or reference["source"],
+                    source=reference["source"], model=model_key, engine=clone_engine, language=language,
+                    audio_sha256=manifest.sha256_file(output_path),
+                )
+
+        # How this clip was made, tied to its bytes: the render step copies it into the video's manifest.
+        try:
+            manifest.write_speech_record(
+                output_path, model=model_key, mode=mode, language=language, speaker_wav=speaker_wav,
+                clone_engine=clone_engine if model_key in REFERENCE_ENGINES else None,
+                emotion=emotion_report, alignment_method=alignment_method, duration_seconds=duration,
+                watermark=watermark_result,
+            )
+        except Exception as record_err:  # noqa: BLE001 - the audio is fine; the manifest will say "unrecorded"
+            logger.warning("Could not write the speech record for %s: %s", output_path, record_err)
+
+        # Seconds to milliseconds.
         latency = (time.time() - start_time) * 1000
         print(f"\n✅ Audio saved → {os.path.abspath(output_path)}")
         print(f"⏱  Latency: {latency:.0f} ms  |  Duration: {duration:.2f}s  |  Model: {model_key}")
@@ -652,13 +1016,51 @@ class VoiceEngineRouter:
             emotion=emotion_report,
             quality_report=quality_report,
             language=language_info,
+            watermark=watermark_result,
         )
+
+    @staticmethod
+    def watermark_enabled() -> bool:
+        """Whether clips are watermarked; reads the setting in ``watermark_engine``."""
+        return watermark_engine.enabled()
+
+    def _watermark_output(self, output_path: Path) -> dict:
+        """
+        Hide the platform tag in the saved clip and check it can be read back.
+
+        Marking is on by default and a failure to mark is a failure of the request, not a quiet
+        fall-back to unmarked audio (golden rule 1). ``WATERMARK_ENABLED=false`` is the explicit
+        opt-out, and the result then says ``applied: false`` and why.
+        """
+        if not self.watermark_enabled():
+            return {"applied": False, "reason": "disabled by WATERMARK_ENABLED=false"}
+        import soundfile as sf
+
+        from watermark_engine import shared_watermarker
+
+        # One watermarker per process, so its model is loaded once and can be
+        # released with the rest (see release above).
+        marker = shared_watermarker()
+        # Read, mark and overwrite the clip in place.
+        audio, rate = sf.read(str(output_path), dtype="float32", always_2d=False)
+        sf.write(str(output_path), marker.embed(audio, rate), rate)
+        # Read the file back and detect: proof the mark survived the write, with its own method string.
+        check, _ = sf.read(str(output_path), dtype="float32", always_2d=False)
+        report = marker.detect(check, rate)
+        if not report.detected:
+            raise RuntimeError(
+                f"the watermark was embedded but could not be read back from {output_path.name} "
+                f"({report.to_dict()}); refusing to deliver audio that claims a mark it does not carry"
+            )
+        return {"applied": True, "verified": True, **report.to_dict()}
 
 
 
 # ------------------------------------------------------------------
 # CLI Benchmark / Smoke Test
 # ------------------------------------------------------------------
+# Run directly (python voice_engine.py) to synthesise one clip per route.
+# This loads real models, so it is a manual check, not part of the unit tests.
 if __name__ == "__main__":
     router = VoiceEngineRouter()
 

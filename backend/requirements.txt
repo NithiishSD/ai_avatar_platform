@@ -15,11 +15,20 @@ scipy>=1.11.0,<1.14.0
 numba>=0.58.0,<0.60.0
 
 # FastAPI & Web API Framework
-fastapi>=0.110.0,<0.116.0
+# FastAPI >=0.142 brings Starlette 1.x, which fixes the advisories pip-audit
+# lists against Starlette 0.46 (T7.3). The 122 tests and the E2E suite pass on it.
+fastapi>=0.142.0
+starlette>=1.3.1
 uvicorn[standard]>=0.28.0,<0.35.0
 pydantic>=2.6.0,<2.11.0
 python-multipart>=0.0.9
 httpx>=0.27.0
+# Transitive packages with advisories, raised past their fixed versions (T7.3).
+# multidict stays below 7 because aiohttp requires it.
+pyjwt>=2.15.0
+urllib3>=2.8.0
+werkzeug>=3.1.9
+multidict>=6.9.1,<7
 
 # Task Queue & Storage Infrastructure
 celery>=5.3.6,<5.5.0
@@ -35,20 +44,18 @@ librosa>=0.10.1
 inflect>=7.0.0
 phonemizer-fork>=3.3.0
 
-# Model 2 (High Quality / Multilingual): Higgs TTS 2 (3B)
-# Loaded via transformers pipeline — no separate pip install needed.
-# HF model: bosonai/higgs-tts-2-3b-base  (VRAM: ~3 GB on RTX 4050)
+# Transformers: kept below 4.48 because Coqui TTS 0.22 breaks on newer releases.
+# That pin is also why Higgs TTS 2 (bosonai/higgs-tts-2-3b-base, model type
+# higgs_audio_v2, 11.6 GB fp32) and Dia-1.6B (needs nari-tts -> numpy 2) cannot
+# run on this stack; model_registry.UNRUNNABLE records the evidence (8 Oct 2026).
 transformers>=4.38.0,<4.48.0
 accelerate>=0.28.0
 huggingface_hub>=0.21.0
 einops>=0.7.0
 
-# Model 3 (Dialogue / Multi-speaker): Dia-1.6B (Nari Labs)
-# Loaded via transformers AutoModel API (nari-labs/Dia-1.6B) to avoid the
-# numpy>=2.2.4 conflict from the nari-tts package.
-# NOTE: Do NOT install 'nari-tts' via pip — it pins numpy>=2.2.4 which
-#       conflicts with the numpy<2.0.0 requirement for Numba/Coqui-TTS.
-#       The transformers AutoModel path works without nari-tts.
+# Dia-1.6B: do NOT install 'nari-tts' - it pins numpy>=2.2.4, which breaks
+# Numba/Coqui TTS. The transformers AutoModel route this file used to promise
+# does not work either: the pinned transformers cannot read Dia's config.
 
 # Coqui XTTS-v2 Engine Dependencies
 # (TTS==0.22.0 is installed via 'pip install --no-deps TTS==0.22.0' to bypass legacy numpy==1.22.0 pin)
@@ -95,7 +102,9 @@ speechbrain>=1.0.0
 # Milestone 2: Lip Sync & Computer Vision Pipeline
 opencv-python-headless>=4.8.0,<5.0.0
 mediapipe>=0.10.9
-pillow>=10.0.0,<11.0.0
+# Pillow decodes uploaded photos, so it is kept at a release with the decoder
+# fixes (33 advisories against 10.4). MediaPipe and OpenCV work with 12.x.
+pillow>=12.3.0
 tqdm>=4.66.0
 ffmpeg-python>=0.2.0
 
@@ -107,6 +116,19 @@ diffusers>=0.32.0,<0.33.0
 # MFCC front end for the SyncNet LSE-C / LSE-D lip-sync metric. Pure Python.
 python_speech_features>=0.6
 
+# Signed provenance manifests (Ed25519, manifest.py, T5.2). Was installed but never listed here,
+# which the first Docker build found (D-49).
+cryptography>=44.0.0
+
 # Audio/Video Metric & Text Utilities
 requests>=2.31.0
 pyyaml>=6.0.1
+
+# OpenVoice V2 tone-colour cloning (MIT). The package itself is installed
+# separately WITHOUT its own requirements, which pin numpy==1.22 and
+# librosa==0.9.1 and would break this stack; its converter only needs torch,
+# librosa, numpy and soundfile, plus the two small text-frontend modules below
+# that its package imports at load time.
+#   pip install --no-deps "git+https://github.com/myshell-ai/OpenVoice.git@74a1d147b17a8c3092dd5430504bd83ef6c7eb23"
+eng_to_ipa==0.0.2
+cn2an==0.5.24

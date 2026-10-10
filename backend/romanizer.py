@@ -27,7 +27,7 @@ silently matches nothing otherwise and degrades to guessed timings."
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,20 @@ def get_romanizer():
     return _romanizer
 
 
+def as_text(result: Any) -> str:
+    """
+    uroman's text result, checked.
+
+    ``romanize_string`` returns a string in its default format but is typed to
+    also return a list of edges (another output format). We never ask for
+    that format, so anything but a string means uroman changed underneath us:
+    fail loudly rather than feed a list to a tokenizer.
+    """
+    if not isinstance(result, str):
+        raise TypeError(f"uroman returned {type(result).__name__}, expected str")
+    return result
+
+
 def is_ascii(text: str) -> bool:
     """True when romanization would be a no-op because the text is already ASCII."""
     # ord() is a character's code point; < 128 is the ASCII range. all() short
@@ -91,16 +105,18 @@ def romanize(text: str, lcode: Optional[str] = None) -> Optional[str]:
         return None
     if lcode:
         try:
-            return romanizer.romanize_string(text, lcode=lcode)
+            result = romanizer.romanize_string(text, lcode=lcode)
         except TypeError:
             # Older uroman builds take no lcode keyword.
             #
             # Catching TypeError to detect an unsupported signature is a
             # version-compatibility shim. It is narrow enough to be safe here
-            # (only a signature mismatch raises TypeError at the call itself),
-            # and `pass` falls through to the call without the hint below.
-            pass
-    return romanizer.romanize_string(text)
+            # because only the call itself sits inside the try: as_text below
+            # raises TypeError too, and inside the try that would be mistaken
+            # for "old uroman" and silently retried without the hint.
+            result = romanizer.romanize_string(text)
+        return as_text(result)
+    return as_text(romanizer.romanize_string(text))
 
 
 def reset_cache() -> None:

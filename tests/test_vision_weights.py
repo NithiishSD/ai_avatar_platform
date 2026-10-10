@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from typing import ClassVar
 from unittest import mock
 
 import model_registry
@@ -58,7 +59,8 @@ class VisionAuditTests(unittest.TestCase):
         keys = [s.key for s in audit_vision_weights()]
         self.assertEqual(
             keys,
-            ["face-landmarker", "selfie-segmenter", "multiclass-segmenter", "wav2lip", "syncnet", "sface", "avatar-diffusion"],
+            ["videoseal", "face-landmarker", "selfie-segmenter", "multiclass-segmenter", "wav2lip", "sadtalker", "syncnet", "sface", "realesrgan",
+             "avatar-diffusion"],
         )
 
     def test_fetch_script_and_audit_cover_the_same_models(self):
@@ -137,7 +139,7 @@ class FetchScriptTests(unittest.TestCase):
 
     def test_download_is_atomic_and_size_checked(self):
         class Response(io.BytesIO):
-            headers = {}
+            headers: ClassVar[dict] = {}
 
             def __enter__(self):
                 return self

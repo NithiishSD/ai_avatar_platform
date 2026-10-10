@@ -244,7 +244,9 @@ def synthesize_audio(payload: dict) -> dict:
         emotion_vector=request.emotion_vector,
         audit_quality=request.audit_quality,
         speaker_wav=request.speaker_wav,
+        clone_engine=request.clone_engine,
         output_filename=request.output_filename,
+        voice=request.voice,
     )
     # __dict__ turns the SynthesisResult dataclass into a plain dict so Celery
     # can JSON-serialise it. Works because every field is already a primitive;

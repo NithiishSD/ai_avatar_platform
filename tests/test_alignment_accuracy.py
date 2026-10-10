@@ -188,7 +188,7 @@ class CtcSpanTests(unittest.TestCase):
 
     def test_result_is_ordered_and_non_overlapping(self):
         stamps = self.run_align()
-        for previous, current in zip(stamps, stamps[1:]):
+        for previous, current in zip(stamps, stamps[1:], strict=False):
             self.assertLessEqual(previous.end_ms, current.start_ms)
             self.assertLess(current.start_ms, current.end_ms)
 

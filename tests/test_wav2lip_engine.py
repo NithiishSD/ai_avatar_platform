@@ -27,11 +27,21 @@ class MelTests(unittest.TestCase):
 
     def test_one_window_per_frame(self):
         mel = np.arange(80 * 200, dtype=np.float32).reshape(80, 200)
-        chunks = mel_chunks(mel, fps=25, frame_count=60)
+        # lead_seconds=0 is the reference indexing: frame i at column i*80/fps.
+        chunks = mel_chunks(mel, fps=25, frame_count=60, lead_seconds=0)
         self.assertEqual(chunks.shape, (60, 80, MEL_STEP))
         np.testing.assert_array_equal(chunks[0], mel[:, :16])
         np.testing.assert_array_equal(chunks[10], mel[:, 32:48])   # frame 10 -> column 10 * 80/25
         np.testing.assert_array_equal(chunks[-1], mel[:, -16:])    # tail reuses the last window
+
+    def test_windows_lead_the_frame_by_the_measured_offset(self):
+        # Default: 120 ms earlier, the shift SyncNet put at offset 0 (T2.3).
+        mel = np.arange(80 * 200, dtype=np.float32).reshape(80, 200)
+        chunks = mel_chunks(mel, fps=25, frame_count=60)
+        np.testing.assert_array_equal(chunks[10], mel[:, 22:38])  # (10/25 - 0.12) * 80 = 22.4
+        # The first frames would start before the clip; they clamp to it.
+        np.testing.assert_array_equal(chunks[0], mel[:, :16])
+        np.testing.assert_array_equal(chunks[2], mel[:, :16])
 
     def test_clip_shorter_than_one_window_is_padded(self):
         self.assertEqual(mel_chunks(np.zeros((80, 5), dtype=np.float32), 25, 3).shape, (3, 80, 16))

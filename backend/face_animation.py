@@ -22,6 +22,17 @@ An optional speech-energy envelope scales the jaw with loudness and shuts the
 mouth during real silence. That also bounds the damage when the aligner had to
 fall back to its acoustic guess: the timing of *which* viseme may be off, but
 the mouth still opens only while there is sound.
+
+Terms, explained once:
+
+* A **blendshape track** is a 2-D array: one row per video frame, one column
+  per blendshape (``jawOpen``, ``mouthPucker``...), each cell a weight in
+  [0, 1]. ``viseme_blendshapes.py`` says which weights each viseme sets.
+* **Gaussian smoothing** replaces each value with a weighted average of its
+  neighbours, the weights following a bell curve of width ``sigma``. Larger
+  sigma means a softer, slower mouth; it never overshoots the input range.
+* **Energy gating** multiplies the mouth shapes by a 0..1 loudness signal, so
+  a shape can only show while the audio actually has sound in it.
 """
 
 from __future__ import annotations
@@ -31,7 +42,7 @@ import logging
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -45,7 +56,11 @@ from viseme_blendshapes import (
 
 logger = logging.getLogger(__name__)
 
+# Every curve is built on a 5 ms grid, finer than any frame rate in use (25 fps
+# is 40 ms a frame), so a short phoneme still owns a few grid cells.
 GRID_MS = 5.0
+# Smoothing widths in milliseconds, turned into grid steps by dividing by
+# GRID_MS. Closures get a narrower kernel so a short "p" is not blurred away.
 DEFAULT_SMOOTHING_MS = 38.0
 CLOSURE_SMOOTHING_MS = 14.0
 
@@ -61,6 +76,8 @@ MAX_HOLD_MS = 240.0
 # flutter. It is read here as a multiplier on the resting human rate of about
 # 17 blinks a minute, which makes 1.0 look natural and 2.4 look agitated.
 BASE_BLINKS_PER_SECOND = 17.0 / 60.0
+# Blink shape: the lid closes in 80 ms and reopens in 150 ms, the asymmetry of a
+# real blink. Two blinks are never closer together than MIN_BLINK_INTERVAL_S.
 MIN_BLINK_INTERVAL_S = 0.45
 BLINK_CLOSE_S = 0.08
 BLINK_OPEN_S = 0.15
@@ -70,6 +87,8 @@ SILENCE_LEVEL = 0.06
 
 BLINK_SHAPES = ("eyeBlinkLeft", "eyeBlinkRight")
 
+# Timestamps arrive either as contract objects (attributes) or as plain JSON
+# dicts (keys); everything below accepts both.
 TimestampLike = Union[Mapping[str, object], object]
 
 
@@ -83,7 +102,8 @@ def frame_count_for(duration_seconds: float, fps: int) -> int:
     return max(1, int(math.ceil(float(duration_seconds) * int(fps) - 1e-6)))
 
 
-def _field(item: TimestampLike, snake: str, camel: str):
+def _field(item: TimestampLike, snake: str, camel: str) -> Any:
+    """Read one field from a dict (camelCase wire name first) or an object (snake_case)."""
     if isinstance(item, Mapping):
         return item.get(camel, item.get(snake))
     return getattr(item, snake)
@@ -98,6 +118,7 @@ def normalise_timestamps(
         viseme = _field(item, "viseme", "viseme")
         start = float(_field(item, "start_ms", "startMs"))
         end = float(_field(item, "end_ms", "endMs"))
+        # Zero- or negative-length spans carry no timing and are dropped.
         if end > start:
             out.append((str(viseme), start, end))
     return out
@@ -116,6 +137,7 @@ def hold_until_next(
     """
     held: List[Tuple[str, float, float]] = []
     for position, (viseme, start, end) in enumerate(segments):
+        # The last segment is held toward the end of the clip instead of a next start.
         limit = segments[position + 1][1] if position + 1 < len(segments) else duration_ms
         if limit > end:
             end = min(limit, end + max_hold_ms)
@@ -133,9 +155,12 @@ class AnimationTrack:
     unknown_visemes: Dict[str, int] = field(default_factory=dict)
     blink_times: List[float] = field(default_factory=list)
     energy_gated: bool = False
+    # Whole-portrait motion per frame (head_motion.POSE_CHANNELS), or None for a still head.
+    head: Optional[np.ndarray] = None
 
     @property
     def frame_count(self) -> int:
+        """Number of video frames in the track (rows of ``weights``)."""
         return int(self.weights.shape[0])
 
     def frame(self, index: int) -> Dict[str, float]:
@@ -143,9 +168,14 @@ class AnimationTrack:
         row = self.weights[index]
         return {
             name: float(value)
-            for name, value in zip(self.names, row)
+            for name, value in zip(self.names, row, strict=True)
+            # Near-zero weights are dropped so callers and logs see only active shapes.
             if value > 1e-4
         }
+
+    def pose(self, index: int) -> Optional[Tuple[float, ...]]:
+        """This frame's head-and-shoulders pose for ``PortraitAnimator.render``, or None."""
+        return None if self.head is None else tuple(float(v) for v in self.head[index])
 
     def column(self, name: str) -> np.ndarray:
         """One blendshape's weight across all frames (zeros if unused)."""
@@ -165,26 +195,51 @@ def speech_energy_envelope(
     """
     import soundfile as sf
 
+    # always_2d gives (samples, channels) even for mono, so mean(axis=1) down-mixes
+    # any file to one channel the same way.
     data, sample_rate = sf.read(str(audio_path), dtype="float32", always_2d=True)
-    mono = data.mean(axis=1)
+    return energy_envelope(data.mean(axis=1), sample_rate, grid_ms)[0]
+
+
+def energy_envelope(
+    mono: np.ndarray, sample_rate: int, grid_ms: float = GRID_MS, reference: Optional[float] = None
+) -> Tuple[np.ndarray, Optional[float]]:
+    """
+    ``(envelope, reference)``: RMS per grid step divided by ``reference``.
+
+    With no ``reference`` it is the 95th percentile of the voiced steps (a whole clip). A live
+    stream passes the loudest level heard so far instead, so a quiet chunk stays quiet rather than
+    being stretched to full loudness; the reference used is returned for the next chunk.
+    """
+    # hop: audio samples per grid step (5 ms at 24 kHz is 120 samples).
     hop = max(1, int(round(sample_rate * grid_ms / 1000.0)))
     steps = int(math.ceil(len(mono) / hop))
     if steps == 0:
-        return np.zeros(0, dtype=np.float32)
+        return np.zeros(0, dtype=np.float32), reference
+    # Pad with silence to a whole number of steps so reshape(steps, hop) works.
     padded = np.zeros(steps * hop, dtype=np.float32)
     padded[: len(mono)] = mono
+    # RMS (root mean square) is the standard loudness measure of a block of samples.
     rms = np.sqrt((padded.reshape(steps, hop) ** 2).mean(axis=1))
     # Percentile over the voiced steps only: in a clip that is mostly pauses
     # the plain 95th percentile is itself silence, which would normalise
     # every step to zero and shut the mouth for the whole clip.
     voiced = rms[rms > 1e-4]
-    if voiced.size == 0:
-        return np.zeros(0, dtype=np.float32)  # truly silent: nothing to gate on
-    reference = float(np.percentile(voiced, 95))
-    return np.clip(rms / reference, 0.0, 1.0).astype(np.float32)
+    if reference is None:
+        if voiced.size == 0:
+            return np.zeros(0, dtype=np.float32), None  # truly silent: nothing to gate on
+        reference = float(np.percentile(voiced, 95))
+    return np.clip(rms / reference, 0.0, 1.0).astype(np.float32), reference
 
 
 def _gaussian(array: np.ndarray, sigma_steps: float) -> np.ndarray:
+    """
+    Gaussian-smooth ``array`` along time (axis 0), column by column.
+
+    ``mode="nearest"`` repeats the edge values past the ends, so the first and last
+    frames are not pulled toward zero. Imported lazily to keep scipy off the import
+    path of modules that never animate.
+    """
     if sigma_steps <= 0 or array.shape[0] < 2:
         return array
     from scipy.ndimage import gaussian_filter1d
@@ -205,8 +260,11 @@ def blink_schedule(
     if rate <= 0 or duration_seconds <= 0:
         return []
     interval = max(MIN_BLINK_INTERVAL_S, 1.0 / rate)
+    # np.random.default_rng(seed) is a private generator: the same seed gives the
+    # same sequence, and it does not disturb any global random state.
     rng = np.random.default_rng(seed)
     times: List[float] = []
+    # The first blink lands 35-90 % of an interval in, not at time zero.
     cursor = interval * float(rng.uniform(0.35, 0.9))
     blink_length = BLINK_CLOSE_S + BLINK_OPEN_S
     while cursor + blink_length <= duration_seconds:
@@ -222,6 +280,9 @@ def _blink_curve(frame_times: np.ndarray, starts: Sequence[float]) -> np.ndarray
         local = frame_times - start
         closing = (local >= 0) & (local < BLINK_CLOSE_S)
         opening = (local >= BLINK_CLOSE_S) & (local < BLINK_CLOSE_S + BLINK_OPEN_S)
+        # sin^2 / cos^2 ramps rise and fall smoothly (zero slope at both ends), so the
+        # lid accelerates and decelerates instead of snapping. np.maximum lets two
+        # overlapping blinks combine without exceeding fully closed.
         curve[closing] = np.maximum(
             curve[closing],
             np.sin(0.5 * np.pi * local[closing] / BLINK_CLOSE_S) ** 2,
@@ -235,6 +296,8 @@ def _blink_curve(frame_times: np.ndarray, starts: Sequence[float]) -> np.ndarray
 
 def seed_from_job_id(job_id: str) -> int:
     """A stable 32-bit seed for a job (Python's ``hash`` is salted per run)."""
+    # The first 4 bytes of a SHA-256 digest give the same number on every run and
+    # every machine, which a salted ``hash()`` would not.
     return int.from_bytes(hashlib.sha256(job_id.encode("utf-8")).digest()[:4], "big")
 
 
@@ -242,10 +305,11 @@ def build_animation(
     phoneme_timestamps: Iterable[TimestampLike],
     duration_seconds: float,
     fps: int,
-    emotion_vector: Optional[Mapping[str, object]] = None,
+    emotion_vector: Optional[Mapping[str, Any]] = None,
     seed: int = 0,
     energy_envelope: Optional[np.ndarray] = None,
     smoothing_ms: float = DEFAULT_SMOOTHING_MS,
+    motion_intensity: float = 1.0,
 ) -> AnimationTrack:
     """
     Build the per-frame blendshape track for a render job.
@@ -265,13 +329,17 @@ def build_animation(
     )
     emotion = emotion_weights(emotion_vector)
 
+    # Column order is sorted names, so the same job always yields the same layout.
     names = sorted(
         {shape for shapes in VISEME_BLENDSHAPES.values() for shape in shapes}
         | set(emotion)
         | set(BLINK_SHAPES)
+        | {"browInnerUp"}
     )
     index = {name: i for i, name in enumerate(names)}
 
+    # Pass 1: rasterise. ``closure`` is a separate 1-D gate track, 0 = no forced
+    # closure, 1 = lips must be shut.
     steps = max(1, int(math.ceil(duration_seconds * 1000.0 / GRID_MS)))
     grid = np.zeros((steps, len(names)), dtype=np.float32)
     closure = np.zeros(steps, dtype=np.float32)
@@ -281,6 +349,8 @@ def build_animation(
         canonical, known = resolve_viseme(viseme)
         if not known:
             unknown[viseme] = unknown.get(viseme, 0) + 1
+        # a..b is the segment's span in grid cells, clamped to the clip and at least one
+        # cell wide so a very short phoneme still appears.
         a = int(min(steps, max(0, math.floor(start_ms / GRID_MS))))
         b = int(min(steps, max(a + 1, math.ceil(end_ms / GRID_MS))))
         grid[a:b, :] = 0.0
@@ -302,31 +372,42 @@ def build_animation(
             ", ".join(f"{name} x{count}" for name, count in sorted(unknown.items())),
         )
 
+    # Pass 2: smooth. sigma is expressed in grid steps, hence the division.
     smoothed = _gaussian(grid, smoothing_ms / GRID_MS)
+    # Pass 3: re-assert closures. Where the gate is 1, every opening shape is
+    # multiplied by 0, shutting the lips even after smoothing blurred them open.
     closure = _gaussian(closure[:, None], CLOSURE_SMOOTHING_MS / GRID_MS)[:, 0]
     opening_columns = [index[name] for name in OPENING_SHAPES if name in index]
     smoothed[:, opening_columns] *= (1.0 - np.clip(closure, 0.0, 1.0))[:, None]
 
     energy_gated = False
+    envelope: Optional[np.ndarray] = None  # set when an energy envelope is given; also drives head motion
     if energy_envelope is not None and len(energy_envelope) > 0:
+        # Optional energy gating. The envelope is padded to the grid length and lightly
+        # smoothed (30 ms) so the gate does not flicker on single loud samples.
         envelope = np.asarray(energy_envelope, dtype=np.float32)
         if len(envelope) < steps:
             envelope = np.pad(envelope, (0, steps - len(envelope)))
         envelope = _gaussian(envelope[:steps, None], 30.0 / GRID_MS)[:, 0]
         # Speaking: jaw follows loudness. Silent: every mouth shape eases out.
+        # 0 below SILENCE_LEVEL, ramping to 1 at twice that level.
         voiced = np.clip((envelope - SILENCE_LEVEL) / SILENCE_LEVEL, 0.0, 1.0)
         mouth_columns = [
             i for name, i in index.items() if name.startswith(("jaw", "mouth", "tongue"))
         ]
         smoothed[:, mouth_columns] *= voiced[:, None]
+        # The jaw keeps 60 % of its viseme opening at low volume and gains the last
+        # 40 % with loudness, so quiet speech still moves the mouth.
         smoothed[:, index["jawOpen"]] *= 0.6 + 0.4 * np.clip(envelope, 0.0, 1.0)
         energy_gated = True
 
+    # Pass 4: sample each frame at its centre time and look up the grid cell.
     frames = frame_count_for(duration_seconds, fps)
     frame_times = (np.arange(frames, dtype=np.float64) + 0.5) / fps
     sample = np.clip((frame_times * 1000.0 / GRID_MS).astype(np.int64), 0, steps - 1)
     weights = smoothed[sample].astype(np.float32)
 
+    # Emotion is a constant offset added on top of the speech motion.
     for shape, weight in emotion.items():
         weights[:, index[shape]] += weight
 
@@ -342,7 +423,22 @@ def build_animation(
     if blinks:
         curve = _blink_curve(frame_times, blinks)
         for shape in BLINK_SHAPES:
+            # Blinks take the larger of the existing eye weight and the blink curve.
             weights[:, index[shape]] = np.maximum(weights[:, index[shape]], curve)
+
+    # Whole-portrait motion (I-01): head drift and nods, brow lifts on emphasis, breathing. Loudness per
+    # frame drives it: the energy envelope when there is one, else how open the jaw is.
+    head = None
+    if motion_intensity > 0:
+        from head_motion import motion_track
+
+        if envelope is not None:
+            loudness = np.clip(envelope[sample], 0.0, 1.0)
+        else:
+            loudness = np.clip(weights[:, index["jawOpen"]] / 0.6, 0.0, 1.0) if "jawOpen" in index else None
+        motion = motion_track(frames, fps, seed, loudness=loudness, intensity=motion_intensity)
+        head = motion.pose
+        weights[:, index["browInnerUp"]] += motion.brow
 
     np.clip(weights, 0.0, 1.0, out=weights)
     return AnimationTrack(
@@ -352,4 +448,5 @@ def build_animation(
         unknown_visemes=unknown,
         blink_times=blinks,
         energy_gated=energy_gated,
+        head=head,
     )

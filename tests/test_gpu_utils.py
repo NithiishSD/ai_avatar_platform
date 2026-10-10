@@ -68,3 +68,129 @@ class GpuUtilsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HostMemoryTests(unittest.TestCase):
+    """The RAM guard for CPU hosts: unload others when short, refuse rather than be OOM-killed."""
+
+    def setUp(self):
+        saved = dict(gpu_utils._releasers)
+        self.addCleanup(lambda: (gpu_utils._releasers.clear(), gpu_utils._releasers.update(saved)))
+        gpu_utils._releasers.clear()
+        self.released = []
+        gpu_utils.register_releaser("other", lambda: self.released.append("other"))
+        gpu_utils.register_releaser("self", lambda: self.released.append("self"))
+        patch = mock.patch("gpu_utils.cuda_available", return_value=False)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def free(self, *values):
+        patch = mock.patch("gpu_utils.free_ram_mb", side_effect=list(values))
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_plenty_of_ram_unloads_nothing(self):
+        self.free(20000)
+        gpu_utils.ensure_host_memory(4200, "XTTS-v2")
+        self.assertEqual(self.released, [])
+
+    def test_short_of_ram_unloads_the_others_and_then_proceeds(self):
+        self.free(3000, 9000)  # before, after unloading
+        gpu_utils.ensure_host_memory(4200, "XTTS-v2", keep="self")
+        self.assertEqual(self.released, ["other"])
+
+    def test_still_short_after_unloading_refuses_with_the_numbers_and_the_fix(self):
+        self.free(1000, 2000)
+        with self.assertRaises(gpu_utils.InsufficientRAM) as caught:
+            gpu_utils.ensure_host_memory(4200, "XTTS-v2")
+        message = str(caught.exception)
+        self.assertIn("XTTS-v2", message)
+        self.assertIn("4200", message)
+        self.assertIn("2000", message)
+        self.assertIn("other", message)  # names what it already unloaded
+        self.assertIn("Close other programs", message)
+
+    def test_headroom_is_required_on_top_of_the_model_size(self):
+        # Exactly the model size free is not enough: the request still needs room.
+        self.free(4200, 9000)
+        gpu_utils.ensure_host_memory(4200, "XTTS-v2")
+        self.assertEqual(sorted(self.released), ["other", "self"])
+
+    def test_unknown_free_memory_does_not_interfere(self):
+        self.free(None)
+        gpu_utils.ensure_host_memory(4200, "XTTS-v2")
+        self.assertEqual(self.released, [])
+
+    def test_a_gpu_run_skips_the_ram_check(self):
+        with mock.patch("gpu_utils.cuda_available", return_value=True), mock.patch("gpu_utils.free_ram_mb") as free:
+            gpu_utils.ensure_host_memory(4200, "XTTS-v2")
+        free.assert_not_called()
+
+    def test_free_ram_reads_the_kernels_figure(self):
+        value = gpu_utils.free_ram_mb()
+        self.assertTrue(value is None or value > 0)  # None off Linux
+
+
+class HeapTrimTests(unittest.TestCase):
+    def test_empty_cache_asks_glibc_to_return_freed_pages(self):
+        with mock.patch("ctypes.CDLL") as cdll:
+            gpu_utils.empty_cache()
+        cdll.assert_called_with("libc.so.6")
+        cdll.return_value.malloc_trim.assert_called_once_with(0)
+
+    def test_a_system_without_glibc_is_not_an_error(self):
+        with mock.patch("ctypes.CDLL", side_effect=OSError("no libc.so.6")):
+            gpu_utils.empty_cache()  # must not raise
+
+
+class RetryAfterFreeingTests(unittest.TestCase):
+    """GPU out-of-memory mid-call (the E2E finding of 9 Oct): free the other models, try once more."""
+
+    def test_an_out_of_memory_error_is_retried_once_after_freeing(self):
+        from unittest import mock
+
+        import gpu_utils
+
+        calls = []
+
+        def work():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("CUDA error: CUBLAS_STATUS_ALLOC_FAILED when calling `cublasCreate(handle)`")
+            return "ok"
+
+        with mock.patch.object(gpu_utils, "release_others", return_value=["xtts-v2"]) as release:
+            self.assertEqual(gpu_utils.retry_after_freeing(work, keep="video-watermark"), "ok")
+        release.assert_called_once_with(keep="video-watermark")
+        self.assertEqual(len(calls), 2)
+
+    def test_other_errors_and_a_second_failure_are_raised(self):
+        from unittest import mock
+
+        import gpu_utils
+
+        with self.assertRaisesRegex(ValueError, "bad input"):
+            gpu_utils.retry_after_freeing(lambda: (_ for _ in ()).throw(ValueError("bad input")))
+        always_full = mock.Mock(side_effect=RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB"))
+        with mock.patch.object(gpu_utils, "release_others", return_value=[]):
+            with self.assertRaisesRegex(RuntimeError, "out of memory"):
+                gpu_utils.retry_after_freeing(always_full)
+        self.assertEqual(always_full.call_count, 2)
+
+
+class WatermarkFullCardTests(unittest.TestCase):
+    def test_a_full_card_is_not_cached_as_a_permanent_watermark_failure(self):
+        from unittest import mock
+
+        import gpu_utils
+        import video_watermark
+        import watermark_engine
+
+        for cls, error in ((video_watermark.VideoWatermarker, video_watermark.VideoWatermarkUnavailable),
+                           (watermark_engine.AudioWatermarker, watermark_engine.WatermarkUnavailable)):
+            with self.subTest(cls=cls.__name__):
+                marker = cls(device="cuda")
+                with mock.patch.object(gpu_utils, "ensure_vram", side_effect=gpu_utils.InsufficientVRAM("card full")):
+                    with self.assertRaises(error):
+                        marker._load()
+                self.assertIsNone(marker._failure)  # the next call tries again instead of failing for good

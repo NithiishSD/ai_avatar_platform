@@ -206,3 +206,32 @@ class EmotionTrackTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HeadMotionTrackTests(unittest.TestCase):
+    """build_animation carries whole-portrait motion (I-01), driven by loudness, off at intensity 0."""
+
+    STAMPS = ({"phoneme": "AA", "viseme": "viseme_aa", "startMs": 200, "endMs": 900},)
+
+    def test_motion_is_on_by_default_and_off_at_zero(self):
+        import numpy as np
+
+        from face_animation import build_animation
+
+        envelope = np.concatenate([np.zeros(40), np.ones(140), np.zeros(60)])  # loud from 200 ms
+        moving = build_animation(self.STAMPS, duration_seconds=1.2, fps=25, energy_envelope=envelope, seed=3)
+        self.assertEqual(moving.head.shape, (moving.frame_count, 5))
+        self.assertEqual(len(moving.pose(0)), 5)
+        self.assertGreater(float(moving.column("browInnerUp").max()), 0.0)   # brows lift on the loud onset
+        still = build_animation(self.STAMPS, duration_seconds=1.2, fps=25, energy_envelope=envelope, seed=3, motion_intensity=0)
+        self.assertIsNone(still.head)
+        self.assertIsNone(still.pose(0))
+
+    def test_the_same_job_moves_the_same_way(self):
+        import numpy as np
+
+        from face_animation import build_animation
+
+        a = build_animation(self.STAMPS, duration_seconds=1.2, fps=25, seed=9)
+        b = build_animation(self.STAMPS, duration_seconds=1.2, fps=25, seed=9)
+        self.assertTrue(np.array_equal(a.head, b.head))

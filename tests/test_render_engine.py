@@ -5,6 +5,7 @@ The face landmarker is replaced by the synthetic-face fixture; ffmpeg is the
 real system binary. No model weights are touched.
 """
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -13,11 +14,14 @@ from unittest import mock
 
 import numpy as np
 
+import manifest as manifest_module
 import provenance
 import render_engine
+import watermark_engine
 import video_io
 from avatar_store import AvatarConsentError, AvatarNotFound, AvatarStore
-from contracts import AvatarRenderJob, RenderQuality
+from contracts import AvatarRenderJob, BackgroundSpec, RenderQuality
+from face_engine import BackgroundSegmenter
 from render_engine import RenderError
 from vision_fixtures import FakeFaceEngine, gradient_image
 
@@ -132,7 +136,7 @@ class PlanningTests(RenderCase):
         self.assertEqual(render_engine.validate_engine(None), "blendshape")
         self.assertEqual(render_engine.validate_engine(" Wav2Lip "), "wav2lip")
         with self.assertRaises(RenderError):
-            render_engine.validate_engine("sadtalker")
+            render_engine.validate_engine("liveportrait")
         with mock.patch.dict("os.environ", {"RENDER_ENGINE": "wav2lip"}):
             self.assertEqual(render_engine.validate_engine(None), "wav2lip")
 
@@ -163,6 +167,14 @@ class PreflightTests(RenderCase):
             with self.assertRaises(RenderError) as ctx:
                 render_engine.preflight(self.job(), engine="wav2lip", store=self.store)
         self.assertIn("--accept-licence wav2lip", str(ctx.exception))
+
+    def test_sadtalker_without_its_files_fails_loudly_instead_of_falling_back(self):
+        self.wav()
+        with mock.patch("sadtalker_engine.missing", return_value=["the SadTalker code is not checked out (fetch it)"]):
+            with self.assertRaises(RenderError) as ctx:
+                render_engine.preflight(self.job(), engine="sadtalker", store=self.store)
+        self.assertIn("not checked out", str(ctx.exception))
+        self.assertIn("blendshape", str(ctx.exception))
 
 
 @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg / ffprobe not installed")
@@ -253,6 +265,76 @@ class RenderJobTests(RenderCase):
         self.assertEqual(len(seen["face_box"]), 4)
         self.assertFalse(warp.call_args.kwargs["include_mouth"])
 
+    def fake_sadtalker(self, frames=20, size=64, device="cuda"):
+        """Replace the SadTalker child with one that writes a real 25 fps MP4 of grey frames, and the
+        Real-ESRGAN sharpener with a 4x pixel repeat, so no model is loaded."""
+        import sadtalker_engine
+
+        calls = {"upscaled": 0}
+
+        def render(image, audio_path, pose_style, still):
+            calls.update(shape=image.shape, pose_style=pose_style, still=still)
+            folder = self.tmp / "st" / "out"
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / "result.mp4"
+            with video_io.VideoWriter(path, size, size, 25) as writer:
+                for _ in range(frames):
+                    writer.write(np.full((size, size, 3), 128, dtype=np.uint8))
+            return sadtalker_engine.SadTalkerResult(path, device, 2345 if device == "cuda" else None, 1.0)
+
+        class FakeResolver:
+            available = True
+
+            def upscale(self, frame):
+                calls["upscaled"] += 1
+                return np.repeat(np.repeat(frame, 4, axis=0), 4, axis=1)
+
+        patcher = mock.patch("render_engine._frame_resolver", return_value=FakeResolver())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls, render
+
+    def test_sadtalker_frames_replace_the_warp_and_report_themselves(self):
+        self.wav(1.0)
+        # 20 frames at 25 fps for 1 s of audio: the last frame must be held to reach 25.
+        calls, render = self.fake_sadtalker(frames=20)
+        with mock.patch("sadtalker_engine.missing", return_value=[]), \
+             mock.patch("sadtalker_engine.render", side_effect=render), \
+             mock.patch("render_engine._warp_frames") as warp:
+            result = render_engine.render_job(self.job(), engine="sadtalker", store=self.store)
+        warp.assert_not_called()
+        self.assertEqual(result.engine, "sadtalker")
+        self.assertEqual(result.frame_count, 25)
+        self.assertEqual((result.width, result.height), (512, 512))
+        self.assertEqual(result.peak_vram_mb, 2345)
+        # The warp's blink model did not draw this video, so it reports none.
+        self.assertEqual(result.blink_count, 0)
+        self.assertEqual(calls["shape"], (512, 512, 3))
+        self.assertFalse(calls["still"])
+        self.assertEqual(calls["upscaled"], 20)  # every SadTalker frame is sharpened
+        self.assertFalse((self.tmp / "st").exists())  # the child's folder is cleaned up
+
+    def test_sadtalker_still_mode_and_honest_warnings(self):
+        self.wav(1.0)
+        calls, render = self.fake_sadtalker(frames=25, device="cpu")
+        job = self.job(motionIntensity=0.0, emotionVector={"happy": 0.0, "neutral": 0.5, "eyeblinkRate": 1.0, "joy": 0.8})
+        with mock.patch("sadtalker_engine.missing", return_value=[]), mock.patch("sadtalker_engine.render", side_effect=render):
+            result = render_engine.render_job(job, engine="sadtalker", store=self.store)
+        self.assertTrue(calls["still"])
+        # SadTalker's small frames are scaled to the job's 512 px frame, not passed through at the wrong size.
+        self.assertEqual((result.width, result.height), (512, 512))
+        text = " ".join(result.warnings)
+        self.assertIn("no emotion input", text)
+        self.assertIn("ran on the cpu", text)
+
+    def test_sadtalker_without_real_esrgan_says_the_frames_were_not_sharpened(self):
+        self.wav(1.0)
+        _, render = self.fake_sadtalker(frames=25)
+        with mock.patch("sadtalker_engine.missing", return_value=[]), mock.patch("sadtalker_engine.render", side_effect=render), \
+             mock.patch("render_engine._frame_resolver", return_value=mock.Mock(available=False)):
+            result = render_engine.render_job(self.job(), engine="sadtalker", store=self.store)
+        self.assertIn("without sharpening", " ".join(result.warnings))
+
     def test_failed_render_leaves_no_partial_file(self):
         self.wav(1.0)
         with mock.patch("render_engine.PortraitAnimator.render", side_effect=RuntimeError("boom")):
@@ -278,6 +360,16 @@ class RenderJobTests(RenderCase):
         self.assertAlmostEqual(result.media["audioDuration"], 3.017, delta=0.03)
         self.assertEqual(result.warnings, [])
 
+    def test_a_clip_whose_last_frame_starts_just_before_the_end_keeps_it(self):
+        # 3.25 s at 25 fps: frame 82 starts at 3.24 s. ffmpeg used to cut it
+        # (the owner's host render printed "82 frames were rendered but the file holds 81").
+        self.wav(3.25)
+        result = render_engine.render_job(self.job(durationSeconds=3.25), store=self.store, label=False)
+        self.assertEqual(result.frame_count, 82)
+        self.assertEqual(result.media["frameCount"], 82)
+        self.assertEqual(result.warnings, [])
+        self.assertAlmostEqual(result.media["audioDuration"], 3.25, delta=0.03)  # audio not cut
+
     def test_clip_shorter_than_a_frame_still_has_a_video_stream(self):
         self.wav(0.6)
         job = self.job(targetFps=1, durationSeconds=0.6,
@@ -285,6 +377,238 @@ class RenderJobTests(RenderCase):
         result = render_engine.render_job(job, store=self.store)
         info = video_io.probe(result.output_path)
         self.assertTrue(info.has_video and info.has_audio)
+
+
+class FakeSegmenter(BackgroundSegmenter):
+    """Real compositing code, with the model replaced by a centred rectangle."""
+
+    def __init__(self, person_fraction: float = 0.5, available: bool = True):
+        super().__init__(model_path=Path("/nonexistent.tflite"))
+        self.person_fraction = person_fraction
+        self._available = available
+        self.calls = 0
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    def foreground_mask(self, image):
+        self.calls += 1
+        h, w = image.shape[:2]
+        mask = np.zeros((h, w), dtype=np.float32)
+        mh, mw = int(h * self.person_fraction), int(w * self.person_fraction)
+        top, left = (h - mh) // 2, (w - mw) // 2
+        mask[top : top + mh, left : left + mw] = 1.0
+        return mask
+
+
+class BackgroundSpecTests(unittest.TestCase):
+    def test_needs_exactly_one_source(self):
+        for payload in ({}, {"color": "#112233", "imageUrl": "file:///x.png"}):
+            with self.assertRaises(ValueError):
+                BackgroundSpec.model_validate(payload)
+
+    def test_colour_must_be_six_digit_hex(self):
+        for bad in ("red", "#fff", "#12345g", "112233"):
+            with self.assertRaises(ValueError):
+                BackgroundSpec.model_validate({"color": bad})
+        self.assertEqual(BackgroundSpec.model_validate({"color": "#0a0B0c"}).color, "#0a0B0c")
+
+    def test_cover_fit_fills_without_stretching(self):
+        wide = np.zeros((100, 400, 3), dtype=np.uint8)
+        wide[:, 150:250] = 255  # a white band in the middle
+        fitted = render_engine._cover_fit(wide, 200, 200)
+        self.assertEqual(fitted.shape, (200, 200, 3))
+        # Scaled by 2, the middle 100 px of the source (the band) spans the
+        # whole 200 px crop; a stretch would have shown black either side.
+        self.assertGreater(fitted.mean(), 250)
+
+
+class BackgroundRenderTests(RenderCase):
+    def setUp(self):
+        super().setUp()
+        self.segmenter = FakeSegmenter()
+        patcher = mock.patch("render_engine.shared_segmenter", return_value=self.segmenter)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_colour_replaces_the_background_but_keeps_the_subject(self):
+        photo = self.store.load_image("demo")
+        out, warnings = render_engine.apply_background(photo, BackgroundSpec(color="#ff0000"))
+        self.assertEqual(warnings, [])
+        h, w = photo.shape[:2]
+        self.assertEqual(tuple(out[2, 2]), (255, 0, 0))               # corner: new colour
+        self.assertTrue(np.array_equal(out[h // 2, w // 2], photo[h // 2, w // 2]))  # centre: untouched
+
+    def test_image_background_is_read_from_outputs_only(self):
+        import cv2
+
+        cv2.imwrite(str(self.outputs / "bg.png"), np.full((64, 128, 3), (0, 0, 255), dtype=np.uint8))  # BGR red
+        spec = BackgroundSpec(imageUrl="http://localhost/outputs/bg.png")
+        out, _ = render_engine.apply_background(self.store.load_image("demo"), spec)
+        self.assertEqual(tuple(out[2, 2]), (255, 0, 0))
+        for url in ("file:///etc/passwd", "http://localhost/other/bg.png"):
+            with self.assertRaises(RenderError):
+                render_engine._check_background(BackgroundSpec(imageUrl=url))
+
+    def test_undecodable_background_image_is_an_error(self):
+        (self.outputs / "bg.png").write_bytes(b"not an image")
+        with self.assertRaises(RenderError) as ctx:
+            render_engine.apply_background(
+                self.store.load_image("demo"), BackgroundSpec(imageUrl="http://localhost/outputs/bg.png")
+            )
+        self.assertIn("decoded", str(ctx.exception))
+
+    def test_missing_segmenter_refuses_instead_of_keeping_the_old_background(self):
+        self.segmenter._available = False
+        self.wav(1.0)
+        with self.assertRaises(RenderError) as ctx:
+            render_engine.preflight(self.job(background={"color": "#101820"}), store=self.store)
+        self.assertIn("fetch_vision_models", str(ctx.exception))
+
+    def test_a_missed_subject_is_reported(self):
+        self.segmenter.person_fraction = 0.1  # 1% of the frame
+        _, warnings = render_engine.apply_background(self.store.load_image("demo"), BackgroundSpec(color="#000000"))
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("almost no person", warnings[0])
+
+    @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg / ffprobe not installed")
+    def test_rendered_video_carries_the_new_background_and_says_so(self):
+        self.wav(1.0)
+        result = render_engine.render_job(
+            self.job(background={"color": "#00c800"}), store=self.store, label=False
+        )
+        self.assertEqual(result.background, "color #00c800")
+        frame = next(video_io.read_frames(result.output_path)).astype(int)
+        self.assertLess(np.abs(frame[4, 4] - np.array([0, 200, 0])).max(), 30)  # H.264 is lossy
+
+    @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg / ffprobe not installed")
+    def test_job_without_background_never_touches_the_segmenter(self):
+        self.wav(1.0)
+        result = render_engine.render_job(self.job(), store=self.store, label=False)
+        self.assertIsNone(result.background)
+        self.assertEqual(self.segmenter.calls, 0)
+
+
+class FakeVideoMarker:
+    """Stands in for VideoSeal: passes frames through, remembers the id, reads back what it is told to."""
+
+    def __init__(self, detected=True):
+        self.detected = detected
+        self.embedded_ids = []
+        self.frames_seen = 0
+
+    def embed_stream(self, frames, manifest_id):
+        self.embedded_ids.append(manifest_id)
+        for frame in frames:
+            self.frames_seen += 1
+            yield frame
+
+    def detect_video(self, path, sample_frames=16):
+        from video_watermark import VideoWatermarkReport
+
+        ident = self.embedded_ids[-1].hex() if self.embedded_ids else None
+        return VideoWatermarkReport(self.detected, 128 if self.detected else 40, 1.0 if self.detected else 0.3,
+                                    ident if self.detected else None, sample_frames)
+
+
+@unittest.skipUnless(HAVE_FFMPEG, "ffmpeg / ffprobe not installed")
+class RenderWatermarkAndManifestTests(RenderCase):
+    def setUp(self):
+        super().setUp()
+        self.marker = FakeVideoMarker()
+        for patcher in (
+            mock.patch("watermark_engine.enabled", return_value=True),
+            mock.patch("watermark_engine.signing_key", return_value=b"render-test-key"),
+            mock.patch("video_watermark.VideoWatermarker.files_present", return_value=True),
+            mock.patch("video_watermark.shared_video_watermarker", return_value=self.marker),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        watermark_engine.reset_key_cache()
+        self.addCleanup(watermark_engine.reset_key_cache)
+
+    def render(self, **kw):
+        self.wav(1.0)
+        return render_engine.render_job(self.job(**kw), store=self.store, label=False)
+
+    def load_manifest(self, result):
+        return json.loads(Path(result.manifest["path"]).read_text())
+
+    def test_a_render_marks_the_frames_and_ships_a_manifest_that_verifies_against_the_file(self):
+        result = self.render()
+        self.assertEqual(self.marker.frames_seen, result.frame_count)           # every frame went through the marker
+        self.assertTrue(result.watermark["applied"] and result.watermark["verified"])
+        document = self.load_manifest(result)
+        report = manifest_module.verify(document, result.output_path)
+        self.assertTrue(report.trustworthy, report.problems)
+        # one id ties the three together: what was embedded, what was read back, what the manifest says
+        embedded = self.marker.embedded_ids[-1].hex()
+        self.assertEqual({result.watermark["embeddedManifestId"], result.watermark["manifestId"],
+                          result.manifest["manifestId"], document["manifestId"]}, {embedded})
+        self.assertTrue(result.manifest["url"].endswith(".mp4.manifest.json"))
+
+    def test_the_manifest_records_what_went_into_the_video(self):
+        result = self.render()
+        document = self.load_manifest(result)
+        self.assertEqual(document["inputs"]["avatar"]["avatarId"], "demo")
+        self.assertEqual(document["inputs"]["avatar"]["source"], "synthetic")
+        self.assertEqual(document["processing"]["renderEngine"], "blendshape")
+        self.assertEqual(document["processing"]["quality"], "PREVIEW")
+        self.assertEqual(document["content"]["frameCount"], result.frame_count)
+        self.assertEqual(document["inputs"]["audio"]["speechRecord"]["status"], "unrecorded")  # this wav came from no synthesis
+
+    def test_a_speech_record_for_the_exact_audio_is_carried_into_the_manifest(self):
+        path = self.wav(1.0)
+        manifest_module.write_speech_record(path, model="kokoro", mode="fast", language="en", speaker_wav=None, clone_engine=None,
+                                            emotion=None, alignment_method="mms_fa", duration_seconds=1.0, watermark={"applied": True})
+        result = render_engine.render_job(self.job(), store=self.store, label=False)
+        record = self.load_manifest(result)["inputs"]["audio"]["speechRecord"]
+        self.assertEqual((record["status"], record["model"], record["alignmentMethod"]), ("matched", "kokoro", "mms_fa"))
+
+    def test_a_mark_that_cannot_be_read_back_fails_the_job_and_leaves_no_video(self):
+        self.marker.detected = False
+        self.wav(1.0)
+        with self.assertRaisesRegex(RenderError, "could not be read back"):
+            render_engine.render_job(self.job(), store=self.store, label=False)
+        self.assertEqual(list((self.outputs / "renders").glob("*")), [])        # no video, no partial, no manifest
+
+    def test_switching_the_mark_off_is_visible_and_the_manifest_is_still_issued(self):
+        with mock.patch("watermark_engine.enabled", return_value=False):
+            result = self.render()
+        self.assertEqual(result.watermark["applied"], False)
+        self.assertIn("WATERMARK_ENABLED", result.watermark["reason"])
+        self.assertEqual(self.marker.frames_seen, 0)
+        document = self.load_manifest(result)
+        self.assertTrue(manifest_module.verify(document, result.output_path).trustworthy)
+        self.assertEqual(document["watermarks"]["video"]["applied"], False)    # the manifest does not claim a mark it lacks
+        self.assertIsNone(document["models"]["videoWatermark"])
+
+    def test_a_render_writes_the_face_use_and_the_manifest_to_the_audit_trail(self):
+        from audit_log import AuditLog
+
+        log = AuditLog(":memory:")
+        with mock.patch("audit_log.shared_audit", return_value=log):
+            result = self.render()
+        (issued,) = log.query(event="manifest_issued")
+        (used,) = log.query(event="face_use")
+        self.assertEqual(issued["subject"], result.manifest["manifestId"])
+        self.assertEqual(issued["details"]["video_sha256"], result.manifest["videoSha256"])
+        self.assertEqual((used["subject"], used["basis"], used["details"]["manifest"]), ("demo", "synthetic", result.manifest["manifestId"]))
+        self.assertTrue(log.verify_chain()["valid"])
+
+    def test_two_renders_never_share_a_manifest_id(self):
+        first = self.render(jobId="A")
+        second = self.render(jobId="B")
+        self.assertNotEqual(first.manifest["manifestId"], second.manifest["manifestId"])
+
+    def test_preflight_refuses_to_queue_a_job_that_cannot_be_marked(self):
+        self.wav(1.0)
+        with mock.patch("video_watermark.VideoWatermarker.files_present", return_value=False):
+            with self.assertRaisesRegex(RenderError, "fetch_vision_models.py --only videoseal"):
+                render_engine.preflight(self.job(), store=self.store)
+            with mock.patch("watermark_engine.enabled", return_value=False):
+                render_engine.preflight(self.job(), store=self.store)           # the opt-out needs no model
 
 
 if __name__ == "__main__":

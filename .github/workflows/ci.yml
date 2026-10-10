@@ -1,0 +1,89 @@
+# Runs the same gates as scripts/check.sh on every push and pull request.
+#
+# Not run here, deliberately: the end-to-end suite. It drives the real
+# backend against a registered face and voice references, which live only in
+# inputs/ on a developer's machine because they are photos and recordings of
+# people (see the consent rule). It runs locally at every milestone instead.
+name: CI
+
+on:
+  push:
+    branches: [main, m1]
+  pull_request:
+
+# One run per branch at a time: a newer push cancels the run it supersedes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # 3.10 exactly: Coqui TTS does not support newer versions.
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      # ffmpeg for the video tests; libEGL/GLES because MediaPipe's native
+      # library links them even when it runs on the CPU.
+      - name: System libraries
+        run: >
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends
+          ffmpeg libegl1 libgles2
+
+      # CPU wheels first. requirements.txt allows torch>=2.2, so pip keeps
+      # these instead of fetching the 2 GB CUDA builds a GPU-less runner
+      # could never use.
+      - name: PyTorch (CPU)
+        run: >
+          pip install torch==2.5.1 torchaudio==2.5.1 torchvision==0.20.1
+          --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          # Coqui TTS pins an ancient numpy; installed without its pins, as
+          # documented in requirements.txt.
+          pip install --no-deps TTS==0.22.0
+          # OpenVoice V2, pinned to a reviewed commit and without its pins
+          # (numpy==1.22, librosa==0.9.1), as requirements.txt explains.
+          pip install --no-deps "git+https://github.com/myshell-ai/OpenVoice.git@74a1d147b17a8c3092dd5430504bd83ef6c7eb23"
+          pip install -r backend/requirements-dev.txt
+
+      # check.sh defaults to the local conda env; point it at this runner's
+      # interpreter and tools instead (absolute paths, which pyrefly needs).
+      - name: Where the tools live
+        run: |
+          echo "PY=$(command -v python)" >> "$GITHUB_ENV"
+          echo "BIN=$(dirname "$(command -v ruff)")" >> "$GITHUB_ENV"
+
+      - name: Lint
+        run: scripts/check.sh lint
+      - name: Typecheck
+        run: scripts/check.sh types
+      - name: Unit tests
+        run: scripts/check.sh test
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        run: npm ci
+        working-directory: frontend
+      - name: Lint and production build
+        run: scripts/check.sh frontend

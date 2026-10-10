@@ -8,6 +8,7 @@ the test suite mocked past the load, and the Phase 3 benchmark measured Kokoro
 in their place.
 """
 
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -136,17 +137,48 @@ class CoquiAuditTests(unittest.TestCase):
         self.assertFalse(status.present)
         self.assertIn(tmp, status.detail)
 
+    XTTS = "tts_models/multilingual/multi-dataset/xtts_v2"
+
+    def coqui_folder(self, tmp, *, config=True, checkpoint="complete"):
+        """A Coqui download folder: complete, or broken the way real ones break."""
+        import zipfile
+
+        folder = Path(tmp) / "tts_models--multilingual--multi-dataset--xtts_v2"
+        folder.mkdir(parents=True)
+        if config:
+            (folder / "config.json").write_text("{}")
+        path = folder / "model.pth"
+        with zipfile.ZipFile(path, "w") as archive:  # what torch.save writes
+            archive.writestr("archive/data.pkl", b"x" * MIN_CHECKPOINT_BYTES * 2)
+        if checkpoint == "truncated":
+            data = path.read_bytes()
+            path.write_bytes(data[: len(data) * 7 // 10])  # stopped at 70%
+        return folder
+
+    def audit(self, tmp):
+        with mock.patch("model_registry._coqui_roots", return_value=[Path(tmp)]):
+            return check_coqui_model("xtts-v2", "XTTS-v2", self.XTTS)
+
     def test_present_model_is_found_under_a_searched_root(self):
         with tempfile.TemporaryDirectory() as tmp:
-            folder = Path(tmp) / "tts_models--multilingual--multi-dataset--xtts_v2"
-            write(folder / "model.pth", MIN_CHECKPOINT_BYTES * 2)
-            with mock.patch(
-                "model_registry._coqui_roots", return_value=[Path(tmp)]
-            ):
-                status = check_coqui_model(
-                    "xtts-v2", "XTTS-v2", "tts_models/multilingual/multi-dataset/xtts_v2"
-                )
+            self.coqui_folder(tmp)
+            status = self.audit(tmp)
         self.assertTrue(status.present)
+
+    def test_a_checkpoint_without_its_config_is_an_unfinished_download(self):
+        # This fixture used to *be* the "present" case: model.pth alone.
+        with tempfile.TemporaryDirectory() as tmp:
+            self.coqui_folder(tmp, config=False)
+            status = self.audit(tmp)
+        self.assertFalse(status.present)
+        self.assertIn("config.json is missing", status.detail)
+
+    def test_a_truncated_checkpoint_is_not_counted_as_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.coqui_folder(tmp, checkpoint="truncated")
+            status = self.audit(tmp)
+        self.assertFalse(status.present)
+        self.assertIn("model.pth is truncated", status.detail)
 
 
 class SizeLabelTests(unittest.TestCase):
@@ -182,7 +214,10 @@ class AuditReportingTests(unittest.TestCase):
             log_weight_audit(statuses)
         warnings = [line for line in captured.output if "WARNING" in line]
         self.assertEqual(len(warnings), 2)
-        self.assertTrue(all("MODEL WEIGHTS MISSING" in w for w in warnings))
+        # Worded "unavailable", not "weights missing": for an engine this
+        # stack cannot run, the weights are not the problem.
+        self.assertTrue(all("MODEL UNAVAILABLE" in w for w in warnings))
+        self.assertTrue(all("Fix:" in w for w in warnings))
 
     def test_a_full_house_logs_no_warning(self):
         statuses = [
@@ -195,3 +230,75 @@ class AuditReportingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnrunnableEngineTests(unittest.TestCase):
+    """Higgs and Dia cannot load on this stack; nothing may suggest fetching them."""
+
+    def test_audit_reports_them_unavailable_with_no_fetch_advice(self):
+        from model_registry import audit_model_weights
+
+        statuses = {s.key: s for s in audit_model_weights()}
+        for key in ("higgs-tts-2", "dia-1.6b"):
+            self.assertFalse(statuses[key].present)
+            self.assertIn("Downloading it would not help", statuses[key].detail)
+            self.assertNotIn("fetch_models.py", statuses[key].fix)
+
+    def test_a_fetchable_model_still_gets_the_fetch_command(self):
+        from model_registry import audit_model_weights
+
+        with mock.patch("model_registry.check_mms", return_value=ModelWeightStatus(
+            "mms-tts", "MMS", "x", False, 0, "nothing cached"
+        )):
+            statuses = {s.key: s for s in audit_model_weights()}
+        self.assertEqual(statuses["mms-tts"].fix, "python scripts/fetch_models.py --only mms-tts")
+
+    def test_the_refusal_message_does_not_say_fetch(self):
+        from voice_engine import ModelWeightsMissing
+        from model_registry import UNRUNNABLE
+
+        message = str(ModelWeightsMissing("dia-1.6b", UNRUNNABLE["dia-1.6b"], "none on this stack"))
+        self.assertNotIn("Fetch it with", message)
+        self.assertIn("Fix: none on this stack", message)
+
+    def test_the_fetcher_refuses_instead_of_downloading(self):
+        import importlib.util
+        import io
+        from contextlib import redirect_stderr
+
+        spec = importlib.util.spec_from_file_location(
+            "fetch_models", Path(__file__).resolve().parents[1] / "scripts" / "fetch_models.py"
+        )
+        fetcher = importlib.util.module_from_spec(spec)
+        # @dataclass resolves annotations through sys.modules[__module__], so a
+        # module loaded from a file path has to be registered while it runs.
+        with mock.patch.dict(sys.modules, {"fetch_models": fetcher}):
+            spec.loader.exec_module(fetcher)
+        err = io.StringIO()
+        with mock.patch("sys.argv", ["fetch_models.py", "--only", "higgs-tts-2"]), \
+             mock.patch.object(fetcher, "_fetch_hf") as download, redirect_stderr(err):
+            self.assertEqual(fetcher.main(), 1)
+        download.assert_not_called()
+        self.assertIn("Downloading it would not help", err.getvalue())
+
+
+class OpenVoiceAuditTests(unittest.TestCase):
+    def test_a_missing_package_is_reported_with_the_install_command(self):
+        from model_registry import check_openvoice
+
+        with mock.patch("importlib.util.find_spec", return_value=None):
+            status = check_openvoice()
+        self.assertFalse(status.present)
+        self.assertIn("pip install --no-deps", status.fix)
+
+    def test_present_only_with_both_converter_files(self):
+        from model_registry import check_openvoice
+
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = Path(tmp) / "snapshots" / "abc" / "converter"
+            snapshot.mkdir(parents=True)
+            (snapshot / "config.json").write_text("{}")
+            with mock.patch("model_registry._hf_repo_dir", return_value=Path(tmp)):
+                self.assertFalse(check_openvoice().present)  # checkpoint missing
+                (snapshot / "checkpoint.pth").write_bytes(b"x" * 10)
+                self.assertTrue(check_openvoice().present)

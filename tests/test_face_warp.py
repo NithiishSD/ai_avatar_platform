@@ -143,3 +143,39 @@ class PortraitAnimatorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PortraitPoseTests(unittest.TestCase):
+    """Whole-portrait motion (I-01): the head moves, the edges of the photo stay put, a zero pose changes nothing."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.image = gradient_image(512)
+        cls.animator = PortraitAnimator(cls.image, synthetic_analysis())
+
+    def test_a_zero_pose_changes_nothing(self):
+        frame = self.animator.render({}, (0.0, 0.0, 0.0, 0.0, 0.0))
+        self.assertLess(float(np.abs(frame.astype(int) - self.image.astype(int)).mean()), 0.01)
+
+    def test_a_tilt_moves_the_head_but_not_the_corners(self):
+        tilted = self.animator.render({}, (3.0, 0.0, 0.0, 0.0, 0.0)).astype(int)
+        change = np.abs(tilted - self.image.astype(int)).mean(axis=2)
+        x, y = (int(round(c)) for c in self.animator.pivot)
+        top = max(0, int(y - 1.2 * self.animator.face_height))
+        head = change[top:int(y), max(0, x - 40):x + 40].mean()
+        # The corner farthest from the face is outside the head's fade-out and must not move. (Which corner
+        # depends on where the face sits; this fixture's face fills most of the frame.)
+        h, w = change.shape
+        corners = {(0, 0): change[:12, :12], (0, w): change[:12, -12:], (h, 0): change[-12:, :12], (h, w): change[-12:, -12:]}
+        farthest = max(corners, key=lambda c: np.hypot(c[1] - x, c[0] - (y - self.animator.face_height)))
+        self.assertGreater(head, 0.5)
+        self.assertLess(float(corners[farthest].mean()), 0.05)
+
+    def test_a_nod_shifts_content_down_in_the_head(self):
+        nodded = self.animator.render({}, (0.0, 0.0, 0.03, 0.0, 0.0))
+        self.assertGreater(float(np.abs(nodded.astype(int) - self.image.astype(int)).mean()), 0.0)
+
+    def test_the_pose_is_applied_after_the_face_shapes(self):
+        both = self.animator.render({"jawOpen": 0.8}, (2.0, 0.01, 0.0, 0.0, 0.5))
+        face_only = self.animator.render({"jawOpen": 0.8})
+        self.assertGreater(float(np.abs(both.astype(int) - face_only.astype(int)).mean()), 0.0)

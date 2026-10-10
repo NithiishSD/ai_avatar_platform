@@ -13,11 +13,13 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import app as app_module
+import avatar_store
 import provenance
 import render_engine
 from app import app
 from avatar_store import AvatarStore
 from job_queue import InMemoryJobQueue
+from job_store import JobStore
 from vision_fixtures import FakeFaceEngine, gradient_image, synthetic_analysis
 
 HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
@@ -48,6 +50,11 @@ class VisionApiCase(unittest.TestCase):
             # These tests poll job status; the rate limiter has its own tests.
             mock.patch.object(app_module.security_gate, "inspect", return_value=(True, 0, {})),
             mock.patch.object(app_module, "faces", self.store),
+            # render_engine builds its own AvatarStore() from this default
+            # root. Without the patch it silently read the developer's real
+            # inputs/faces, so the "real render" test passed locally on a real
+            # face and failed anywhere that face did not exist (CI).
+            mock.patch.object(avatar_store, "FACES_DIR", self.tmp / "inputs" / "faces"),
             mock.patch.object(render_engine, "OUTPUTS_DIR", self.outputs),
             mock.patch.object(render_engine, "INPUTS_DIR", self.tmp / "inputs"),
             mock.patch.object(render_engine, "RENDERS_DIR", self.outputs / "renders"),
@@ -213,9 +220,10 @@ class RenderRouteTests(VisionApiCase):
             return {"engine": engine, "videoUrl": f"/outputs/renders/{job.job_id}.mp4", "outputPath": "x.mp4"}
 
         self.queue = InMemoryJobQueue(runner=runner)
-        patcher = mock.patch.object(app_module, "job_queue", self.queue)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for name, value in ("job_queue", self.queue), ("batch_store", JobStore(":memory:")):
+            patcher = mock.patch.object(app_module, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.add_synthetic()
         self.wav()
 
@@ -263,7 +271,7 @@ class RenderRouteTests(VisionApiCase):
             (self.payload(avatarId="ghost"), {}, 404, "not registered"),
             (self.payload(audioUrl="s3://bucket/x.wav"), {}, 400, "/outputs/"),
             (self.payload(audioUrl="http://testserver/outputs/missing.wav"), {}, 400, "not found"),
-            (self.payload(), {"engine": "sadtalker"}, 400, "unknown render engine"),
+            (self.payload(), {"engine": "liveportrait"}, 400, "unknown render engine"),
         ]
         for body, params, code, fragment in cases:
             response = self.client.post("/api/v1/avatar/render-job", json=body, params=params)
@@ -287,6 +295,103 @@ class RenderRouteTests(VisionApiCase):
         self.assertEqual(response.status_code, 503)
         self.assertIn("redis down", response.json()["detail"])
 
+    # --- batch (T8.1) -------------------------------------------------------------------------
+    def batch(self, jobs, **params):
+        return self.client.post("/api/v1/avatar/render-batch", json={"jobs": jobs}, params=params)
+
+    def wait_batch(self, batch_id):
+        for _ in range(300):
+            body = self.client.get(f"/api/v1/avatar/render-batch/{batch_id}").json()
+            if body["done"]:
+                return body
+            time.sleep(0.02)
+        self.fail("batch did not finish")
+
+    def test_one_bad_item_does_not_reject_the_others(self):
+        no_phonemes = self.payload(jobId="B-bad-shape")
+        del no_phonemes["phonemeTimestamps"]
+        response = self.batch([
+            self.payload(jobId="B1"),
+            self.payload(jobId="B-ghost", avatarId="ghost"),
+            no_phonemes,
+            self.payload(jobId="B1"),  # same id twice in one batch
+            self.payload(jobId="B2"),
+        ])
+        self.assertEqual(response.status_code, 202, response.text)
+        body = response.json()
+        self.assertEqual((body["total"], body["accepted"], body["rejected"]), (5, 2, 3))
+        by_index = {item["index"]: item for item in body["jobs"]}
+        self.assertEqual([by_index[i]["accepted"] for i in range(5)], [True, False, False, False, True])
+        self.assertEqual(by_index[1]["httpStatus"], 404)
+        self.assertIn("not registered", by_index[1]["detail"])
+        self.assertEqual(by_index[2]["httpStatus"], 422)
+        self.assertIn("phonemeTimestamps", by_index[2]["detail"])
+        self.assertEqual(by_index[3]["httpStatus"], 409)
+
+        done = self.wait_batch(body["batchId"])
+        self.assertEqual(done["counts"], {"COMPLETED": 2, "REJECTED": 3})
+        self.assertEqual(sorted(self.ran), [("B1", "blendshape"), ("B2", "blendshape")])
+        completed = [job for job in done["jobs"] if job["status"] == "COMPLETED"]
+        self.assertEqual({job["videoUrl"] for job in completed}, {"/outputs/renders/B1.mp4", "/outputs/renders/B2.mp4"})
+
+    def test_fifty_jobs_are_all_accepted_run_once_and_none_is_lost(self):
+        response = self.batch([self.payload(jobId=f"N{i}") for i in range(50)])
+        self.assertEqual(response.status_code, 202, response.text)
+        done = self.wait_batch(response.json()["batchId"])
+        self.assertEqual(done["counts"], {"COMPLETED": 50})
+        self.assertEqual(sorted(job_id for job_id, _ in self.ran), sorted(f"N{i}" for i in range(50)))
+
+    def test_a_batch_over_the_cap_or_empty_is_refused_whole(self):
+        too_many = self.batch([self.payload(jobId=f"X{i}") for i in range(51)])
+        self.assertEqual(too_many.status_code, 422)
+        self.assertIn("50", too_many.text)
+        self.assertEqual(self.batch([]).status_code, 422)
+        self.assertEqual(self.ran, [])
+
+    def test_batch_passes_the_engine_through_and_unknown_batch_is_404(self):
+        response = self.batch([self.payload(jobId="E1")], engine="liveportrait")
+        self.assertEqual(response.json()["jobs"][0]["httpStatus"], 400)
+        self.assertIn("unknown render engine", response.json()["jobs"][0]["detail"])
+        self.assertEqual(self.client.get("/api/v1/avatar/render-batch/nope").status_code, 404)
+
+    # --- voice-to-avatar (T8.2) ---------------------------------------------------------------
+    def v2a(self, **form):
+        data = {"avatarId": "demo", "consentBasis": "speaker-recorded", **form}
+        return self.client.post("/api/v1/avatar/voice-to-avatar", data=data,
+                                files={"file": ("me.wav", (self.outputs / "speech.wav").read_bytes(), "audio/wav")})
+
+    def test_voice_to_avatar_queues_a_render_of_the_supplied_audio(self):
+        import voice_to_avatar
+
+        supplied = voice_to_avatar.SuppliedSpeech(
+            audio_path=self.outputs / "speech.wav", duration_seconds=1.0, transcript="hello", transcript_source="asr",
+            language="en", phoneme_timestamps=[{"phoneme": "AA", "viseme": "viseme_aa", "startMs": 0, "endMs": 500}],
+            alignment_method="mms_fa", sha256="ab" * 32)
+        with mock.patch("voice_to_avatar.prepare", return_value=supplied) as prepare:
+            response = self.v2a(language="en")
+        self.assertEqual(response.status_code, 202, response.text)
+        body = response.json()
+        self.assertTrue(body["jobId"].startswith("v2a-"))
+        self.assertEqual((body["speech"]["transcript"], body["speech"]["transcriptSource"]), ("hello", "asr"))
+        self.assertEqual(prepare.call_args[0][1:], ("speaker-recorded", None, "en"))
+        self.assertFalse(prepare.call_args[0][0].exists())     # the upload's temp file is removed
+        self.assertEqual(self.wait(body["jobId"])["status"], "COMPLETED")
+
+    def test_voice_to_avatar_refuses_an_unusable_face_before_reading_the_audio(self):
+        with mock.patch("voice_to_avatar.prepare") as prepare:
+            self.assertEqual(self.v2a(avatarId="ghost").status_code, 404)
+            self.assertEqual(self.v2a(engine="liveportrait").status_code, 400)
+        prepare.assert_not_called()
+
+    def test_voice_to_avatar_reports_a_bad_recording_as_422_with_the_reason(self):
+        import voice_to_avatar
+
+        with mock.patch("voice_to_avatar.prepare", side_effect=voice_to_avatar.VoiceToAvatarError("the recording is silent")):
+            response = self.v2a()
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("silent", response.json()["detail"])
+        self.assertEqual(self.ran, [])
+
     def test_face_without_consent_is_403(self):
         provenance.sidecar_path(self.store.get("demo").path).unlink()
         response = self.client.post("/api/v1/avatar/render-job", json=self.payload())
@@ -301,6 +406,20 @@ class RenderRouteTests(VisionApiCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("--accept-licence wav2lip", response.json()["detail"])
         self.assertEqual(self.ran, [])
+
+    def test_background_without_segmenter_is_refused_with_the_fetch_command(self):
+        with mock.patch("render_engine.shared_segmenter", return_value=mock.Mock(available=False)):
+            response = self.client.post(
+                "/api/v1/avatar/render-job", json=self.payload(background={"color": "#101820"})
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("fetch_vision_models", response.json()["detail"])
+        self.assertEqual(self.ran, [])
+
+    def test_malformed_background_is_422(self):
+        for bad in ({}, {"color": "blue"}, {"color": "#101820", "imageUrl": "file:///x.png"}):
+            response = self.client.post("/api/v1/avatar/render-job", json=self.payload(background=bad))
+            self.assertEqual(response.status_code, 422, bad)
 
     def test_failed_render_reports_its_error(self):
         def broken(job, engine, report):
@@ -342,6 +461,26 @@ class RenderRouteTests(VisionApiCase):
             missing = self.client.post("/api/v1/avatar/render-job/R1/lipsync-score")
         self.assertEqual(missing.status_code, 503)
 
+    def test_metrics_endpoint_reports_the_queue_and_a_score_once_taken(self):
+        empty = self.client.get("/api/v1/metrics").json()
+        self.assertEqual(empty["queueBackend"], "in_memory")
+        self.assertEqual(empty["renders"]["finished"], 0)
+        self.assertIn("entries", empty["audit"])
+
+        self.client.post("/api/v1/avatar/render-job", json=self.payload())
+        self.wait("R1")
+        score = mock.Mock()
+        score.to_dict.return_value = {"lseC": 6.1, "lseD": 7.2, "offsetFrames": 0}
+        with mock.patch("lipsync_metric.score_video", return_value=score):
+            self.client.post("/api/v1/avatar/render-job/R1/lipsync-score")
+        body = self.client.get("/api/v1/metrics").json()
+        self.assertEqual(body["queue"]["jobsByState"], {"COMPLETED": 1})
+        self.assertEqual(body["renders"]["finished"], 1)
+        self.assertEqual(body["quality"]["lipSyncScored"], 1)
+        self.assertEqual(body["quality"]["lseC"]["mean"], 6.1)
+        # The score is also kept on the job's own result.
+        self.assertEqual(self.client.get("/api/v1/avatar/render-job/R1").json()["result"]["lipsync"]["lseC"], 6.1)
+
     @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg / ffprobe not installed")
     def test_real_render_through_the_api(self):
         import celery_app
@@ -365,6 +504,117 @@ class HealthTests(unittest.TestCase):
         self.assertEqual(
             body["render"]["engines"]["wav2lip"], "wav2lip" not in body["visionWeights"]["missing"]
         )
+
+
+class AvatarGenerateRouteTests(VisionApiCase):
+    """POST /avatar/generate with Stable Diffusion replaced by a fake."""
+
+    def setUp(self):
+        super().setUp()
+        import avatar_generator
+
+        self.avatar_generator = avatar_generator
+
+        class Fake:
+            repo_id = "fake/sd"
+            def generate(self, prompt, negative_prompt, seed, steps, guidance_scale):
+                Fake.seeds.append((seed, prompt))
+                return gradient_image(512)
+
+            def release(self):
+                pass
+
+        # Class attribute set after the definition: the instance is built inside
+        # the code under test, so the test reads the calls from the class.
+        Fake.seeds = []  # type: ignore[attr-defined]
+        self.fake = Fake
+        for patcher in (
+            mock.patch.object(avatar_generator, "AvatarGenerator", Fake),
+            mock.patch.object(app_module, "_diffusion_weights", return_value={"present": True, "detail": ""}),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def wait(self, task_id):
+        import time
+
+        for _ in range(100):
+            body = self.client.get(f"/api/v1/avatar/generate/{task_id}").json()
+            if body["status"] in ("COMPLETED", "FAILED"):
+                return body
+            time.sleep(0.05)
+        self.fail("generation did not finish")
+
+    def test_stylize_registers_a_derived_avatar_and_reports_identity(self):
+        import style_transfer
+
+        self.add_synthetic("demo")
+        fake = mock.Mock(repo_id="fake/sd")
+        fake.stylize.side_effect = lambda image, style, seed=0, steps=30: np.ascontiguousarray(255 - image)
+        identity = mock.Mock(return_value=0.64)
+        real = style_transfer.stylize_registered_avatar
+        with mock.patch.object(style_transfer, "shared_transfer", return_value=fake), \
+                mock.patch.object(style_transfer, "stylize_registered_avatar",
+                                  side_effect=lambda *a, **k: real(*a, **k, identity=identity)):
+            response = self.client.post("/api/v1/avatar/stylize", json={"avatarId": "demo", "style": "painting", "newAvatarId": "demo-paint"})
+            self.assertEqual(response.status_code, 202, response.text)
+            body = self.wait(response.json()["taskId"])
+        self.assertEqual(body["status"], "COMPLETED", body)
+        self.assertEqual((body["result"]["style"], body["result"]["identity"]["percent"]), ("painting", 64.0))
+        self.assertEqual(body["result"]["provenance"]["extra"]["derivedFrom"], "demo")
+        styles = self.client.get("/api/v1/avatar/styles").json()
+        self.assertEqual(sorted(styles["styles"]), ["cartoon", "painting", "realistic", "sketch"])
+
+    def test_stylize_refusals_come_before_any_work(self):
+        self.add_synthetic("demo")
+        cases = [
+            ({"avatarId": "ghost", "style": "cartoon", "newAvatarId": "x1"}, 404),
+            ({"avatarId": "demo", "style": "cartoon", "newAvatarId": "demo"}, 409),
+            ({"avatarId": "demo", "style": "vaporwave", "newAvatarId": "x2"}, 422),
+        ]
+        for body, code in cases:
+            self.assertEqual(self.client.post("/api/v1/avatar/stylize", json=body).status_code, code, body)
+        provenance.sidecar_path(self.store.get("demo").path).unlink()
+        self.assertEqual(self.client.post("/api/v1/avatar/stylize", json={"avatarId": "demo", "style": "cartoon", "newAvatarId": "x3"}).status_code, 403)
+        with mock.patch.object(app_module, "_diffusion_weights", return_value={"present": False, "detail": "fetch it"}):
+            self.assertEqual(self.client.post("/api/v1/avatar/stylize", json={"avatarId": "demo", "style": "cartoon", "newAvatarId": "x4"}).status_code, 503)
+
+    def test_generates_and_registers_a_usable_synthetic_face(self):
+        response = self.client.post(
+            "/api/v1/avatar/generate",
+            json={"avatarId": "gen-api", "age": "older", "hair": "grey", "glasses": True, "seed": 5},
+        )
+        self.assertEqual(response.status_code, 202, response.text)
+        body = self.wait(response.json()["taskId"])
+        self.assertEqual(body["status"], "COMPLETED", body)
+        self.assertEqual(body["result"]["avatarId"], "gen-api")
+        self.assertEqual(body["result"]["provenance"]["source"], "synthetic")
+        self.assertIn("elderly", self.fake.seeds[0][1])
+        listed = self.client.get("/api/v1/avatar/faces").json()["avatars"]
+        self.assertEqual([(a["avatarId"], a["usable"]) for a in listed], [("gen-api", True)])
+
+    def test_free_text_prompt_and_unknown_choices_are_422(self):
+        for extra in ({"prompt": "a photo of somebody famous"}, {"age": "ancient"}, {"attempts": 99}, {"steps": 1}):
+            response = self.client.post("/api/v1/avatar/generate", json={"avatarId": "x", **extra})
+            self.assertEqual(response.status_code, 422, extra)
+
+    def test_taken_id_is_409_and_nothing_is_generated(self):
+        self.add_synthetic()  # registers "demo"
+        response = self.client.post("/api/v1/avatar/generate", json={"avatarId": "demo"})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.fake.seeds, [])
+
+    def test_missing_weights_is_503_with_the_reason(self):
+        with mock.patch.object(app_module, "_diffusion_weights", return_value={"present": False, "detail": "fetch it"}):
+            response = self.client.post("/api/v1/avatar/generate", json={"avatarId": "x"})
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("fetch it", response.json()["detail"])
+
+    def test_unknown_task_is_404_and_options_are_served(self):
+        self.assertEqual(self.client.get("/api/v1/avatar/generate/nope").status_code, 404)
+        options = self.client.get("/api/v1/avatar/generate/options").json()
+        self.assertIn("grey", options["hair"])
+        self.assertIsInstance(options["available"], bool)
 
 
 if __name__ == "__main__":

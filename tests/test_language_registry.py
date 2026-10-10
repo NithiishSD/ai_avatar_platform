@@ -5,6 +5,33 @@ import unittest
 import language_registry
 
 
+class XttsCodeTests(unittest.TestCase):
+    """The studio sends ISO-639-3 codes; XTTS-v2 wants its own two-letter ones."""
+
+    def test_three_letter_codes_become_the_two_letter_code_xtts_expects(self):
+        for code, expected in [("spa", "es"), ("hin", "hi"), ("fra", "fr"), ("deu", "de"), ("eng", "en"), ("kor", "ko")]:
+            with self.subTest(code=code):
+                self.assertEqual(language_registry.xtts_code(code), expected)
+
+    def test_two_letter_codes_and_region_subtags_resolve_the_same_way(self):
+        self.assertEqual(language_registry.xtts_code("es"), "es")
+        self.assertEqual(language_registry.xtts_code("pt-BR"), "pt")
+        self.assertEqual(language_registry.xtts_code("en_US"), "en")
+
+    def test_chinese_uses_coquis_own_spelling(self):
+        self.assertEqual(language_registry.xtts_code("zh"), "zh-cn")
+        self.assertEqual(language_registry.xtts_code("zho"), "zh-cn")
+
+    def test_languages_xtts_cannot_speak_are_none(self):
+        for code in ("tam", "swh", "yor", "xx-nonsense", ""):
+            with self.subTest(code=code):
+                self.assertIsNone(language_registry.xtts_code(code))
+
+    def test_resolve_reports_xtts_support_for_the_codes_the_ui_sends(self):
+        self.assertTrue(language_registry.resolve("spa").xtts_supported)
+        self.assertFalse(language_registry.resolve("tam").xtts_supported)
+
+
 class LanguageResolutionTests(unittest.TestCase):
     def test_catalogue_covers_over_one_thousand_languages(self):
         """The roadmap's Phase 3 target is 1000+ languages."""

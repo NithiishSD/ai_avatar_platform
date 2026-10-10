@@ -83,3 +83,60 @@ class AlignmentMethodTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SharedModelTests(unittest.TestCase):
+    """The wav2vec2 aligner loads once per process, not once per synthesis."""
+
+    def setUp(self):
+        import alignment_engine
+
+        self.module = alignment_engine
+        alignment_engine.release_shared_models()
+        self.addCleanup(alignment_engine.release_shared_models)
+
+    def fake_bundle(self):
+        from unittest import mock
+
+        model = mock.MagicMock()
+        model.to.return_value = model
+        bundle = mock.MagicMock()
+        bundle.get_model.return_value = model
+        bundle.get_tokenizer.return_value = "tokenizer"
+        return bundle
+
+    def test_a_second_aligner_reuses_the_loaded_model(self):
+        from unittest import mock
+
+        bundle = self.fake_bundle()
+        with mock.patch("torchaudio.pipelines.MMS_FA", bundle):
+            first = ForcedAligner(device="cpu")._get_mms_pipeline()
+            second = ForcedAligner(device="cpu")._get_mms_pipeline()
+        self.assertIs(first[0], second[0])
+        bundle.get_model.assert_called_once()
+
+    def test_each_aligner_keeps_its_own_per_call_state(self):
+        a, b = ForcedAligner(device="cpu"), ForcedAligner(device="cpu")
+        a.last_method = "mms_fa"
+        self.assertIsNone(b.last_method)  # sharing the model must not share this
+
+    def test_release_makes_the_next_aligner_load_again(self):
+        from unittest import mock
+
+        bundle = self.fake_bundle()
+        with mock.patch("torchaudio.pipelines.MMS_FA", bundle):
+            ForcedAligner(device="cpu")._get_mms_pipeline()
+            self.module.release_shared_models()
+            ForcedAligner(device="cpu")._get_mms_pipeline()
+        self.assertEqual(bundle.get_model.call_count, 2)
+
+    def test_the_routers_release_drops_the_shared_model(self):
+        from unittest import mock
+
+        from voice_engine import VoiceEngineRouter
+
+        with mock.patch("torchaudio.pipelines.MMS_FA", self.fake_bundle()):
+            ForcedAligner(device="cpu")._get_mms_pipeline()
+        self.assertTrue(self.module._SHARED_MMS)
+        VoiceEngineRouter(device="cpu").release()
+        self.assertFalse(self.module._SHARED_MMS)

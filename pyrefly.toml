@@ -1,9 +1,34 @@
-project-includes = [
-    "**/*.py*",
-    "**/*.ipynb",
-]
+# Type checker configuration. Run through `scripts/check.sh types`.
+
+project-includes = ["backend/**/*.py", "scripts/**/*.py", "tests/**/*.py", "sdk/**/*.py"]
+# The conda environment holds tens of thousands of third-party files. pyrefly
+# also honours .gitignore, but the exclude should not depend on that.
+project-excludes = ["backend/.conda/**", "frontend/**", "outputs/**", "inputs/**"]
 python-interpreter-path = "backend/.conda/bin/python"
-search-path = [
-    "backend",
-    "tests",
-]
+# Modules import each other by bare name (`import face_engine`), the way the
+# test runner and uvicorn put these directories on sys.path.
+search-path = ["backend", "tests", "scripts", "sdk"]
+
+# Production code (backend/, scripts/) is checked with every error enabled.
+#
+# Tests are checked more leniently, on purpose, for two reasons the checker
+# cannot see:
+#   * they hand duck-typed fakes (FakeRedis, FakeFaceEngine) to code annotated
+#     with the real classes - that substitution is the point of a fake;
+#   * they read attributes and keys straight off Optional results
+#     (`queue.get(id).status`, `response.emotion["dominant"]`)
+#     because a None there fails the test at runtime anyway, loudly.
+# Missing imports, undefined names, bad syntax and every other check still
+# apply to tests.
+[[sub-config]]
+matches = "tests/**"
+
+[sub-config.errors]
+missing-attribute = false
+bad-argument-type = false
+no-matching-overload = false
+bad-assignment = false
+bad-index = false
+not-iterable = false
+bad-override = false
+unsupported-operation = false

@@ -4,6 +4,51 @@ Forced Alignment Engine & Phoneme-to-Viseme Mapper.
 Extracts millisecond-accurate phoneme and viseme timestamps from audio
 using torchaudio MMS_FA (Meta Multilingual Forced Aligner) with an acoustic
 energy fallback when running offline or in unit tests.
+
+Where this sits in the pipeline
+-------------------------------
+``voice_engine.VoiceEngineRouter`` synthesises a clip, applies prosody, then
+watermarks it, and only then calls ``ForcedAligner.align`` on the saved file.
+The watermark step comes first so the timings are measured on the exact audio
+that is delivered; the vision side then opens and closes the avatar's mouth
+from the returned ``PhonemeTimestamp`` list (see ``contracts.py``).
+
+Concepts used throughout, explained once here:
+
+**Forced alignment.** Speech recognition asks "what was said?". Forced
+alignment already knows the words (the script we just synthesised) and asks
+only "when was each part said?". Because the answer is constrained to the
+known text, it is far more reliable than recognition.
+
+**Phoneme and viseme.** A phoneme is a unit of sound ("SH" in "ship"). A
+viseme is the mouth shape that makes it. Several phonemes share a viseme: P,
+B and M all close the lips, so they all map to ``viseme_PP``. The renderer
+only needs visemes; phonemes are kept because they are how we get there.
+
+**CTC and emissions.** MMS_FA is a wav2vec2 acoustic model trained with CTC
+(Connectionist Temporal Classification). It cuts the audio into frames of
+about 20 ms and, for every frame, outputs a score for each character in its
+alphabet plus a special *blank* meaning "no new character here". That
+frames-by-characters matrix is the *emission*.
+
+**Trellis and backtracking.** ``torchaudio.functional.forced_align`` finds
+the single best path through the emission that spells out the transcript in
+order. Conceptually it fills a *trellis*: a table whose cell (frame t,
+character j) holds the best score for having emitted the first j characters
+by frame t. It then *backtracks* from the last cell to the first, reading
+off which frame each character occupied. ``merge_tokens`` turns runs of the
+same character into one span with a start and end frame. Multiplying a frame
+index by the frame length gives milliseconds.
+
+**Romanisation.** MMS_FA's alphabet is a-z plus apostrophe. Text in another
+script (Devanagari, Cyrillic, Han...) is first transliterated into Latin
+letters with ``uroman`` so it can still be aligned; see
+``_prepare_for_alignment``.
+
+**The acoustic fallback.** When MMS_FA cannot run, timings are spread across
+the clip by text length with simple per-phoneme weights. That is a guess, not
+a measurement, so ``last_method`` says "acoustic-fallback" and the router
+reports it (golden rule 1).
 """
 
 from __future__ import annotations
@@ -12,8 +57,9 @@ import logging
 import math
 import os
 import re
+import threading
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import soundfile as sf
 import torch
@@ -24,12 +70,18 @@ from romanizer import is_ascii, romanize
 
 logger = logging.getLogger(__name__)
 
+# The 15 viseme names below come from the Oculus (Meta) lip-sync set, which
+# avatar rigs commonly use, so the renderer can map them straight onto mouth
+# shapes.
 # Standard 15 Oculus/Disney Viseme Definitions:
 # viseme_sil, viseme_PP, viseme_FF, viseme_TH, viseme_DD, viseme_kk,
 # viseme_CH, viseme_SS, viseme_nn, viseme_RR, viseme_aa, viseme_E,
 # viseme_I, viseme_O, viseme_U
 
 # ARPAbet / CMUDict / IPA / Character phoneme-to-viseme mapping table
+# ARPAbet is the upper-case phoneme alphabet of the CMU Pronouncing
+# Dictionary ("SH", "AA"); IPA is the international phonetic alphabet
+# ("ʃ", "ɑ"). Both spellings are listed so either kind of input maps.
 PHONEME_TO_VISEME: dict[str, str] = {
     # Silence / Pauses
     "SIL": "viseme_sil",
@@ -136,6 +188,9 @@ PHONEME_TO_VISEME: dict[str, str] = {
 }
 
 # Simple English Grapheme-to-Phoneme heuristic for text breakdown
+# A grapheme is a written letter or letter group. This table guesses one
+# phoneme per letter; it is crude (English spelling is irregular) but it only
+# has to pick a plausible mouth shape, and the CTC spans supply the timing.
 CHAR_TO_PHONEME: dict[str, str] = {
     "a": "AA", "b": "B", "c": "K", "d": "D", "e": "EH", "f": "F", "g": "G",
     "h": "HH", "i": "IH", "j": "JH", "k": "K", "l": "L", "m": "M", "n": "N",
@@ -154,6 +209,8 @@ DIGRAPH_TO_PHONEME: dict[str, str] = {
 }
 
 # Consonants after which a word-final "e" is silent ("time", "made", "name").
+# The set holds the letters that *block* the rule: after a vowel or "y" the
+# final "e" is kept ("free", "eye"); after any other letter it is silent.
 _SILENT_E_BLOCKERS = set("aeiouy")
 
 
@@ -169,8 +226,11 @@ def graphemes_to_phonemes(word: str) -> List[Tuple[str, int]]:
     low = word.lower()
     groups: List[Tuple[str, int]] = []
     index = 0
+    # A manual index rather than a for-loop, because a digraph consumes two
+    # characters at once.
     while index < len(low):
         pair = low[index : index + 2]
+        # Digraphs are tried first so "sh" is one phoneme, not two.
         if len(pair) == 2 and pair in DIGRAPH_TO_PHONEME:
             groups.append((DIGRAPH_TO_PHONEME[pair], 2))
             index += 2
@@ -180,6 +240,7 @@ def graphemes_to_phonemes(word: str) -> List[Tuple[str, int]]:
         is_final_silent_e = (
             char == "e"
             and index == len(low) - 1
+            # Only words of three letters or more: "be" and "me" keep their "e".
             and index >= 2
             and low[index - 1] not in _SILENT_E_BLOCKERS
         )
@@ -191,13 +252,21 @@ def graphemes_to_phonemes(word: str) -> List[Tuple[str, int]]:
             index += 1
             continue
 
+        # A letter not in the table (an apostrophe, an accented letter)
+        # becomes "AA", an open mouth, rather than being dropped, so the
+        # character count still adds up.
         groups.append((CHAR_TO_PHONEME.get(char, "AA"), 1))
         index += 1
     return groups
 
 
 class PhonemeToVisemeMapper:
-    """Translates ARPAbet, IPA, or romanized phonemes to standard 15 facial visemes."""
+    """
+    Translates ARPAbet, IPA, or romanized phonemes to standard 15 facial visemes.
+
+    Only static methods: the mapping is a fixed table, so there is no state
+    to hold and no instance to create.
+    """
 
     @staticmethod
     def map_phoneme(phoneme: str) -> str:
@@ -206,6 +275,8 @@ class PhonemeToVisemeMapper:
             return "viseme_sil"
         # Strip trailing stress digits (e.g., 'AA1' -> 'AA', 'EH0' -> 'EH')
         clean = re.sub(r"\d+$", "", phoneme.strip()).upper()
+        # Try the upper-cased ARPAbet form first, then the original spelling
+        # (IPA symbols have no upper case), and default to an open mouth.
         return PHONEME_TO_VISEME.get(clean, PHONEME_TO_VISEME.get(phoneme.strip(), "viseme_aa"))
 
     @staticmethod
@@ -230,6 +301,27 @@ class PhonemeToVisemeMapper:
         ]
 
 
+# The MMS_FA wav2vec2 model (~1.2 GB in fp32) is shared by every ForcedAligner,
+# keyed by device. Each synthesis builds a fresh ForcedAligner (it carries
+# per-call state: ``last_method``), and each used to reload this model from
+# disk: slow, and each load left freed heap behind that the process never gave
+# back. The per-call state stays per instance, so concurrent calls cannot mix
+# up their ``last_method``; only the read-only model is shared.
+# Device name -> (model, tokenizer).
+_SHARED_MMS: Dict[str, Tuple[Any, Any]] = {}
+# Guards the dictionary itself: two threads aligning at once must not both
+# decide the model is missing and load it twice.
+_SHARED_MMS_LOCK = threading.Lock()
+
+
+def release_shared_models() -> None:
+    """Drop the shared forced-alignment model; it reloads on the next alignment."""
+    # Instances that already copied the model keep their own reference until
+    # they are discarded; the router builds a fresh aligner per call.
+    with _SHARED_MMS_LOCK:
+        _SHARED_MMS.clear()
+
+
 class ForcedAligner:
     """
     Multilingual forced aligner for speech audio.
@@ -239,12 +331,15 @@ class ForcedAligner:
     """
 
     def __init__(self, device: Optional[str] = None):
+        """Choose the device; the MMS_FA model is loaded lazily on the first ``align``."""
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
             self.device = device
         self._mms_aligner = None
         self._mms_tokenizer = None
+        # Set after a failed load so this instance does not try again; the
+        # acoustic fallback is used instead and the reason is recorded.
         self._mms_failed = False
         # How the most recent ``align`` call produced its timestamps. The
         # acoustic fallback spreads phonemes evenly by text, which is a guess:
@@ -260,8 +355,17 @@ class ForcedAligner:
         if self._mms_failed:
             return None, None
 
+        # Reuse the process-wide copy when another aligner already loaded it.
+        with _SHARED_MMS_LOCK:
+            shared = _SHARED_MMS.get(self.device)
+        if shared is not None:
+            self._mms_aligner, self._mms_tokenizer = shared
+            return shared
+
         try:
             import torchaudio.pipelines as pipelines
+            # A torchaudio *bundle* packages a pretrained model with the
+            # matching tokenizer (characters -> ids) and its expected sample rate.
             bundle = pipelines.MMS_FA
             tokenizer = bundle.get_tokenizer()
             model = bundle.get_model()
@@ -282,9 +386,13 @@ class ForcedAligner:
                 model = model.to("cpu")
             self._mms_aligner = model
             self._mms_tokenizer = tokenizer
+            # Stored under the device it actually ended up on, which may be
+            # "cpu" after the fallback above.
+            with _SHARED_MMS_LOCK:
+                _SHARED_MMS[self.device] = (model, tokenizer)
             logger.info("Loaded torchaudio MMS_FA forced aligner on %s", self.device)
             return self._mms_aligner, self._mms_tokenizer
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - recorded as the fallback reason, never silent
             self.last_fallback_reason = f"MMS_FA could not be loaded: {str(exc).splitlines()[0]}"
             logger.warning("Could not load MMS_FA pipeline (%s). Using acoustic fallback.", exc)
             self._mms_failed = True
@@ -316,15 +424,21 @@ class ForcedAligner:
             if not os.path.exists(path_str):
                 raise FileNotFoundError(f"Audio file not found: {path_str}")
             data, sr = sf.read(path_str)
+            # The file's own rate overrides the argument: it cannot be wrong.
             sample_rate = sr
+            # soundfile returns (samples,) for mono and (samples, channels) otherwise.
             num_samples = len(data) if data.ndim == 1 else len(data[:, 0])
             duration_ms = int((num_samples / sample_rate) * 1000)
             waveform = torch.from_numpy(data).float()
+            # torchaudio works on (channels, samples). Mono gets a channel
+            # axis; a (samples, channels) array is transposed. More samples
+            # than channels is how the two layouts are told apart.
             if waveform.ndim == 1:
                 waveform = waveform.unsqueeze(0)
             elif waveform.ndim == 2 and waveform.shape[0] > waveform.shape[1]:
                 waveform = waveform.T
         elif isinstance(audio_path_or_tensor, torch.Tensor):
+            # A tensor carries no rate, so the sample_rate argument is trusted here.
             waveform = audio_path_or_tensor.float()
             if waveform.ndim == 1:
                 waveform = waveform.unsqueeze(0)
@@ -333,10 +447,14 @@ class ForcedAligner:
         else:
             raise TypeError(f"Unsupported audio type: {type(audio_path_or_tensor)}")
 
+        # An empty clip would make every later division by duration
+        # meaningless, so a nominal one second is assumed.
         if duration_ms <= 0:
             duration_ms = 1000  # Minimum fallback
 
         # Clean transcript text
+        # An empty transcript has nothing to align: the whole clip is one
+        # closed-mouth span, and last_method says so.
         cleaned_text = transcript.strip() if transcript else ""
         if not cleaned_text:
             # Silence timestamp if text is empty
@@ -357,6 +475,8 @@ class ForcedAligner:
         # Try neural MMS_FA alignment if possible
         model, tokenizer = self._get_mms_pipeline()
         if model is not None and tokenizer is not None:
+            # At most two attempts: the second exists only to retry on CPU
+            # after the GPU ran out of memory.
             for attempt in range(2):
                 try:
                     timestamps = self._align_mms(waveform, sample_rate, alignable_text, model, tokenizer, duration_ms)
@@ -365,15 +485,19 @@ class ForcedAligner:
                         self.last_fallback_reason = None
                         return timestamps
                     self.last_fallback_reason = "MMS_FA returned no spans for this transcript"
+                    # Retrying would give the same empty answer.
                     break
                 except Exception as err:  # noqa: BLE001
+                    # CUDA out-of-memory errors are recognised by their message.
                     out_of_memory = "out of memory" in str(err).lower()
                     if attempt == 0 and self.device != "cpu" and out_of_memory:
                         logger.warning("MMS_FA ran out of GPU memory; retrying the alignment on CPU.")
                         torch.cuda.empty_cache()
                         self.device = "cpu"
+                        # Move the model and loop once more on the CPU.
                         model = self._mms_aligner = model.to("cpu")
                         continue
+                    # Any other error is recorded and the fallback below runs.
                     self.last_fallback_reason = f"MMS_FA inference failed: {str(err).splitlines()[0]}"
                     break
 
@@ -403,9 +527,11 @@ class ForcedAligner:
         sounds, but it drives the correct mouth shapes, which is what the
         viseme contract needs.
         """
+        # ASCII text is already in the aligners' alphabet.
         if not transcript or is_ascii(transcript):
             return transcript
 
+        # uroman uses the ISO 639-3 code to pick language-specific rules.
         romanized = romanize(transcript, lcode=to_iso3(language))
         if romanized and romanized.strip():
             logger.info(
@@ -424,6 +550,7 @@ class ForcedAligner:
         )
         return transcript
 
+    # Class constants, shared by every instance and readable by tests.
     # Minimum audible span for one phoneme; shorter CTC spans get widened.
     MIN_PHONEME_MS = 20
     # A gap this long between two words is rendered as an explicit closed mouth.
@@ -439,6 +566,7 @@ class ForcedAligner:
         """
         words: List[str] = []
         for raw in re.findall(r"[A-Za-z']+", transcript):
+            # Leading and trailing apostrophes are quote marks, not part of the word.
             cleaned = raw.lower().strip("'")
             if cleaned:
                 words.append(cleaned)
@@ -450,7 +578,9 @@ class ForcedAligner:
         sample_rate: int,
         transcript: str,
         model: torch.nn.Module,
-        tokenizer: any,
+        # typing.Any, not the builtin any(): the lowercase name is a function,
+        # so as an annotation it described nothing.
+        tokenizer: Any,
         duration_ms: int,
     ) -> List[PhonemeTimestamp]:
         """
@@ -466,6 +596,7 @@ class ForcedAligner:
 
         # MMS_FA expects 16 kHz mono.
         audio_16k = waveform
+        # Average the channels to mono; keepdim keeps the (1, samples) shape.
         if audio_16k.ndim == 2 and audio_16k.shape[0] > 1:
             audio_16k = audio_16k.mean(dim=0, keepdim=True)
         if sample_rate != 16000:
@@ -473,31 +604,52 @@ class ForcedAligner:
         audio_16k = audio_16k.to(self.device)
 
         words = self._alignable_words(transcript)
+        # Nothing alignable (only digits or punctuation): fall back to the
+        # text-based estimate rather than failing.
         if not words:
             return self._acoustic_align(transcript, duration_ms)
 
+        # One list of character ids per word.
         token_lists = tokenizer(words)
-        pairs = [(w, t) for w, t in zip(words, token_lists) if t and len(t) == len(w)]
+        # strict=True: the tokenizer returns one list per word. If it ever
+        # returned fewer, zip would silently drop the trailing words and the
+        # mouth would drift out of sync; raising here makes it a recorded
+        # fallback instead.
+        pairs = [(w, t) for w, t in zip(words, token_lists, strict=True) if t and len(t) == len(w)]
+        # The filter above drops any word whose token count differs from its
+        # letter count, because the span walk below assumes one span per letter.
         if not pairs:
             raise RuntimeError("no transcript words survived MMS_FA tokenization")
         words = [w for w, _ in pairs]
         token_lists = [t for _, t in pairs]
 
+        # inference_mode turns off gradient tracking: faster and less memory.
+        # The emission has shape (1, frames, alphabet size).
         with torch.inference_mode():
             emission, _ = model(audio_16k)
+        # forced_align runs on the CPU copy, so the GPU only holds the model.
         emission = emission.cpu()
 
+        # Axis 1 of the emission is time, one entry per CTC frame.
         num_frames = int(emission.shape[1])
+        # All words' character ids flattened into one sequence, with a batch
+        # axis of 1: this is the path the aligner must spell out.
         targets = torch.tensor(
             [token for tokens in token_lists for token in tokens], dtype=torch.int32
         ).unsqueeze(0)
+        # CTC needs at least one frame per character, so more characters than
+        # frames means the text cannot have been spoken in this audio.
         if targets.shape[-1] == 0 or targets.shape[-1] > num_frames:
             raise RuntimeError(
                 f"transcript has {targets.shape[-1]} tokens but the audio only "
                 f"yields {num_frames} CTC frames - audio and text do not match"
             )
 
+        # The trellis search and backtrack (see the module docstring). Index 0
+        # is the blank in the MMS_FA alphabet. The result is one label per frame.
         aligned_tokens, scores = F.forced_align(emission, targets, blank=0)
+        # Scores are log-probabilities; exp() turns them into probabilities
+        # for each span's confidence. Blanks are dropped and repeats merged.
         spans = F.merge_tokens(aligned_tokens[0], scores[0].exp())
         if len(spans) != targets.shape[-1]:
             raise RuntimeError(
@@ -505,10 +657,14 @@ class ForcedAligner:
             )
 
         # One emission frame covers this many milliseconds of the source audio.
+        # Using the clip's real length (not a fixed 20 ms) absorbs any rounding
+        # in the model's frame count.
         ms_per_frame = duration_ms / max(num_frames, 1)
 
         result: List[PhonemeTimestamp] = []
+        # Position in the flat span list; each word takes len(word) spans.
         span_index = 0
+        # End of the last emitted phoneme, so nothing overlaps it.
         previous_end = 0
 
         for word in words:
@@ -516,6 +672,9 @@ class ForcedAligner:
             word_spans = spans[span_index : span_index + len(word)]
             span_index += len(word)
 
+            # A long pause before this word becomes an explicit closed mouth.
+
+            # The word starts where the span of its first letter starts.
             word_start = int(round(word_spans[0].start * ms_per_frame))
             if word_start - previous_end >= self.SILENCE_GAP_MS:
                 result.append(
@@ -527,6 +686,8 @@ class ForcedAligner:
                     )
                 )
 
+            # Each phoneme covers char_count letters, so it takes the spans of
+            # those letters: from the first one's start to the last one's end.
             offset = 0
             for phoneme, char_count in groups:
                 group_spans = word_spans[offset : offset + char_count]
@@ -535,6 +696,8 @@ class ForcedAligner:
                     continue
                 start_ms = int(round(group_spans[0].start * ms_per_frame))
                 end_ms = int(round(group_spans[-1].end * ms_per_frame))
+                # Never start before the previous phoneme ended, and never be
+                # shorter than MIN_PHONEME_MS.
                 start_ms = max(start_ms, previous_end)
                 end_ms = max(end_ms, start_ms + self.MIN_PHONEME_MS)
                 result.append(
@@ -557,6 +720,7 @@ class ForcedAligner:
         Acoustic heuristic forced-aligner for offline mode, testing, and edge cases.
         Decomposes words into syllables and phonemes with natural speech rhythm.
         """
+        # Words, and single punctuation marks as separate tokens.
         tokens = re.findall(r"\w+|[^\w\s]", transcript)
         if not tokens:
             return [
@@ -571,6 +735,8 @@ class ForcedAligner:
         # Break tokens down into phoneme units
         phoneme_units: list[str] = []
         for tok in tokens:
+            # Words become phonemes plus a short pause; sentence-ending
+            # punctuation becomes a longer silence; other symbols are skipped.
             if re.match(r"^\w+$", tok):
                 # Word: same grapheme-to-phoneme split the CTC path uses, so
                 # both aligners emit the same phoneme sequence for a sentence.
@@ -582,6 +748,7 @@ class ForcedAligner:
                 phoneme_units.append("SP")
 
         # Trim trailing silences
+        # (_normalize_timestamps pads the tail with one SIL span instead.)
         while phoneme_units and phoneme_units[-1] in ("SP", "SIL"):
             phoneme_units.pop()
 
@@ -596,7 +763,10 @@ class ForcedAligner:
             ]
 
         # Allocate time slices proportionally
-        # Vowels get ~1.5x weight, consonants 1.0x, short pauses 0.5x, silences 1.0x
+        # Vowels get 1.5x weight, consonants 1.0x, and both pause kinds (SP word
+        # gaps, SIL sentence ends) 0.6x.
+        # Vowels are held longer than consonants in real speech, which is why
+        # they get the larger share.
         weights = []
         for p in phoneme_units:
             vis = PhonemeToVisemeMapper.map_phoneme(p)
@@ -607,14 +777,18 @@ class ForcedAligner:
             else:
                 weights.append(1.0)
 
+        # Each unit's share of the clip is its weight over the total weight.
         total_weight = sum(weights)
         raw_timestamps: List[PhonemeTimestamp] = []
         curr_ms = 0
 
-        for p, w in zip(phoneme_units, weights):
+        for p, w in zip(phoneme_units, weights, strict=True):
+            # floor() keeps the sum of shares from exceeding the clip length.
             unit_duration = int(math.floor((w / total_weight) * duration_ms))
             unit_duration = max(unit_duration, 25)  # At least 25ms per phoneme
             end_ms = curr_ms + unit_duration
+            # Clamp to the clip; if the 25 ms minimums ran past the end, keep
+            # a 25 ms span and let _normalize_timestamps drop the overflow.
             if end_ms > duration_ms:
                 end_ms = duration_ms
             if end_ms <= curr_ms:
@@ -637,7 +811,13 @@ class ForcedAligner:
         timestamps: List[PhonemeTimestamp],
         total_duration_ms: int,
     ) -> List[PhonemeTimestamp]:
-        """Ensure all timestamps are strictly valid, sequential, and monotonic."""
+        """
+        Ensure all timestamps are strictly valid, sequential, and monotonic.
+
+        Both aligners end here, so the renderer always gets the same shape:
+        no overlaps, no zero-length spans, nothing past the end of the audio,
+        and the tail filled with silence.
+        """
         if not timestamps:
             return [
                 PhonemeTimestamp(
@@ -648,12 +828,15 @@ class ForcedAligner:
                 )
             ]
 
+        # New objects are built rather than edited, so the input list is untouched.
         normalized: List[PhonemeTimestamp] = []
         prev_end = 0
 
         for item in timestamps:
+            # Push each span after the previous one and give it at least 20 ms.
             start = max(item.start_ms, prev_end)
             end = max(item.end_ms, start + 20)
+            # Spans that begin after the audio ends are dropped.
             if start >= total_duration_ms:
                 break
             if end > total_duration_ms:
@@ -671,6 +854,7 @@ class ForcedAligner:
                 prev_end = end
 
         # Pad remaining tail up to total_duration_ms if gap exists
+        # so the timeline covers the whole clip and ends on a closed mouth.
         if normalized and normalized[-1].end_ms < total_duration_ms - 20:
             last_end = normalized[-1].end_ms
             normalized.append(

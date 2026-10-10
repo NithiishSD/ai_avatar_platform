@@ -10,6 +10,30 @@ Checkpoints for non-Latin scripts are "uroman" models: their tokenizer expects
 romanized input. ``MMSTTSEngine`` detects that via ``tokenizer.is_uroman`` and
 romanizes with ``uroman`` when it is installed, otherwise it raises a message
 that names the missing package rather than emitting garbled audio.
+
+Where this sits in the pipeline: ``voice_engine.VoiceEngineRouter`` sends
+``mode="multilingual"`` requests, and non-English requests that have a
+checkpoint, here. It also uses this engine to speak the base clip that
+OpenVoice re-timbres for cross-lingual cloning.
+
+Concepts used throughout, explained once here:
+
+**VITS.** A text-to-speech model that goes from text straight to a waveform
+in one network (no separate vocoder). It samples a little randomness on each
+run: ``noise_scale`` sets how much, and ``speaking_rate`` stretches the
+predicted phoneme durations, so speed is changed at generation time rather
+than by stretching the finished audio.
+
+**One checkpoint per language.** MMS (Massively Multilingual Speech) trained
+a separate small VITS for each language, named by its ISO 639-3 code
+(``eng``, ``hin``, ``swh``). ``language_registry.resolve`` turns whatever
+code the caller sent into that id.
+
+**LRU cache.** "Least recently used": keep the N most recently used items;
+when a new one arrives and the cache is full, drop the one untouched for
+longest. ``collections.OrderedDict`` remembers insertion order, so
+``move_to_end`` on every hit and ``popitem(last=False)`` on eviction is the
+whole algorithm.
 """
 
 from __future__ import annotations
@@ -21,14 +45,14 @@ import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import numpy as np
 import soundfile as sf
 import torch
 
 from language_registry import LanguageInfo, resolve
-from romanizer import get_romanizer
+from romanizer import as_text, get_romanizer
 
 logger = logging.getLogger(__name__)
 
@@ -45,13 +69,34 @@ class MMSRomanizationRequired(RuntimeError):
     """Raised when a uroman checkpoint is selected but no romanizer is available."""
 
 
+class MMSScriptMismatch(ValueError):
+    """The text is mostly in letters the chosen language's model does not have (e.g. English typed
+    with Hindi selected). Nothing is translated, so speaking it would produce near-silence."""
+
+
+# Below this share of the text's letters surviving the tokenizer, the request is refused. Real
+# scripts in the right language keep ~100%; a few borrowed Latin words in Hindi text keep far more
+# than half; English sent to a Devanagari model keeps 0%.
+MIN_LETTER_COVERAGE = 0.5
+
+
+def letter_coverage(text: str, kept: str) -> float:
+    """Share of the letters in ``text`` that are still present in ``kept`` (1.0 when there are none)."""
+    letters = sum(ch.isalpha() for ch in text)
+    return 1.0 if letters == 0 else min(1.0, sum(ch.isalpha() for ch in kept) / letters)
+
+
 @dataclass(frozen=True)
 class MMSSynthesisResult:
+    """What one MMS-TTS synthesis produced; immutable (``frozen=True``)."""
+
     output_path: str
     sample_rate: int
     duration_seconds: float
+    # The Hugging Face id of the checkpoint that spoke, e.g. facebook/mms-tts-hin.
     model_id: str
     language: LanguageInfo
+    # True when the text was transliterated before synthesis.
     romanized: bool
 
 
@@ -59,12 +104,22 @@ class MMSTTSEngine:
     """Lazy, LRU-cached multilingual VITS synthesizer."""
 
     def __init__(self, device: Optional[str] = None, cache_size: int = DEFAULT_CACHE_SIZE):
+        """Set the device and cache size; no checkpoint is loaded until first use."""
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        # At least one slot, or every load would be evicted immediately.
         self.cache_size = max(1, cache_size)
         # iso3 -> (model, tokenizer)
-        self._cache: "OrderedDict[str, Tuple[object, object]]" = OrderedDict()
+        # Any, not object: these are a transformers VitsModel and tokenizer,
+        # whose attributes (config, speaking_rate, ...) we use directly.
+        self._cache: "OrderedDict[str, Tuple[Any, Any]]" = OrderedDict()
+        # iso3 -> error text for checkpoints that failed to load, so a broken
+        # language fails fast instead of retrying the download every request.
         self._failed: dict[str, str] = {}
+        # Guards _cache and _failed: the OrderedDict is reordered on every
+        # hit, which is not safe from two threads at once.
         self._lock = threading.Lock()
+        # Cached-failure pair: _uroman alone could not tell "not looked up
+        # yet" from "looked up and missing".
         self._uroman = None
         self._uroman_checked = False
 
@@ -73,9 +128,11 @@ class MMSTTSEngine:
     # ------------------------------------------------------------------
 
     def supports(self, language: str) -> bool:
+        """Whether MMS-TTS has a checkpoint for ``language`` (no loading)."""
         return resolve(language).mms_supported
 
     def loaded_languages(self) -> list[str]:
+        """ISO 639-3 codes currently in the cache, least recently used first."""
         return list(self._cache.keys())
 
     # ------------------------------------------------------------------
@@ -86,6 +143,7 @@ class MMSTTSEngine:
         """Return (model, tokenizer) for a language, loading and caching on miss."""
         iso3 = info.iso3
         with self._lock:
+            # Cache hit: mark it most recently used and return it.
             if iso3 in self._cache:
                 self._cache.move_to_end(iso3)
                 return self._cache[iso3]
@@ -95,13 +153,18 @@ class MMSTTSEngine:
                     f"load: {self._failed[iso3]}"
                 )
 
+        # The load happens outside the lock so a slow download or disk read
+        # does not block requests for languages that are already cached.
         from transformers import VitsModel, AutoTokenizer
 
         model_id = info.mms_model
         logger.info("Loading MMS-TTS %s (%s) on %s", model_id, info.name, self.device)
         try:
-            model = VitsModel.from_pretrained(model_id)
+            # transformers types its lazily imported model classes as possibly
+            # None; at runtime this is always the class.
+            model = VitsModel.from_pretrained(model_id)  # pyrefly: ignore[not-callable]
             tokenizer = AutoTokenizer.from_pretrained(model_id)
+            # eval() switches off training-only behaviour such as dropout.
             model = model.to(self.device).eval()
         except Exception as exc:  # noqa: BLE001 - reported verbatim to the caller
             with self._lock:
@@ -113,10 +176,14 @@ class MMSTTSEngine:
         with self._lock:
             self._cache[iso3] = (model, tokenizer)
             self._cache.move_to_end(iso3)
+            # Evict from the front, the least recently used end, until the
+            # cache is back within its size.
             while len(self._cache) > self.cache_size:
                 evicted_iso3, (evicted_model, _) = self._cache.popitem(last=False)
                 logger.info("Evicting MMS-TTS checkpoint %s from cache", evicted_iso3)
                 del evicted_model
+            # PyTorch keeps freed GPU memory reserved for reuse; empty_cache
+            # hands it back so other models on the card can use it.
             if self.device == "cuda":
                 torch.cuda.empty_cache()
             return self._cache[iso3]
@@ -134,6 +201,7 @@ class MMSTTSEngine:
         return self._uroman
 
     def _romanize(self, text: str, info: LanguageInfo) -> str:
+        """Transliterate ``text`` into Latin letters for a uroman checkpoint."""
         romanizer = self._get_romanizer()
         if romanizer is None:
             # ASCII text needs no romanization even on a uroman checkpoint.
@@ -144,10 +212,14 @@ class MMSTTSEngine:
                 "input. Install the romanizer with `pip install uroman`, or send "
                 "already-romanized text."
             )
+        # The check sits outside the try: its own TypeError must not be taken
+        # for the old-uroman signature fallback.
         try:
-            return romanizer.romanize_string(text, lcode=info.iso3)
+            result = romanizer.romanize_string(text, lcode=info.iso3)
         except TypeError:
-            return romanizer.romanize_string(text)
+            # Older uroman builds take no lcode keyword.
+            result = romanizer.romanize_string(text)
+        return as_text(result)
 
     # ------------------------------------------------------------------
     # Synthesis
@@ -181,18 +253,41 @@ class MMSTTSEngine:
 
         model, tokenizer = self._load(info)
 
+        # NFC normalisation joins a base letter and its combining accent into
+        # one code point, so the same word always reaches the tokenizer the
+        # same way however it was typed.
         prepared = unicodedata.normalize("NFC", text.strip())
         romanized = False
+        # getattr with a default: tokenizers of Latin-script checkpoints may
+        # not define is_uroman at all.
         if getattr(tokenizer, "is_uroman", False):
             converted = self._romanize(prepared, info)
             romanized = converted != prepared
             prepared = converted
 
+        # The tokenizer silently drops every character outside the model's alphabet. English typed with
+        # a non-Latin language selected loses all of it: the model then either crashes on an empty
+        # input or speaks a second of noise. Measure what survives and refuse with the fix instead.
+        # Nothing here translates; the text must already be in the chosen language.
+        kept, _ = tokenizer.prepare_for_tokenization(prepared)
+        coverage = letter_coverage(prepared, kept)
+        if coverage < MIN_LETTER_COVERAGE:
+            raise MMSScriptMismatch(
+                f"The script is not written in {info.name}: only {coverage:.0%} of its letters are in the "
+                f"{info.name} speech model's alphabet, so almost nothing would be spoken. The platform reads "
+                f"text aloud in the language chosen; it does not translate. Write the script in {info.name}, "
+                "or choose the language the script is written in."
+            )
+
+        # These are attributes on the cached model, so a value set here also
+        # applies to later calls for this language that do not pass one.
         if speaking_rate is not None:
             model.speaking_rate = float(speaking_rate)
         if noise_scale is not None:
             model.noise_scale = float(noise_scale)
 
+        # return_tensors="pt" asks for PyTorch tensors; only tensors are moved
+        # to the device and passed to the model.
         inputs = tokenizer(prepared, return_tensors="pt")
         inputs = {k: v.to(self.device) for k, v in inputs.items() if torch.is_tensor(v)}
 
@@ -200,11 +295,13 @@ class MMSTTSEngine:
         with torch.inference_mode():
             waveform = model(**inputs).waveform
 
+        # Drop the batch axis and convert to a float32 numpy array for soundfile.
         audio = waveform.squeeze().detach().float().cpu().numpy().astype(np.float32)
         if audio.ndim > 1:
             audio = audio.mean(axis=0)
 
         sample_rate = int(model.config.sampling_rate)
+        # A float WAV is expected in [-1, 1]; scale down rather than let it clip.
         peak = float(np.max(np.abs(audio))) if audio.size else 0.0
         if peak > 1.0:
             audio = audio / peak

@@ -141,3 +141,45 @@ class ConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RateLimitIdentityTests(unittest.TestCase):
+    """Found in the T6.5 review: with auth off, a rotating X-API-Key beat the limiter."""
+
+    def test_with_auth_off_a_fresh_random_key_each_request_does_not_escape_the_limit(self):
+        g = gate(auth_enabled=False, keys=(), rate_limit_enabled=True, rpm=60, burst=5)
+        allowed = sum(g.inspect("/api/v1/audio/languages", f"random-{i}", "9.9.9.9")[0] for i in range(200))
+        self.assertEqual(allowed, 5)  # the burst, exactly as for a client with no key
+        self.assertEqual(len(g.limiter._buckets), 1)  # and one bucket, not 200
+
+    def test_with_auth_on_each_valid_key_still_has_its_own_bucket(self):
+        g = gate(auth_enabled=True, rate_limit_enabled=True, rpm=60, burst=3)
+        for _ in range(3):
+            self.assertTrue(g.inspect("/api/v1/audio/languages", "secret-key-a", "9.9.9.9")[0])
+        self.assertFalse(g.inspect("/api/v1/audio/languages", "secret-key-a", "9.9.9.9")[0])
+        self.assertTrue(g.inspect("/api/v1/audio/languages", "secret-key-b", "9.9.9.9")[0])
+
+    def test_an_unauthenticated_flood_cannot_drain_a_valid_keys_bucket(self):
+        g = gate(auth_enabled=True, rate_limit_enabled=True, rpm=60, burst=3)
+        for _ in range(500):
+            self.assertEqual(g.inspect("/api/v1/audio/languages", "wrong", "9.9.9.9")[1], 401)
+        self.assertTrue(g.inspect("/api/v1/audio/languages", "secret-key-a", "9.9.9.9")[0])
+        self.assertEqual(len(g.limiter._buckets), 1)  # only the valid key's bucket exists
+
+    def test_idle_full_buckets_are_forgotten_so_memory_stays_bounded(self):
+        limiter = TokenBucketLimiter(requests_per_minute=60, burst=2)
+        limiter.MAX_BUCKETS = 50
+        for i in range(200):
+            limiter.check(f"ip:{i}", now=0.0)          # each spends one of two tokens
+        limiter.check("ip:late", now=1000.0)           # long after: every earlier bucket has refilled
+        self.assertLess(len(limiter._buckets), 51)
+        self.assertIn("ip:late", limiter._buckets)
+
+    def test_pruning_never_forgets_a_client_who_is_still_throttled(self):
+        limiter = TokenBucketLimiter(requests_per_minute=60, burst=2)
+        limiter.MAX_BUCKETS = 5
+        for _ in range(2):
+            limiter.check("busy", now=0.0)
+        for i in range(20):
+            limiter.check(f"idle:{i}", now=0.0)
+        self.assertFalse(limiter.check("busy", now=0.1)[0])  # still empty: its bucket survived the prune

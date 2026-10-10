@@ -1,0 +1,32 @@
+# Tool configuration only. The application is not packaged from here; its
+# runtime dependencies live in backend/requirements.txt.
+
+[tool.ruff]
+# The project interpreter is 3.10 (Coqui TTS needs it), so ruff must not
+# suggest syntax that only parses on a newer Python.
+target-version = "py310"
+# The conda env and node_modules contain thousands of third-party files.
+extend-exclude = ["backend/.conda", "frontend/node_modules", "outputs", "inputs"]
+
+[tool.ruff.lint]
+# Rules chosen for catching bugs, not for restyling working code:
+#   F      pyflakes: undefined names, unused imports and variables
+#   E9     syntax and indentation errors
+#   B      bugbear: mutable defaults, loop-variable closures, broad asserts
+#   BLE    blind `except Exception` must be deliberate (noqa with a reason)
+#   S110   `except: pass` that swallows an error silently (golden rule 1)
+#   RUF012 mutable class attribute shared by every instance
+#   EXE    shebang and executable bit agree
+#   PLE    pylint's error class
+# RUF100 (stale noqa) is off: many `# noqa: BLE001 - <reason>` comments sit on
+# broad excepts that log or re-raise, where ruff does not fire anyway. They
+# still tell a reader the catch is deliberate, so they stay.
+# Annotation modernisation (UP: Optional[X] -> X | None) is left off on
+# purpose: it would rewrite ~480 working lines for no behavioural change.
+select = ["F", "E9", "B", "BLE", "S110", "RUF012", "EXE", "PLE"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI declares dependencies as call expressions in default arguments
+# (`= File(...)`, `= Depends(...)`). That is the framework's API, not the
+# mutable-default bug B008 looks for.
+"backend/app.py" = ["B008"]

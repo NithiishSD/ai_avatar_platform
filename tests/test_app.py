@@ -17,6 +17,7 @@ from job_queue import CeleryJobQueue, InMemoryJobQueue
 from celery_app import celery
 from contracts import AudioSynthesisRequest, AvatarRenderJob
 from test_contracts import VALID_JOB
+from test_voice_engine import reference, weights_on_disk
 
 
 class FakeRedis:
@@ -114,9 +115,14 @@ class RenderJobApiTests(unittest.TestCase):
                 self.arguments = kwargs
                 return SimpleNamespace(**expected_result)
 
-        with patch("celery_app.VoiceEngineRouter", return_value=FakeVoiceEngine()):
-            from celery_app import synthesize_audio
-            result = synthesize_audio.run(request.model_dump(mode="json", by_alias=True))
+        import celery_app
+
+        # get_router() caches one router per process. Without resetting the
+        # cache for this test, the fake built here became *the* router for
+        # every later test in the run.
+        with patch("celery_app.VoiceEngineRouter", return_value=FakeVoiceEngine()), \
+             patch.object(celery_app, "_router", None):
+            result = celery_app.synthesize_audio.run(request.model_dump(mode="json", by_alias=True))
 
         self.assertEqual(result, expected_result)
 
@@ -124,7 +130,8 @@ class RenderJobApiTests(unittest.TestCase):
         fake_task = type("Task", (), {"id": "TASK-123"})()
         request = {"text": "Hello from the API", "mode": "fast", "language": "en"}
 
-        with patch("app.synthesize_audio.delay", return_value=fake_task) as delay:
+        with patch("app.synthesize_audio.delay", return_value=fake_task) as delay, \
+             patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
             response = self.client.post("/api/v1/audio/synthesize", json=request)
 
         self.assertEqual(response.status_code, 202)
@@ -134,6 +141,82 @@ class RenderJobApiTests(unittest.TestCase):
         # modelUsed is None when task is still in QUEUED state
         self.assertIsNone(body.get("modelUsed"))
         delay.assert_called_once()
+
+    def test_engine_without_weights_is_503_with_the_fix_and_nothing_queued(self):
+        request = {"text": "Hello", "mode": "high_quality", "language": "en"}
+        with patch("app.synthesize_audio.delay") as delay, \
+             patch("model_registry.audit_model_weights", return_value=weights_on_disk("higgs-tts-2")):
+            response = self.client.post("/api/v1/audio/synthesize", json=request)
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("scripts/fetch_models.py --only higgs-tts-2", response.json()["detail"])
+        delay.assert_not_called()
+
+    def test_cloning_an_unconsented_voice_is_403_and_nothing_queued(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            request = {"text": "Hello", "mode": "clone", "speakerWav": reference(tmp, "unknown.wav")}
+            with patch("app.synthesize_audio.delay") as delay, \
+                 patch("app.inputs_dir", Path(tmp)), \
+                 patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
+                response = self.client.post("/api/v1/audio/synthesize", json=request)
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("no provenance record", response.json()["detail"])
+        delay.assert_not_called()
+
+    def test_a_consented_voice_is_queued(self):
+        import tempfile
+
+        fake_task = type("Task", (), {"id": "TASK-CLONE"})()
+        with tempfile.TemporaryDirectory() as tmp:
+            wav = reference(tmp, "lj.wav", source="human", speaker="LJ",
+                            licence="public domain", consent_basis="open-licence")
+            request = {"text": "Hello", "mode": "clone", "speakerWav": wav}
+            with patch("app.synthesize_audio.delay", return_value=fake_task) as delay, \
+                 patch("app.inputs_dir", Path(tmp)), \
+                 patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
+                response = self.client.post("/api/v1/audio/synthesize", json=request)
+        self.assertEqual(response.status_code, 202)
+        delay.assert_called_once()
+
+    def test_clone_engine_is_passed_to_the_task(self):
+        import tempfile
+
+        fake_task = type("Task", (), {"id": "TASK-OV"})()
+        with tempfile.TemporaryDirectory() as tmp:
+            wav = reference(tmp, "lj.wav", source="human", speaker="LJ",
+                            licence="public domain", consent_basis="open-licence")
+            request = {"text": "Hello", "mode": "clone", "speakerWav": wav, "cloneEngine": "openvoice-v2"}
+            with patch("app.synthesize_audio.delay", return_value=fake_task) as delay, \
+                 patch("app.inputs_dir", Path(tmp)), \
+                 patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
+                response = self.client.post("/api/v1/audio/synthesize", json=request)
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(delay.call_args.args[0]["cloneEngine"], "openvoice-v2")
+
+    def test_an_unknown_clone_engine_is_rejected_at_the_edge(self):
+        request = {"text": "Hello", "mode": "clone", "speakerWav": "x.wav", "cloneEngine": "bark"}
+        with patch("app.synthesize_audio.delay") as delay:
+            response = self.client.post("/api/v1/audio/synthesize", json=request)
+        self.assertEqual(response.status_code, 422)
+        delay.assert_not_called()
+
+    def test_a_missing_reference_file_is_400(self):
+        request = {"text": "Hello", "mode": "clone", "speakerWav": "/nonexistent/voice.wav"}
+        with patch("app.synthesize_audio.delay") as delay, \
+             patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
+            response = self.client.post("/api/v1/audio/synthesize", json=request)
+        self.assertEqual(response.status_code, 400)
+        delay.assert_not_called()
+
+    def test_unsupported_multilingual_language_is_400_before_queueing(self):
+        request = {"text": "Hello", "mode": "multilingual", "language": "zzz"}
+        with patch("app.synthesize_audio.delay") as delay, \
+             patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
+            response = self.client.post("/api/v1/audio/synthesize", json=request)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("requires an MMS-TTS checkpoint", response.json()["detail"])
+        delay.assert_not_called()
 
     def test_synthesis_status_reads_celery_state(self):
         pending_task = type("Task", (), {"state": "PENDING", "result": None})()
@@ -146,6 +229,37 @@ class RenderJobApiTests(unittest.TestCase):
         self.assertEqual(body["taskId"], "TASK-123")
         self.assertEqual(body["status"], "QUEUED")
         self.assertIsNone(body.get("modelUsed"))
+
+    def test_a_failed_synthesis_says_why_on_submit_and_on_poll_without_server_paths(self):
+        home = str(Path.home())  # the scrubber removes this server's own locations
+        error = RuntimeError(f"could not load {home}/secret/model.pth: No module named 'antlr4'")
+        failed = type("Task", (), {"id": "T-F", "state": "FAILURE", "status": "FAILURE", "result": error})()
+        with patch("app.synthesize_audio.delay", return_value=failed), \
+             patch("model_registry.audit_model_weights", return_value=weights_on_disk()):
+            submitted = self.client.post("/api/v1/audio/synthesize", json={"text": "Hi", "mode": "fast", "language": "en"}).json()
+        with patch("app.celery.AsyncResult", return_value=failed):
+            polled = self.client.get("/api/v1/audio/synthesize/T-F").json()
+        for body in (submitted, polled):
+            self.assertEqual(body["status"], "FAILED")
+            self.assertIn("RuntimeError: ", body["error"])
+            self.assertIn("No module named 'antlr4'", body["error"])
+            self.assertNotIn(home, body["error"])
+
+    def test_voices_are_listed_and_an_unknown_voice_is_a_400(self):
+        import app as app_module
+
+        # Not counted by the rate limiter: every test in this process shares one client allowance.
+        limiter = patch.object(app_module.security_gate, "inspect", return_value=(True, 0, {}))
+        limiter.start()
+        self.addCleanup(limiter.stop)
+        voices = self.client.get("/api/v1/audio/voices").json()
+        self.assertEqual({v["gender"] for v in voices["voices"]}, {"female", "male"})
+        self.assertEqual(voices["default"], "af_heart")
+        with patch("model_registry.audit_model_weights", return_value=weights_on_disk()), patch("app.synthesize_audio.delay") as delay:
+            response = self.client.post("/api/v1/audio/synthesize", json={"text": "Hi", "mode": "fast", "language": "en", "voice": "xx_nobody"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("unknown voice", response.json()["detail"])
+        delay.assert_not_called()
 
     def test_celery_queue_persists_job_for_status_lookup(self):
         queue = CeleryJobQueue(redis_client=FakeRedis())

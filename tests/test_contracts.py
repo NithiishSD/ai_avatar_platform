@@ -59,3 +59,17 @@ class AvatarRenderContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class MotionIntensityContractTests(unittest.TestCase):
+    def test_motion_intensity_is_optional_and_bounded(self):
+        from pydantic import ValidationError
+
+        from contracts import AvatarRenderJob
+
+        base = {"jobId": "M1", "avatarId": "demo", "audioUrl": "file:///x.wav", "sampleRate": 24000, "durationSeconds": 1.0,
+                "phonemeTimestamps": [{"phoneme": "AA", "viseme": "viseme_aa", "startMs": 0, "endMs": 400}],
+                "emotionVector": {"happy": 0, "neutral": 1, "eyeblinkRate": 1}, "renderQuality": "PREVIEW", "targetFps": 25}
+        self.assertIsNone(AvatarRenderJob.model_validate(base).motion_intensity)  # older jobs unchanged
+        self.assertEqual(AvatarRenderJob.model_validate({**base, "motionIntensity": 1.5}).motion_intensity, 1.5)
+        with self.assertRaises(ValidationError):
+            AvatarRenderJob.model_validate({**base, "motionIntensity": 3})

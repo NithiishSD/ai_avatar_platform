@@ -44,6 +44,51 @@ def checker(bad=None):
     return check
 
 
+class PromptTests(unittest.TestCase):
+    def test_attributes_shape_the_prompt(self):
+        prompt = avatar_generator.build_prompt("older", "woman", "grey", glasses=True)
+        for phrase in ("elderly", "woman", "short grey hair", "wearing glasses"):
+            self.assertIn(phrase, prompt)
+        self.assertNotIn("glasses", avatar_generator.build_prompt())
+
+    def test_only_listed_choices_are_accepted(self):
+        # Free text would let a caller name a real person; there is no way in.
+        for kwargs in ({"age": "Taylor Swift"}, {"presentation": "x"}, {"hair": "x"}):
+            with self.assertRaises(KeyError):
+                avatar_generator.build_prompt(**kwargs)
+
+
+class GenerateRegisteredTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+
+        from avatar_store import AvatarStore
+        from vision_fixtures import FakeFaceEngine
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.store = AvatarStore(root=Path(self._tmp.name), engine=FakeFaceEngine())
+
+    def test_registers_as_synthetic_with_the_recipe(self):
+        generator = FakeGenerator()
+        avatar_generator.generate_registered_avatar(self.store, checker(), "gen1", seed=9, generator=generator)
+        record = self.store.get("gen1")
+        self.assertTrue(record.usable)
+        self.assertEqual(record.provenance["source"], "synthetic")
+        self.assertEqual(record.provenance["extra"]["seed"], 9)
+
+    def test_existing_id_is_refused_before_any_generation(self):
+        from avatar_store import AvatarError
+
+        avatar_generator.generate_registered_avatar(self.store, checker(), "gen1", generator=FakeGenerator())
+        second = FakeGenerator()
+        with self.assertRaises(AvatarError):
+            avatar_generator.generate_registered_avatar(self.store, checker(), "gen1", generator=second)
+        self.assertEqual(second.seeds, [])  # the slow part never ran
+        avatar_generator.generate_registered_avatar(self.store, checker(), "gen1", overwrite=True, generator=FakeGenerator())
+
+
 class GenerateAvatarTests(unittest.TestCase):
     def test_first_good_seed_wins_and_lineage_is_reproducible(self):
         generator = FakeGenerator()
@@ -89,6 +134,13 @@ class GenerateAvatarTests(unittest.TestCase):
 
 
 class GeneratorLoadTests(unittest.TestCase):
+    def setUp(self):
+        # What is under test is the missing-weights path. The host-RAM guard in front of it is tested on
+        # its own (test_ram_guard_loaders); letting it run here made this test depend on free memory.
+        patcher = mock.patch("gpu_utils.ensure_host_memory")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_missing_weights_name_the_fetch_command_and_failure_is_cached(self):
         generator = AvatarGenerator(repo_id="nobody/not-cached", device="cpu")
         fake = mock.Mock()
