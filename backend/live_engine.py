@@ -61,7 +61,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 import numpy as np
 
@@ -274,10 +274,40 @@ class LiveSession:
             analysis = shared_face_engine().analyze(image)
         self.animator = PortraitAnimator(image, analysis)
         self.width, self.height = width, height
+        self._warm_speech()
         return {"width": width, "height": height, "fps": self.fps}
 
-    def synth_chunk(self, index: int, text: str) -> ChunkAudio:
-        """Speak one sentence and measure when each phoneme happens."""
+    def _warm_speech(self) -> None:
+        """
+        Run one throwaway word through the speech path so the first real sentence is not the one that
+        loads the voice, the aligner and the watermark model (about 8 s on a cold server, ~0.1 s warm).
+
+        Only the built-in fast voice is warmed: a cloning session would pull XTTS-v2 (4 GB) onto the card
+        at open, before anyone has spoken. A failure here is logged, not raised: the first real sentence
+        goes down the same path and reports the same error with its own message.
+        """
+        if self.mode != "fast":
+            return
+        name = f"live/{self.session_id}-warm.wav"
+        try:
+            result = self.router.synthesize(
+                "Ready.", mode=self.mode, language=self.language, output_filename=name,
+                return_alignment=True, voice=self.voice,
+            )
+            Path(result.output_path).unlink(missing_ok=True)
+        except Exception as err:  # noqa: BLE001 - see the docstring
+            logger.warning("Live session warm-up failed (the first sentence will retry): %s", err)
+
+    def synth_chunk(self, index: int, text: str, on_audio: Optional[Callable[[bytes, int, float], None]] = None) -> ChunkAudio:
+        """
+        Speak one sentence and measure when each phoneme happens.
+
+        The sound and its timing are separate steps. The listener needs only the sound to start
+        playing; the timing is for the mouth, whose frames follow the audio anyway. So the speech is
+        synthesised without alignment, ``on_audio(pcm16, sample_rate, seconds)`` is called the moment
+        it exists, and only then is the forced aligner run. On a 4050 this takes the first sentence's
+        time to first sound from ~118 ms to the synthesis alone (T9.3, N-19).
+        """
         import soundfile as sf
 
         started = time.perf_counter()
@@ -289,7 +319,7 @@ class LiveSession:
             language=self.language,
             speaker_wav=self.speaker_wav,
             output_filename=name,
-            return_alignment=True,
+            return_alignment=False,
             emotion=self.emotion,
             emotion_intensity=self.emotion_intensity,
             clone_engine=self.clone_engine,
@@ -301,34 +331,58 @@ class LiveSession:
             # Stereo is averaged to mono: the wire format carries one channel.
             if audio.ndim > 1:
                 audio = audio.mean(axis=1)
+            # float -1..1 to PCM16. Clipping first stops an over-range sample wrapping round to the other
+            # extreme. "<i2" is little-endian signed 16-bit, which the browser's decoder expects.
+            pcm = (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+            duration = len(audio) / float(rate)
+            if on_audio is not None:
+                on_audio(pcm, int(rate), duration)
+            timestamps, alignment_method = self._align(path, text, int(rate))
             energy = speech_energy_envelope(path)
         finally:
             # Deleted even if reading failed: the audio is sent over the socket, not kept on disk.
             path.unlink(missing_ok=True)
         # No silent fallback (golden rule 1): without phoneme timing the mouth cannot follow the speech.
-        if not result.phoneme_timestamps:
+        if not timestamps:
             raise LiveError(
                 "the speech came back with no phoneme timing, so there is nothing to move the mouth; "
                 "the forced aligner could not run"
             )
         from emotion_engine import to_render_emotion_vector
 
-        # float -1..1 to PCM16. Clipping first stops an over-range sample wrapping round to the other
-        # extreme. "<i2" is little-endian signed 16-bit, which the browser's decoder expects.
-        pcm = (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
         return ChunkAudio(
             index=index,
             text=text,
             pcm16=pcm,
             sample_rate=int(rate),
-            duration_seconds=len(audio) / float(rate),
-            timestamps=list(result.phoneme_timestamps),
-            alignment_method=result.alignment_method,
+            duration_seconds=duration,
+            timestamps=list(timestamps),
+            alignment_method=alignment_method,
             model=result.model,
             emotion_vector=to_render_emotion_vector((result.emotion or {}).get("vector") or {}),
             energy=energy,
             synth_ms=(time.perf_counter() - started) * 1000.0,
         )
+
+    def _align(self, path: Path, text: str, sample_rate: int) -> tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+        """
+        Find when each phoneme of ``text`` is spoken in the file; ``(None, None)`` when the aligner fails.
+
+        The same call the voice router makes for ``return_alignment=True``. A failure is logged and
+        returned as no timing, which ``synth_chunk`` then refuses with its reason (golden rule 1).
+        """
+        from alignment_engine import ForcedAligner
+
+        try:
+            aligner = ForcedAligner(device=getattr(self.router, "device", None))
+            stamps = aligner.align(
+                audio_path_or_tensor=str(path), transcript=text, sample_rate=sample_rate, language=self.language,
+            )
+            # by_alias gives the camelCase field names the render contract uses.
+            return [s.model_dump(by_alias=True) for s in stamps], aligner.last_method
+        except Exception as err:  # noqa: BLE001 - reported as missing timing by the caller
+            logger.warning("Forced alignment failed for a live chunk: %s", err)
+            return None, None
 
     def build_track(self, chunk: ChunkAudio) -> AnimationTrack:
         """The per-frame face motion for one sentence, from its phoneme timing and loudness.
@@ -416,29 +470,44 @@ async def stream_text(session: LiveSession, text: str, with_frames: bool = True)
     first_audio_ms: Optional[float] = None
     first_frame_ms: Optional[float] = None
     first_gap_ms: Optional[float] = None
+    def start(k: int) -> tuple["asyncio.Future[Any]", "asyncio.Future[ChunkAudio]"]:
+        """Queue sentence ``k``; returns (future of its sound, future of the whole chunk with timing)."""
+        sound: "asyncio.Future[Any]" = loop.create_future()
+
+        def on_audio(pcm: bytes, rate: int, seconds: float) -> None:
+            # Called on the synth thread; the future belongs to the event loop.
+            loop.call_soon_threadsafe(lambda: sound.done() or sound.set_result((pcm, rate, seconds)))
+
+        return sound, loop.run_in_executor(_SYNTH_POOL, session.synth_chunk, k, sentences[k], on_audio)
+
     # Start the first sentence before the loop; each pass then starts the next one (pipelining).
-    pending: Optional["asyncio.Future[ChunkAudio]"] = loop.run_in_executor(
-        _SYNTH_POOL, session.synth_chunk, 0, sentences[0]
-    )
+    sound, pending = start(0)
     try:
         for k in range(len(sentences)):
             # Always set here: it is None only after the last sentence was taken. The assert says so
             # for the type checker.
             assert pending is not None
-            chunk: ChunkAudio = await pending
-            # Queue sentence k+1 now, so it synthesises while sentence k is being rendered and sent.
-            pending = (
-                loop.run_in_executor(_SYNTH_POOL, session.synth_chunk, k + 1, sentences[k + 1])
-                if k + 1 < len(sentences)
-                else None
-            )
+            # The sound as soon as it exists, which is before its timing; or, for a session that has no
+            # early hand-over, the finished chunk (an error in either case is raised here).
+            await asyncio.wait({sound, pending}, return_when=asyncio.FIRST_COMPLETED)
+            if sound.done():
+                pcm, rate, seconds = sound.result()
+            else:
+                early = pending.result()
+                pcm, rate, seconds = early.pcm16, early.sample_rate, early.duration_seconds
             # Audio is yielded before any frame, so the client can start playback at once.
             start_ms = session.timeline_ms
-            yield LiveEvent("audio", pack_media(KIND_AUDIO, k, 0, int(start_ms), chunk.pcm16), {
-                "chunk": k, "text": chunk.text, "sampleRate": chunk.sample_rate,
-                "durationMs": round(chunk.duration_seconds * 1000, 1), "startMs": round(start_ms, 1),
+            yield LiveEvent("audio", pack_media(KIND_AUDIO, k, 0, int(start_ms), pcm), {
+                "chunk": k, "text": sentences[k], "sampleRate": rate,
+                "durationMs": round(seconds * 1000, 1), "startMs": round(start_ms, 1),
             })
             t_audio = time.perf_counter()
+            chunk: ChunkAudio = await pending
+            # Queue sentence k+1 now, so it synthesises while sentence k is being rendered and sent.
+            if k + 1 < len(sentences):
+                sound, pending = start(k + 1)
+            else:
+                pending = None
             # The first sentence's numbers are the latency a user feels: time to first sound and first frame.
             if first_audio_ms is None:
                 first_audio_ms = (t_audio - t_say) * 1000.0

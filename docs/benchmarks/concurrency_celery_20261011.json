@@ -1,0 +1,30 @@
+{
+  "api": "http://localhost:8000",
+  "distinctJobs": 60,
+  "repeatSubmissions": 12,
+  "submitAllSeconds": 0.84,
+  "drainAllSeconds": 43.6,
+  "jobsPerMinute": 82.7,
+  "acceptLatency": {
+    "n": 72,
+    "meanMs": 569.9,
+    "p50Ms": 645.0,
+    "p95Ms": 824.5,
+    "p99Ms": 831.8,
+    "maxMs": 832.9
+  },
+  "statusCodes": {
+    "202": 60,
+    "409": 12
+  },
+  "completed": 60,
+  "failed": [],
+  "checks": {
+    "everyDistinctJobAccepted202": true,
+    "everyRepeatRefused409": true,
+    "noJobLost": true,
+    "noJobFailed": true,
+    "eachJobOwnVideoFile": true
+  },
+  "passed": true
+}

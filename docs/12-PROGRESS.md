@@ -68,6 +68,10 @@ records what was verified live, with the real command and result.
 | T8.11 | Done — signed off by the owner (M-12, 9 Oct) after the whole-picture fix (D-64) | b61f6a0, 2ccf00e |
 | T9.1 | **Done as an investigation (11 Oct): no change raised N-02 meaningfully; reported not met** (D-66) | (this commit) |
 | T9.2 | **Done (11 Oct): smoothing 38 -> 15 ms lifts the default engine from 60.3% to 69.1%, still not met; Wav2Lip and SadTalker measured at 100% on 13 languages; a person's look waits on M-13** (D-67) | (this commit) |
+| T9.3 | **Done (11 Oct): N-20 back under 5 s unmarked (3.8 s) and at the line marked (4.9-5.0 s); N-06 9.5 s per 60 s** (D-68) | (this commit) |
+| T9.4 | **Done (11 Oct): Celery/Redis path run for the first time; N-03 and N-08 hold on it** | (this commit) |
+| T9.5 | **Done (11 Oct): live first audio 92 ms warm, first session 128 ms (was 8.1 s); N-19 met on GPU** (D-69) | (this commit) |
+| T9.6 | **Done (11 Oct): photo to avatar 4.3-5.5 s warm on GPU; N-14 met** | (this commit) |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
 M5: T5.1 audio watermark -> T5.2 video watermark + signed manifest -> T5.3 verify endpoint -> T5.4 audit trail ->
@@ -1628,4 +1632,34 @@ Gates: `scripts/check.sh` -> ruff and pyrefly clean, **901 tests OK**. `scripts/
 
 **Not done, stated:** N-02 and the default-engine N-05 are not met. The blendshape change is small and a person has not looked at it (M-13). Whether to
 trial a stronger cloner or change the default render engine is the owner's (Q-10).
+
+### 2026-10-11 (second part) — T9.3 to T9.6: re-measuring on the GPU the targets recorded as CPU-only
+
+The GPU being visible meant every "not met on CPU" row could be re-measured on the card. Doing so found one regression and closed four rows.
+
+**T9.3, N-20 / N-06.** `scripts/gpu_benchmark.py` (device refuses to run without CUDA) gave peak VRAM identical to 8 Oct (3,288 MiB allocated, 4,710 MiB reserved)
+but the 30 s render at **5.58 s unmarked / 8.61 s marked against 4.17 / 7.20 on 8 Oct**: the whole-portrait head motion (I-01, 9 Oct) added a second full-frame
+remap per frame. cProfile: `apply_pose` 0.84 s of 2.8 s; motion off 2.56 s per 30 s, on 4.46 s. Fixes (D-68), each measured: (1) frames warped on a 4-thread
+ordered pool, no per-frame state is shared (checked: no assignment to `self` in the render path) -> 4.46 -> 2.87 s per 30 s; threads 1/2/4/8 = 4.46/3.00/2.87/3.10;
+(2) the watermark batch uploaded as uint8 and widened on the card (40 -> 4 ms of a 135 ms window; model 86 ms, download 15 ms); (3) warp and mark each on their own
+thread (`_prefetched`, bounded, errors re-raised, closed early): marked 6.5 -> 5.02 s. Final three runs: unmarked 3.76-3.84, marked 4.86-5.02, N-06 9.45-10.09 per 60 s.
+Marked sits on the 5 s line (one run 0.02 over); 0.4 s of a marked render is the read-back check of the mark, which was left in. Tests (`test_warp_frames.py`, 10): order under
+random latency, parallel == serial output, mouth weights dropped for Wav2Lip, a failing frame raises, each frame once, the thread-count setting, producer bounded,
+error propagation, early close stops the producer. Plants caught: completion-order hand-out; removing the stop signal. (A first plant that swallowed errors
+hung the test run instead of failing it, and my `pkill -f` then killed my own shell; recorded because both are in the notes above as known traps.)
+
+**T9.4, N-03 / N-08 on Celery.** `docker run redis:7-alpine`, `python -m celery -A celery_app worker --concurrency=1` (the `celery` script's shebang still names
+`~/Documents/...`, so it is run as a module), API with `QUEUE_BACKEND=celery`. Load test: synthesis POST 202 in 40 ms first, 12-13 ms warm; render POST mean 4.4 ms
+(10 jobs). The first concurrency run exposed the default limiter refusing the test's own traffic (33,950 x 429; ~25 of 60 jobs accepted); with `RATE_LIMIT_RPM`
+lifted: 60 x 202, 12 x 409, 60 COMPLETED, 82.7 jobs/min, accept latency under a 72-way burst mean 570 ms / p95 825 ms.
+
+**T9.5, N-19.** Text -> first audio on the GPU was 116-120 ms; synthesis is 54 ms and alignment 20 ms of the 74 ms the router takes, plus ~45 ms of reading, envelope and
+framing. Changes (D-69): synthesise without alignment, hand the PCM to the client, then align; warm the fast path when a live session opens. Result over 5 sessions:
+**91.4-92.2 ms warm, 128 ms first session (8,107 ms before)**, first frame 121 ms, 1 late frame of 206. Live tests: 31 -> 35 (the router no longer aligns; sound handed
+over before the aligner starts; an aligner failure is refused, not hidden); a plant that aligns first is caught.
+
+**T9.6, N-14.** `AvatarGenerator` on the card: 4.3 s (20 steps), 5.5 s (30), peak 3,269 MiB; weights load 6.7 s.
+
+Gates: `scripts/check.sh` -> ruff and pyrefly clean, **913 tests OK**; `scripts/check.sh e2e` **18 passed (1.7 min)**. Not run in this batch: `docker compose up --build`
+(the image has not been rebuilt since these changes) and the dependency audits.
 

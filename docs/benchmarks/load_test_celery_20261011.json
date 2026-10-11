@@ -1,0 +1,54 @@
+{
+  "api": "http://localhost:8000",
+  "queueBackend": "celery",
+  "security": {
+    "authEnabled": false,
+    "configuredKeys": 0,
+    "rateLimitEnabled": true,
+    "requestsPerMinute": 120,
+    "burst": 30,
+    "apiKeyHeader": "X-API-Key"
+  },
+  "when": "2026-10-11 19:24:59",
+  "renderJobInitiation": {
+    "n": 10,
+    "meanMs": 4.4,
+    "p50Ms": 2.9,
+    "p95Ms": 18.1,
+    "p99Ms": 18.1,
+    "maxMs": 18.1,
+    "statusCodes": {
+      "202": 10
+    },
+    "under500ms": true
+  },
+  "synthesisPostLatency": {
+    "firstMs": 39.7,
+    "warmMs": [
+      13.2,
+      11.9
+    ],
+    "httpStatus": 202
+  },
+  "queuedRenders": 10,
+  "capacity": {
+    "path": "/api/v1/audio/languages?limit=5",
+    "clients": 4,
+    "seconds": 8.1,
+    "statusCodes": {
+      "200": 35,
+      "429": 19581
+    },
+    "acceptedPerMinute": 260.0,
+    "attemptedPerMinute": 145728.5,
+    "refused429": 19581,
+    "latencyOfAccepted": {
+      "n": 35,
+      "meanMs": 6.8,
+      "p50Ms": 5.7,
+      "p95Ms": 13.7,
+      "p99Ms": 14.7,
+      "maxMs": 14.7
+    }
+  }
+}

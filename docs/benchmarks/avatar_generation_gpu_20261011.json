@@ -1,0 +1,21 @@
+{
+  "date": "2026-10-11",
+  "device": "NVIDIA GeForce RTX 4050 Laptop GPU (5,772 MiB usable)",
+  "method": "AvatarGenerator (Stable Diffusion 1.5, fp16) on the GPU, timed with torch.cuda.synchronize; quality gate = FaceMeshEngine.check_quality; seed 1234 / 1",
+  "weightsLoadSeconds": 6.7,
+  "generateSeconds": {
+    "steps20": 4.3,
+    "steps30": 5.5
+  },
+  "peakAllocatedMiB": 3269,
+  "generateAvatarWithQualityGateWarmSeconds": {
+    "steps20": 4.4,
+    "steps30": 5.5
+  },
+  "coldEndToEndSeconds_steps20": {
+    "loadGenerateGateRelease_osCacheWarm": 5.0,
+    "loadFromDisk_plus_generate_approx": 11.0
+  },
+  "registrationSeconds_8Oct": 2.0,
+  "targets": "N-14: < 20 s (Milestone 2), < 10 s (Avatar Engine)"
+}

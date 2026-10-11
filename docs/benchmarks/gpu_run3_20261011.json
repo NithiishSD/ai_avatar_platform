@@ -1,0 +1,58 @@
+{
+  "date": "2026-10-11T13:51:55+00:00",
+  "environment": {
+    "torch": "2.5.1+cu121",
+    "torchCuda": "12.1",
+    "cudaAvailable": true,
+    "device": "NVIDIA GeForce RTX 4050 Laptop GPU",
+    "vramTotalMiB": 5772,
+    "nvidiaSmi": "Failed to initialize NVML: Driver/library version mismatch\nNVML library version: 595.99"
+  },
+  "note": "GPU run",
+  "speech_N17": {
+    "model": "kokoro",
+    "target": "< 2 s per 30 s of audio",
+    "unmarked": {
+      "audioSeconds": 24.2,
+      "seconds": 0.47,
+      "secondsPer30s": 0.58,
+      "peakAllocMiB": 2289,
+      "peakReservedMiB": 2540
+    },
+    "marked": {
+      "audioSeconds": 24.2,
+      "seconds": 0.73,
+      "secondsPer30s": 0.9,
+      "peakAllocMiB": 2293,
+      "peakReservedMiB": 2636
+    }
+  },
+  "render30_N20": {
+    "engine": "blendshape",
+    "target": "< 5 s per 30 s of video",
+    "unmarked": {
+      "videoSeconds": 24.2,
+      "renderSeconds": 3.03,
+      "secondsPer30s": 3.76,
+      "peakAllocMiB": 1851,
+      "peakReservedMiB": 3326
+    },
+    "marked": {
+      "videoSeconds": 24.2,
+      "renderSeconds": 3.92,
+      "secondsPer30s": 4.86,
+      "peakAllocMiB": 2627,
+      "peakReservedMiB": 3332
+    }
+  },
+  "video60_N06": {
+    "target": "< 30 s for 60 s of video",
+    "videoSeconds": 48.4,
+    "wallSeconds": 7.69,
+    "secondsPer60s": 9.53,
+    "watermarks": "on",
+    "peakAllocMiB": 3296,
+    "peakReservedMiB": 4710,
+    "nvidiaSmiAfter": "Failed to initialize NVML: Driver/library version mismatch\nNVML library version: 595.99"
+  }
+}

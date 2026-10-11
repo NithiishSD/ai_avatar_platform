@@ -136,6 +136,10 @@ the same script and method as the original number, so the before/after is compar
 |---|---|---|---|
 | T9.1 | Cloned-voice similarity | A voice-conversion refinement (kNN-VC: WavLM features, nearest-neighbour matching in the reference, HiFi-GAN vocoder; implemented in-repo, no external code run) applied to a clone before watermarking; opt-in field; refused with the fetch command when weights are missing; `measure_clone_similarity.py` re-run unchanged against the same prompt/held-out split, with word error rate beside it so an intelligibility cost is visible; before/after recorded whatever the result | N-02 |
 | T9.2 | Blendshape lip sync | The default CPU renderer's mouth is tuned (opening gain, smoothing, timing) against SyncNet on the 13-language clip set; D-12 percentage re-measured by `measure_lipsync_languages.py`; no regression in jitter (N-09), identity (N-13) or LPIPS (N-12); the owner looks at the result (a stronger mouth can read as a puppet) | N-05 |
+| T9.3 | Render throughput on the GPU host | Frames warped by a bounded thread pool and handed on in order; warp, mark and encode overlap on their own threads; the mark batch uploaded as uint8; tests pin order, equality with the serial path, errors and early close; `gpu_benchmark.py` re-run | N-20, N-06 |
+| T9.4 | The Celery/Redis path, run for real | Redis in Docker, a worker and the API in `QUEUE_BACKEND=celery`; `load_test.py` and `concurrency_test.py` against it | N-03, N-08 |
+| T9.5 | Live first-audio latency | The sound is handed over before the forced alignment runs, and the first session warms the speech path; tests pin the order; measured by `live_client.py` | N-19 |
+| T9.6 | Photo to avatar on the GPU | Stable Diffusion generation timed on the card, warm and cold | N-14 |
 
 Not planned, with the reason in `11-DECISIONS.md`: custom voice training/fine-tuning (R-45, CPU-infeasible), WebRTC (R-48), user studies
 and native-speaker validation (R-53).
