@@ -1,0 +1,72 @@
+{
+  "date": "2026-10-11",
+  "target": "N-02: ECAPA-TDNN cosine, clone vs held-out remainder of the same recording; > 85% (M1), > 90% (final)",
+  "method": "scripts/measure_clone_similarity.py split: first 30 s of inputs/ljspeech_reference.wav as the prompt, the last ~20 s held out; ECAPA via SpeechQualityAuditor (CPU)",
+  "ceilingPercent": 91.7,
+  "baseline": {
+    "xtts-v2 default, 6 sentences (8 Oct)": 62.0,
+    "xtts-v2 default, 12 sentences (11 Oct, same method, sampling is stochastic)": 66.1,
+    "xtts-v2 default, first 6 sentences re-scored 11 Oct": 62.05
+  },
+  "attempts": [
+    {
+      "name": "kNN-VC on the XTTS clone (WavLM-Large layer 6, k-NN over the 30 s prompt, prematched HiFi-GAN; implemented locally, no upstream code run)",
+      "sentences": 6,
+      "k4": 49.1,
+      "k8": 49.8,
+      "xttsSameClips": 62.05,
+      "werWhisperBase": {
+        "xtts": 0.115,
+        "k4": 0.24,
+        "k8": 0.222
+      },
+      "adopted": false
+    },
+    {
+      "name": "OpenVoice V2 tone-colour converter applied to the XTTS clone, tau 0.1 / 0.3 / 0.5 / 0.8",
+      "sentences": 6,
+      "percent": {
+        "0.1": 53.5,
+        "0.3": 53.0,
+        "0.5": 53.9,
+        "0.8": 54.4
+      },
+      "xttsSameClips": 62.0,
+      "adopted": false
+    },
+    {
+      "name": "Long-term average spectrum of the clone matched to the prompt (alpha 0.5 / 1.0, max +-12 dB)",
+      "sentences": 6,
+      "percent": {
+        "0.5": 62.2,
+        "1.0": 62.2
+      },
+      "xttsSameClips": 62.0,
+      "adopted": false
+    },
+    {
+      "name": "XTTS-v2 sampling and conditioning options",
+      "sentences": 12,
+      "percent": {
+        "default": 66.1,
+        "temperature 0.3": 64.7,
+        "temperature 0.1, top_k 10, top_p 0.5": 65.2,
+        "sound_norm_refs": 63.3,
+        "gpt_cond_chunk_len 30": 65.1
+      },
+      "sd": "5.5 - 7.4",
+      "adopted": false
+    },
+    {
+      "name": "Best of 4 XTTS candidates per sentence, picked by ECAPA similarity to the PROMPT (never the held-out audio)",
+      "sentences": 6,
+      "firstCandidate": 65.3,
+      "meanOfCandidates": 63.0,
+      "selected": 67.3,
+      "oracleBestVsHeldOut": 67.3,
+      "adopted": false,
+      "why": "+2 to +4 points for 4x synthesis time; changes no tier"
+    }
+  ],
+  "conclusion": "No change reached 85%. The best single result is 67.3% (best-of-4). The 90% target is 98% of the same speaker's own real speech (91.7%). A stronger cloning model, not post-processing or sampling, is the only route left."
+}

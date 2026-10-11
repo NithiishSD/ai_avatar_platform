@@ -38,7 +38,7 @@ is open source and runs locally.
 | Constraint | Value | Consequence |
 |---|---|---|
 | GPU (host) | RTX 4050 Laptop, 6141 MiB VRAM | One heavy model resident at a time |
-| GPU (this sandbox) | **None visible** — `torch.cuda.is_available()` is False | Live verification here runs on CPU; GPU-only numbers are marked "not measured here" |
+| GPU (this sandbox) | **Visible since the 11 Oct restart**: `torch.cuda.is_available()` is True (RTX 4050; `nvidia-smi` still reports a driver/library mismatch). Check before assuming either way | A measurement script records the device it ran on; a CPU-only machine marks GPU numbers "not measured here" |
 | Python | 3.10 in `backend/.conda` | Never use base conda (3.14) |
 | numpy | `<2.0.0` | Coqui TTS / numba break on numpy 2 |
 | transformers | `<4.48` | Dia/Higgs load through it |

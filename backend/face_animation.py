@@ -61,7 +61,14 @@ logger = logging.getLogger(__name__)
 GRID_MS = 5.0
 # Smoothing widths in milliseconds, turned into grid steps by dividing by
 # GRID_MS. Closures get a narrower kernel so a short "p" is not blurred away.
-DEFAULT_SMOOTHING_MS = 38.0
+# 15 ms, down from 38 ms (T9.2, 10 Oct). At 38 ms the Gaussian smeared each viseme across about two
+# 40 ms frames either side, so a mouth shape arrived late and shallow, and SyncNet, which judges how
+# tightly the mouth follows the sound, read the render as weakly in sync. Less smoothing scored
+# higher on the same clips: 14 multilingual clips, D-12 figure 58.9% -> 65.8% (10 ms: 69.9%, 5 ms:
+# 72.6%); 12 fresh English clips 80% -> 82%. 15 ms is the floor that still passes
+# test_motion_is_smooth_not_stepped (the jaw may not move more than 0.35 in one 20 ms frame); going
+# lower would be a puppet-like mouth, so it is not taken without a person's look (manual check M-13).
+DEFAULT_SMOOTHING_MS = 15.0
 CLOSURE_SMOOTHING_MS = 14.0
 
 # The aligner's CTC spans mark where a phoneme is *emitted*, typically 20-60 ms,

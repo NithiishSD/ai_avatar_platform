@@ -127,6 +127,16 @@ weights favour (integration 30%, avatar creation 25%, real-time 25%, ethics 20%)
 | T8.10 | Monitoring | `GET /api/v1/metrics` (queue depth, job timings, quality scores); test; live | R-51 |
 | T8.11 | SadTalker engine (owner's I-01, option 2) | `?engine=sadtalker`: a pinned SadTalker checkout run in a child process moves the whole head, jaw and expression from the audio; preflight refuses with the fetch command when anything is missing; watermark, label, manifest and audit unchanged; studio option; unit tests with the child mocked; live render with SyncNet, peak VRAM and timing; the owner watches it (M-12) | R-13, N-05, N-10 |
 
+## M9 — Closing the measured accuracy gaps (10 Oct 2026)
+
+Targets that M0–M8 built and measured but **did not meet** (08-TESTING.md). Each task ends with a re-measurement by
+the same script and method as the original number, so the before/after is comparable.
+
+| ID | Task | Acceptance | Closes |
+|---|---|---|---|
+| T9.1 | Cloned-voice similarity | A voice-conversion refinement (kNN-VC: WavLM features, nearest-neighbour matching in the reference, HiFi-GAN vocoder; implemented in-repo, no external code run) applied to a clone before watermarking; opt-in field; refused with the fetch command when weights are missing; `measure_clone_similarity.py` re-run unchanged against the same prompt/held-out split, with word error rate beside it so an intelligibility cost is visible; before/after recorded whatever the result | N-02 |
+| T9.2 | Blendshape lip sync | The default CPU renderer's mouth is tuned (opening gain, smoothing, timing) against SyncNet on the 13-language clip set; D-12 percentage re-measured by `measure_lipsync_languages.py`; no regression in jitter (N-09), identity (N-13) or LPIPS (N-12); the owner looks at the result (a stronger mouth can read as a puppet) | N-05 |
+
 Not planned, with the reason in `11-DECISIONS.md`: custom voice training/fine-tuning (R-45, CPU-infeasible), WebRTC (R-48), user studies
 and native-speaker validation (R-53).
 

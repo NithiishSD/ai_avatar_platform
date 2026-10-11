@@ -90,8 +90,8 @@ class RenderTests(EngineCase):
         """A stand-in for subprocess.run that records the command and writes the child's output video."""
         seen = {}
 
-        def run(command, cwd, env, capture_output, text, timeout):
-            seen.update(command=command, cwd=cwd)
+        def run(command, cwd, env, capture_output, timeout, encoding=None, errors=None, text=None):
+            seen.update(command=command, cwd=cwd, encoding=encoding, errors=errors, text=text, env=env)
             if write_video:
                 out = Path(command[command.index("--result_dir") + 1])
                 out.mkdir(parents=True, exist_ok=True)
@@ -119,6 +119,18 @@ class RenderTests(EngineCase):
         self.assertTrue(result.video_path.is_file())
         sadtalker_engine.cleanup(result)
         self.assertFalse(result.video_path.exists())
+
+    def test_child_output_is_decoded_as_utf8_whatever_the_locale(self):
+        # text=True would decode with the locale; under an ASCII locale a single curly quote in the
+        # child's stderr raised UnicodeDecodeError and discarded a finished render (T9.2, 11 Oct).
+        run, seen = self.fake_child()
+        with mock.patch("subprocess.run", side_effect=run), mock.patch("gpu_utils.cuda_available", return_value=False):
+            result = sadtalker_engine.render(self.image, self.audio, pose_style=0, still=False)
+        self.addCleanup(sadtalker_engine.cleanup, result)
+        self.assertEqual(seen["encoding"], "utf-8")
+        self.assertEqual(seen["errors"], "replace")
+        self.assertIsNone(seen["text"])
+        self.assertEqual(seen["env"]["PYTHONIOENCODING"], "utf-8")
 
     def test_a_portrait_photo_is_padded_to_a_square_and_its_box_reported(self):
         import cv2

@@ -66,6 +66,8 @@ records what was verified live, with the real command and result.
 | T8.7 | Built and measured; the Stable Diffusion words wait on M-08 | (this commit) |
 | T5.1 | Measured, **waiting on M-06** (a person listens: is it inaudible?) | 567f07d + this commit |
 | T8.11 | Done — signed off by the owner (M-12, 9 Oct) after the whole-picture fix (D-64) | b61f6a0, 2ccf00e |
+| T9.1 | **Done as an investigation (11 Oct): no change raised N-02 meaningfully; reported not met** (D-66) | (this commit) |
+| T9.2 | **Done (11 Oct): smoothing 38 -> 15 ms lifts the default engine from 60.3% to 69.1%, still not met; Wav2Lip and SadTalker measured at 100% on 13 languages; a person's look waits on M-13** (D-67) | (this commit) |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
 M5: T5.1 audio watermark -> T5.2 video watermark + signed manifest -> T5.3 verify endpoint -> T5.4 audit trail ->
@@ -1576,3 +1578,54 @@ naming the language and saying nothing is translated; the router passes it throu
 Live, real checkpoints (API restarted on the new code): English text -> **hin refused (0% of letters), tam refused (3%)**; fra SUCCESS 7.6 s and spa SUCCESS 6.0 s
 (same alphabet: read with their pronunciation, not detectable from letters); Hindi text "नमस्ते, आप सबका इस प्रदर्शन में स्वागत है।" -> SUCCESS 3.63 s.
 `scripts/check.sh` -> ruff and pyrefly clean, **900 tests OK**. Open for the owner: whether to add translation (13).
+
+### 2026-10-11 — T9.1 / T9.2: the two accuracy gaps, attacked with measurement
+
+Environment note: the machine was restarted mid-session; `torch.cuda.is_available()` now returns True here (RTX 4050 Laptop; `nvidia-smi` still reports a
+driver/library mismatch, 595.99 vs 595.91). Numbers below say which device they ran on. Scratch scripts were lost in the restart; the experiment numbers
+are kept in `docs/benchmarks/clone_similarity_attempts_20261011.json`.
+
+**N-02 (cloning similarity), same method as 8 Oct** (first 30 s of the LJSpeech recording as prompt, last ~20 s held out, ECAPA-TDNN; ceiling 91.7%
+reproduced). Five attempts, none adopted (D-66):
+
+| Attempt | Result | vs XTTS-v2 on the same clips |
+|---|---|---|
+| kNN-VC (WavLM-Large layer 6, k-NN over the prompt, prematched HiFi-GAN; written locally, vocoder loaded with `weights_only=True`) | 49.1% (k=4), 49.8% (k=8); Whisper word error 0.24 / 0.22 | 62.05%, word error 0.115 |
+| OpenVoice V2 tone-colour converter applied to the XTTS clone (tau 0.1-0.8) | 53.0-54.4% | 62.0% |
+| Long-term spectrum of the clone matched to the prompt | 62.2% | 62.0% |
+| XTTS temperature 0.3; temperature 0.1 + top-k 10 + top-p 0.5; `sound_norm_refs`; `gpt_cond_chunk_len=30` (12 sentences) | 64.7 / 65.2 / 63.3 / 65.1% | default 66.1%, sd 5.5-7.4 |
+| Best of 4 candidates per sentence picked by similarity to the prompt | 67.3% (oracle pick 67.3%) | mean candidate 63.0%, first candidate 65.3% |
+
+Reading: XTTS-v2 sampling is stochastic (the same sentence scored 57.5% in one run and 44.5% in another), so differences under ~3 points are noise. The
+speaker's own real speech scores 91.7%, so the 90% target is 98% of a ceiling; no post-processing moved a clone toward it. kNN-VC is built for minutes of
+target speech (the published system uses 8 min); at 30 s it degrades intelligibility and similarity. **N-02 stays not met.** A `torch.hub.load` of the
+upstream repo was refused by the session's safety check as running external code; the algorithm was re-implemented from the paper instead. WavLM-Large
+weights are CC BY-SA 3.0 (UniSpeech licence), not MIT as first assumed; they, the vocoder and an x-vector model fetched for a second opinion were deleted.
+
+**N-05 (lip sync), blendshape engine.** The frames showed a mouth that barely parts and SyncNet LSE-C ~3 (real video ~7-9). Sweep over the 14 saved
+language clips (73 one-second blocks; each variant re-rendered and scored; the block count means +-5 points is noise): mouth gain 1.3 / 1.6 / 2.0x ->
+67.1 / 67.1 / 67.1% (base 58.9%); smoothing 20 / 15 / 10 / 5 / 2 ms -> 61.6 / 65.8 / 69.9 / 72.6 / 72.6%; a 1-frame lead or lag moves every offset to
+-1 / +1 and lowers the figure (timing was already right); a 2-frame lead gave 9.6%. A second, paired set of 12 fresh Kokoro sentences: base 78-80%, 15 ms
+82%, 5 ms 84%, 5 ms + 1.3x gain 86% (clip-level: 4 better, 0 worse). Shipped: **smoothing 38 -> 15 ms only** (D-67). The first choice, 10 ms, failed
+`test_motion_is_smooth_not_stepped` (jaw step 0.44 > 0.35 per 20 ms at 50 fps); the test was kept and the value moved, not the other way round.
+Jitter on identical audio and job id: mean 0.51% (38 ms) -> 0.57% (15 ms), p95 1.28 -> 1.44%, max 1.96 -> 2.34% (target < 2% is on the mean).
+Live, unpatched path: `scripts/render_avatar.py --text "..." --face demo --metric --jitter` -> offset 0, LSE-C 3.92, jitter mean 0.49%.
+
+One clean GPU run of all three engines over the 14 clips (`docs/benchmarks/lipsync_languages_gpu_20261011.json`, device recorded as the RTX 4050):
+
+| Engine | D-12 pooled | mean LSE-C | offset | render time for 72 s of audio |
+|---|---|---|---|---|
+| blendshape (default) | **69.1%** (mean 69.2%; 25-100% per language) | 3.27 | 0 on 14/14 | 12 s |
+| Wav2Lip | 100% | 8.91 | 0 on 14/14 | 22 s |
+| SadTalker | 100% | 8.19 | -1 on 14/14 | 516 s |
+
+**Bug found by this run and fixed:** the SadTalker wrapper decoded the child's output with the locale (`text=True`); under an ASCII locale a single
+non-ASCII byte raised `UnicodeDecodeError` and discarded a finished render (seen on the three MMS-TTS clips). Now `encoding="utf-8", errors="replace"`
+plus `PYTHONIOENCODING=utf-8` in the child; a test rejects the old call (verified to fail on the old code). The measurement script also hard-coded
+`"device": "cpu"` in its report; it now records the device it ran on.
+
+Gates: `scripts/check.sh` -> ruff and pyrefly clean, **901 tests OK**. `scripts/check.sh e2e` (`npx playwright test`, real models, GPU): **18 passed (1.4 min)**.
+
+**Not done, stated:** N-02 and the default-engine N-05 are not met. The blendshape change is small and a person has not looked at it (M-13). Whether to
+trial a stronger cloner or change the default render engine is the owner's (Q-10).
+

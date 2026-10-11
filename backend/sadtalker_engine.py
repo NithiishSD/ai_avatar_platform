@@ -236,10 +236,16 @@ def render(image_rgb: np.ndarray, audio_path: Path, pose_style: int, still: bool
         # Unload this process's own models (TTS, watermark) so the child finds the card free.
         gpu_utils.ensure_vram(REQUIRED_VRAM_MB, "SadTalker")
         # PYTHONUNBUFFERED so the child's log lines arrive in order with its report lines.
-        env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+        # PYTHONIOENCODING makes the child write UTF-8 whatever this machine's locale is.
+        env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
         try:
+            # encoding/errors instead of text=True: text=True decodes with the locale, and under an
+            # ASCII locale one curly quote in a library warning raised UnicodeDecodeError and threw
+            # away a finished render (found on the Hindi/Swahili/Tamil clips, 11 Oct). "replace"
+            # keeps the log readable and the render alive; the report lines are plain ASCII.
             done = subprocess.run(
-                command, cwd=SADTALKER_DIR, env=env, capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
+                command, cwd=SADTALKER_DIR, env=env, capture_output=True, encoding="utf-8", errors="replace",
+                timeout=TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired as err:
             shutil.rmtree(work, ignore_errors=True)

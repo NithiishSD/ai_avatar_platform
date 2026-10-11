@@ -1,0 +1,795 @@
+{
+  "date": "2026-10-11T13:01:42+00:00",
+  "device": "NVIDIA GeForce RTX 4050 Laptop GPU",
+  "face": "demo",
+  "rows": [
+    {
+      "language": "en",
+      "speech": "xtts",
+      "engine": "blendshape",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.96,
+      "speechSeconds": 23.1,
+      "renderSeconds": 1.2,
+      "offsetFrames": 0,
+      "lseC": 2.434,
+      "lseD": 11.137,
+      "secondsWithinOneFrame": {
+        "within": 1,
+        "of": 5,
+        "percent": 20.0
+      }
+    },
+    {
+      "language": "en",
+      "speech": "xtts",
+      "engine": "wav2lip",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 5.24,
+      "speechSeconds": 1.4,
+      "renderSeconds": 1.8,
+      "offsetFrames": 0,
+      "lseC": 9.276,
+      "lseD": 6.073,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "en",
+      "speech": "xtts",
+      "engine": "sadtalker",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 5.15,
+      "speechSeconds": 1.3,
+      "renderSeconds": 36.2,
+      "offsetFrames": -1,
+      "lseC": 8.435,
+      "lseD": 6.176,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "es",
+      "speech": "xtts",
+      "engine": "blendshape",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.5,
+      "speechSeconds": 53.1,
+      "renderSeconds": 0.8,
+      "offsetFrames": 0,
+      "lseC": 2.681,
+      "lseD": 10.88,
+      "secondsWithinOneFrame": {
+        "within": 2,
+        "of": 4,
+        "percent": 50.0
+      }
+    },
+    {
+      "language": "es",
+      "speech": "xtts",
+      "engine": "wav2lip",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 5.15,
+      "speechSeconds": 1.4,
+      "renderSeconds": 1.7,
+      "offsetFrames": 0,
+      "lseC": 8.937,
+      "lseD": 5.769,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "es",
+      "speech": "xtts",
+      "engine": "sadtalker",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.22,
+      "speechSeconds": 1.1,
+      "renderSeconds": 34.4,
+      "offsetFrames": -1,
+      "lseC": 7.405,
+      "lseD": 6.496,
+      "secondsWithinOneFrame": {
+        "within": 4,
+        "of": 4,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "fr",
+      "speech": "xtts",
+      "engine": "blendshape",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.5,
+      "speechSeconds": 16.4,
+      "renderSeconds": 0.8,
+      "offsetFrames": 0,
+      "lseC": 1.806,
+      "lseD": 12.243,
+      "secondsWithinOneFrame": {
+        "within": 3,
+        "of": 4,
+        "percent": 75.0
+      }
+    },
+    {
+      "language": "fr",
+      "speech": "xtts",
+      "engine": "wav2lip",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.78,
+      "speechSeconds": 1.3,
+      "renderSeconds": 1.6,
+      "offsetFrames": 0,
+      "lseC": 7.92,
+      "lseD": 7.202,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "fr",
+      "speech": "xtts",
+      "engine": "sadtalker",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 3.85,
+      "speechSeconds": 1.0,
+      "renderSeconds": 29.6,
+      "offsetFrames": -1,
+      "lseC": 6.696,
+      "lseD": 7.376,
+      "secondsWithinOneFrame": {
+        "within": 4,
+        "of": 4,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "de",
+      "speech": "xtts",
+      "engine": "blendshape",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 5.1,
+      "speechSeconds": 17.0,
+      "renderSeconds": 0.9,
+      "offsetFrames": 0,
+      "lseC": 3.463,
+      "lseD": 10.629,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "de",
+      "speech": "xtts",
+      "engine": "wav2lip",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 5.15,
+      "speechSeconds": 1.4,
+      "renderSeconds": 1.6,
+      "offsetFrames": 0,
+      "lseC": 9.515,
+      "lseD": 6.087,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "de",
+      "speech": "xtts",
+      "engine": "sadtalker",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 7.56,
+      "speechSeconds": 2.0,
+      "renderSeconds": 51.5,
+      "offsetFrames": -1,
+      "lseC": 7.818,
+      "lseD": 6.577,
+      "secondsWithinOneFrame": {
+        "within": 7,
+        "of": 7,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "it",
+      "speech": "xtts",
+      "engine": "blendshape",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 5.24,
+      "speechSeconds": 16.7,
+      "renderSeconds": 0.9,
+      "offsetFrames": 0,
+      "lseC": 2.494,
+      "lseD": 11.487,
+      "secondsWithinOneFrame": {
+        "within": 3,
+        "of": 5,
+        "percent": 60.0
+      }
+    },
+    {
+      "language": "it",
+      "speech": "xtts",
+      "engine": "wav2lip",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.96,
+      "speechSeconds": 1.3,
+      "renderSeconds": 1.7,
+      "offsetFrames": 0,
+      "lseC": 9.107,
+      "lseD": 6.297,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "it",
+      "speech": "xtts",
+      "engine": "sadtalker",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.96,
+      "speechSeconds": 1.3,
+      "renderSeconds": 36.8,
+      "offsetFrames": -1,
+      "lseC": 9.237,
+      "lseD": 6.209,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "pt",
+      "speech": "xtts",
+      "engine": "blendshape",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 5.15,
+      "speechSeconds": 16.5,
+      "renderSeconds": 0.9,
+      "offsetFrames": 0,
+      "lseC": 3.433,
+      "lseD": 10.783,
+      "secondsWithinOneFrame": {
+        "within": 3,
+        "of": 5,
+        "percent": 60.0
+      }
+    },
+    {
+      "language": "pt",
+      "speech": "xtts",
+      "engine": "wav2lip",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.27,
+      "speechSeconds": 1.1,
+      "renderSeconds": 1.5,
+      "offsetFrames": 0,
+      "lseC": 9.393,
+      "lseD": 6.169,
+      "secondsWithinOneFrame": {
+        "within": 4,
+        "of": 4,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "pt",
+      "speech": "xtts",
+      "engine": "sadtalker",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 5.61,
+      "speechSeconds": 1.5,
+      "renderSeconds": 39.4,
+      "offsetFrames": -1,
+      "lseC": 8.722,
+      "lseD": 6.463,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "pl",
+      "speech": "xtts",
+      "engine": "blendshape",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.82,
+      "speechSeconds": 16.4,
+      "renderSeconds": 0.8,
+      "offsetFrames": 0,
+      "lseC": 4.202,
+      "lseD": 9.81,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "pl",
+      "speech": "xtts",
+      "engine": "wav2lip",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.78,
+      "speechSeconds": 1.3,
+      "renderSeconds": 1.6,
+      "offsetFrames": 0,
+      "lseC": 6.77,
+      "lseD": 6.856,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "pl",
+      "speech": "xtts",
+      "engine": "sadtalker",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.5,
+      "speechSeconds": 1.2,
+      "renderSeconds": 33.6,
+      "offsetFrames": -1,
+      "lseC": 7.871,
+      "lseD": 6.206,
+      "secondsWithinOneFrame": {
+        "within": 4,
+        "of": 4,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "ru",
+      "speech": "xtts",
+      "engine": "blendshape",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.03,
+      "speechSeconds": 16.4,
+      "renderSeconds": 0.7,
+      "offsetFrames": 0,
+      "lseC": 2.095,
+      "lseD": 11.315,
+      "secondsWithinOneFrame": {
+        "within": 2,
+        "of": 4,
+        "percent": 50.0
+      }
+    },
+    {
+      "language": "ru",
+      "speech": "xtts",
+      "engine": "wav2lip",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.64,
+      "speechSeconds": 1.2,
+      "renderSeconds": 1.6,
+      "offsetFrames": 0,
+      "lseC": 7.511,
+      "lseD": 7.155,
+      "secondsWithinOneFrame": {
+        "within": 4,
+        "of": 4,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "ru",
+      "speech": "xtts",
+      "engine": "sadtalker",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.54,
+      "speechSeconds": 1.2,
+      "renderSeconds": 33.6,
+      "offsetFrames": -1,
+      "lseC": 7.183,
+      "lseD": 6.632,
+      "secondsWithinOneFrame": {
+        "within": 4,
+        "of": 4,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "tr",
+      "speech": "xtts",
+      "engine": "blendshape",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 5.29,
+      "speechSeconds": 16.5,
+      "renderSeconds": 0.8,
+      "offsetFrames": 0,
+      "lseC": 2.007,
+      "lseD": 10.76,
+      "secondsWithinOneFrame": {
+        "within": 2,
+        "of": 5,
+        "percent": 40.0
+      }
+    },
+    {
+      "language": "tr",
+      "speech": "xtts",
+      "engine": "wav2lip",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 5.06,
+      "speechSeconds": 1.3,
+      "renderSeconds": 1.6,
+      "offsetFrames": 0,
+      "lseC": 9.336,
+      "lseD": 6.06,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "tr",
+      "speech": "xtts",
+      "engine": "sadtalker",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 6.22,
+      "speechSeconds": 1.6,
+      "renderSeconds": 42.9,
+      "offsetFrames": -1,
+      "lseC": 7.603,
+      "lseD": 6.362,
+      "secondsWithinOneFrame": {
+        "within": 6,
+        "of": 6,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "nl",
+      "speech": "xtts",
+      "engine": "blendshape",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 5.06,
+      "speechSeconds": 16.7,
+      "renderSeconds": 0.8,
+      "offsetFrames": 0,
+      "lseC": 3.362,
+      "lseD": 9.7,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "nl",
+      "speech": "xtts",
+      "engine": "wav2lip",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.96,
+      "speechSeconds": 1.3,
+      "renderSeconds": 1.6,
+      "offsetFrames": 0,
+      "lseC": 8.991,
+      "lseD": 6.626,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "nl",
+      "speech": "xtts",
+      "engine": "sadtalker",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 5.15,
+      "speechSeconds": 1.4,
+      "renderSeconds": 36.6,
+      "offsetFrames": -1,
+      "lseC": 7.375,
+      "lseD": 7.256,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "hi",
+      "speech": "xtts",
+      "engine": "blendshape",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 5.98,
+      "speechSeconds": 16.6,
+      "renderSeconds": 1.0,
+      "offsetFrames": 0,
+      "lseC": 3.302,
+      "lseD": 11.533,
+      "secondsWithinOneFrame": {
+        "within": 4,
+        "of": 6,
+        "percent": 66.7
+      }
+    },
+    {
+      "language": "hi",
+      "speech": "xtts",
+      "engine": "wav2lip",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 7.33,
+      "speechSeconds": 2.0,
+      "renderSeconds": 2.0,
+      "offsetFrames": 0,
+      "lseC": 9.659,
+      "lseD": 5.928,
+      "secondsWithinOneFrame": {
+        "within": 7,
+        "of": 7,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "hi",
+      "speech": "xtts",
+      "engine": "sadtalker",
+      "model": "xtts-v2",
+      "alignment": "mms_fa",
+      "audioSeconds": 5.8,
+      "speechSeconds": 1.5,
+      "renderSeconds": 40.7,
+      "offsetFrames": -1,
+      "lseC": 8.446,
+      "lseD": 6.647,
+      "secondsWithinOneFrame": {
+        "within": 6,
+        "of": 6,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "hin",
+      "speech": "mms",
+      "engine": "blendshape",
+      "model": "mms-tts",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.67,
+      "speechSeconds": 3.8,
+      "renderSeconds": 0.8,
+      "offsetFrames": 0,
+      "lseC": 5.279,
+      "lseD": 10.153,
+      "secondsWithinOneFrame": {
+        "within": 4,
+        "of": 4,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "hin",
+      "speech": "mms",
+      "engine": "wav2lip",
+      "model": "mms-tts",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.74,
+      "speechSeconds": 0.2,
+      "renderSeconds": 1.3,
+      "offsetFrames": 0,
+      "lseC": 9.279,
+      "lseD": 6.313,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "hin",
+      "speech": "mms",
+      "engine": "sadtalker",
+      "model": "mms-tts",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.82,
+      "speechSeconds": 0.3,
+      "renderSeconds": 33.4,
+      "offsetFrames": -1,
+      "lseC": 9.177,
+      "lseD": 6.359,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "swh",
+      "speech": "mms",
+      "engine": "blendshape",
+      "model": "mms-tts",
+      "alignment": "mms_fa",
+      "audioSeconds": 5.15,
+      "speechSeconds": 1.8,
+      "renderSeconds": 0.8,
+      "offsetFrames": 0,
+      "lseC": 3.949,
+      "lseD": 10.796,
+      "secondsWithinOneFrame": {
+        "within": 4,
+        "of": 5,
+        "percent": 80.0
+      }
+    },
+    {
+      "language": "swh",
+      "speech": "mms",
+      "engine": "wav2lip",
+      "model": "mms-tts",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.98,
+      "speechSeconds": 0.1,
+      "renderSeconds": 1.0,
+      "offsetFrames": 0,
+      "lseC": 9.631,
+      "lseD": 6.026,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "swh",
+      "speech": "mms",
+      "engine": "sadtalker",
+      "model": "mms-tts",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.86,
+      "speechSeconds": 0.1,
+      "renderSeconds": 33.7,
+      "offsetFrames": -1,
+      "lseC": 8.911,
+      "lseD": 6.233,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "tam",
+      "speech": "mms",
+      "engine": "blendshape",
+      "model": "mms-tts",
+      "alignment": "mms_fa",
+      "audioSeconds": 6.26,
+      "speechSeconds": 2.7,
+      "renderSeconds": 0.8,
+      "offsetFrames": 0,
+      "lseC": 5.314,
+      "lseD": 7.318,
+      "secondsWithinOneFrame": {
+        "within": 4,
+        "of": 6,
+        "percent": 66.7
+      }
+    },
+    {
+      "language": "tam",
+      "speech": "mms",
+      "engine": "wav2lip",
+      "model": "mms-tts",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.8,
+      "speechSeconds": 0.1,
+      "renderSeconds": 1.0,
+      "offsetFrames": 0,
+      "lseC": 9.362,
+      "lseD": 6.708,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    },
+    {
+      "language": "tam",
+      "speech": "mms",
+      "engine": "sadtalker",
+      "model": "mms-tts",
+      "alignment": "mms_fa",
+      "audioSeconds": 4.85,
+      "speechSeconds": 0.1,
+      "renderSeconds": 34.0,
+      "offsetFrames": -1,
+      "lseC": 9.848,
+      "lseD": 6.007,
+      "secondsWithinOneFrame": {
+        "within": 5,
+        "of": 5,
+        "percent": 100.0
+      }
+    }
+  ],
+  "summary": {
+    "blendshape": {
+      "languagesScored": 14,
+      "clips": 14,
+      "failed": 0,
+      "offsetZeroClips": 14,
+      "offsetWithinOne": 14,
+      "meanPercentSecondsWithinOne": 69.2,
+      "pooledPercentSecondsWithinOne": 69.1,
+      "meanLseC": 3.27
+    },
+    "wav2lip": {
+      "languagesScored": 14,
+      "clips": 14,
+      "failed": 0,
+      "offsetZeroClips": 14,
+      "offsetWithinOne": 14,
+      "meanPercentSecondsWithinOne": 100.0,
+      "pooledPercentSecondsWithinOne": 100.0,
+      "meanLseC": 8.91
+    },
+    "sadtalker": {
+      "languagesScored": 14,
+      "clips": 14,
+      "failed": 0,
+      "offsetZeroClips": 0,
+      "offsetWithinOne": 14,
+      "meanPercentSecondsWithinOne": 100.0,
+      "pooledPercentSecondsWithinOne": 100.0,
+      "meanLseC": 8.19
+    }
+  }
+}
