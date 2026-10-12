@@ -490,6 +490,61 @@ class BackgroundRenderTests(RenderCase):
         self.assertEqual(self.segmenter.calls, 0)
 
 
+class AppearanceRenderTests(RenderCase):
+    """Lighting, grade and standing expression reach the video and are reported (N-15, R-44)."""
+
+    def setUp(self):
+        super().setUp()
+        self.segmenter = FakeSegmenter()
+        patcher = mock.patch("render_engine.shared_segmenter", return_value=self.segmenter)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.wav(1.0)
+
+    def first_frame(self, result):
+        return next(video_io.read_frames(result.output_path)).astype(float)
+
+    @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg / ffprobe not installed")
+    def test_brightness_reaches_the_video_and_the_result_and_the_manifest_say_so(self):
+        base = render_engine.render_job(self.job(jobId="plain"), store=self.store, label=False)
+        bright = render_engine.render_job(
+            self.job(jobId="bright", appearance={"brightness": 0.8}), store=self.store, label=False)
+        self.assertIsNone(base.appearance)
+        self.assertEqual(bright.appearance, {"brightness": 0.8})
+        self.assertGreater(self.first_frame(bright).mean(), self.first_frame(base).mean() + 15)
+        # The signed manifest records the edit, so the provenance of the picture is not silent about it.
+        document = json.loads(Path(bright.manifest["path"]).read_text())
+        self.assertEqual(document["processing"]["appearance"], {"brightness": 0.8})
+        plain = json.loads(Path(base.manifest["path"]).read_text())
+        self.assertIsNone(plain["processing"]["appearance"])
+
+    @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg / ffprobe not installed")
+    def test_a_standing_expression_and_head_roll_change_the_frames(self):
+        base = render_engine.render_job(self.job(jobId="plain", motionIntensity=0.0), store=self.store, label=False)
+        posed = render_engine.render_job(
+            self.job(jobId="posed", motionIntensity=0.0, appearance={"headRoll": 8, "expression": {"browInnerUp": 0.9}}),
+            store=self.store, label=False)
+        self.assertGreater(np.abs(self.first_frame(posed) - self.first_frame(base)).mean(), 0.5)
+        self.assertEqual(posed.appearance, {"headRoll": 8.0, "expression": {"browInnerUp": 0.9}})
+
+    @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg / ffprobe not installed")
+    def test_an_empty_appearance_is_the_same_as_none(self):
+        # Same job id on purpose: the id seeds the blinks and the head drift, so only the look differs.
+        a = render_engine.render_job(self.job(jobId="same"), store=self.store, label=False, output_path=self.outputs / "a.mp4")
+        b = render_engine.render_job(self.job(jobId="same", appearance={}), store=self.store, label=False,
+                                     output_path=self.outputs / "b.mp4")
+        self.assertIsNone(b.appearance)
+        self.assertTrue(np.array_equal(self.first_frame(a), self.first_frame(b)))
+
+    @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg / ffprobe not installed")
+    def test_the_background_blur_uses_the_person_mask(self):
+        before = self.segmenter.calls
+        result = render_engine.render_job(
+            self.job(jobId="blur", appearance={"backgroundBlur": 0.7}), store=self.store, label=False)
+        self.assertGreater(self.segmenter.calls, before)
+        self.assertEqual(result.appearance, {"backgroundBlur": 0.7})
+
+
 class FakeVideoMarker:
     """Stands in for VideoSeal: passes frames through, remembers the id, reads back what it is told to."""
 

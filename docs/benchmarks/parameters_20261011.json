@@ -1,0 +1,715 @@
+{
+  "date": "2026-10-11T14:21:41+00:00",
+  "device": "cpu",
+  "results": [
+    {
+      "parameter": "(control) repeat",
+      "setting": "same input",
+      "metric": "mel distance",
+      "baseline": 0.0,
+      "value": 0.0862,
+      "changesOutput": true,
+      "note": "noise floor; durations 4.975 vs 4.975"
+    },
+    {
+      "parameter": "speed",
+      "setting": "1.5",
+      "metric": "duration s",
+      "baseline": 4.975,
+      "value": 3.3167,
+      "changesOutput": true,
+      "note": "faster = shorter"
+    },
+    {
+      "parameter": "speed",
+      "setting": "0.7",
+      "metric": "duration s",
+      "baseline": 4.975,
+      "value": 7.1071,
+      "changesOutput": true,
+      "note": "faster = shorter"
+    },
+    {
+      "parameter": "pitch",
+      "setting": "1.5",
+      "metric": "median f0 Hz",
+      "baseline": 193.5484,
+      "value": 282.3529,
+      "changesOutput": true,
+      "note": "higher = higher"
+    },
+    {
+      "parameter": "pitch",
+      "setting": "0.7",
+      "metric": "median f0 Hz",
+      "baseline": 193.5484,
+      "value": 149.0683,
+      "changesOutput": true,
+      "note": "higher = higher"
+    },
+    {
+      "parameter": "emotion",
+      "setting": "joy",
+      "metric": "dur/rms/f0",
+      "baseline": 4.975,
+      "value": 4.5227,
+      "changesOutput": true,
+      "note": "rms x1.15, f0 x1.18"
+    },
+    {
+      "parameter": "emotion",
+      "setting": "anger",
+      "metric": "dur/rms/f0",
+      "baseline": 4.975,
+      "value": 4.364,
+      "changesOutput": true,
+      "note": "rms x1.35, f0 x1.08"
+    },
+    {
+      "parameter": "emotion",
+      "setting": "sorrow",
+      "metric": "dur/rms/f0",
+      "baseline": 4.975,
+      "value": 5.7849,
+      "changesOutput": true,
+      "note": "rms x0.82, f0 x0.96"
+    },
+    {
+      "parameter": "emotion",
+      "setting": "authority",
+      "metric": "dur/rms/f0",
+      "baseline": 4.975,
+      "value": 5.3495,
+      "changesOutput": true,
+      "note": "rms x1.12, f0 x0.95"
+    },
+    {
+      "parameter": "emotion",
+      "setting": "calm",
+      "metric": "dur/rms/f0",
+      "baseline": 4.975,
+      "value": 5.4076,
+      "changesOutput": true,
+      "note": "rms x0.92, f0 x1.03"
+    },
+    {
+      "parameter": "emotion",
+      "setting": "excitement",
+      "metric": "dur/rms/f0",
+      "baseline": 4.975,
+      "value": 4.2161,
+      "changesOutput": true,
+      "note": "rms x1.28, f0 x1.17"
+    },
+    {
+      "parameter": "emotionIntensity",
+      "setting": "0.3 vs 1.0",
+      "metric": "rms",
+      "baseline": 0.0547,
+      "value": 0.0669,
+      "changesOutput": true,
+      "note": "weaker emotion sits between neutral and full"
+    },
+    {
+      "parameter": "style",
+      "setting": "dialogue",
+      "metric": "mel distance",
+      "baseline": 0.0862,
+      "value": 4.9956,
+      "changesOutput": true,
+      "note": "vs noise floor"
+    },
+    {
+      "parameter": "style",
+      "setting": "expressive",
+      "metric": "mel distance",
+      "baseline": 0.0862,
+      "value": 0.0845,
+      "changesOutput": false,
+      "note": "vs noise floor"
+    },
+    {
+      "parameter": "style",
+      "setting": "narration",
+      "metric": "mel distance",
+      "baseline": 0.0862,
+      "value": 0.0841,
+      "changesOutput": false,
+      "note": "vs noise floor"
+    },
+    {
+      "parameter": "quality",
+      "setting": "fast",
+      "metric": "mel distance",
+      "baseline": 0.0862,
+      "value": 0.0876,
+      "changesOutput": false,
+      "note": "vs 'balanced', vs noise floor"
+    },
+    {
+      "parameter": "quality",
+      "setting": "high",
+      "metric": "-",
+      "baseline": null,
+      "value": null,
+      "changesOutput": null,
+      "note": "cannot run here: ModelWeightsMissing: higgs-tts-2 is not available: cannot run on this stack: its config declares model type 'higgs_audio_v2', which the pinned transformers (<4.48, required by Coqui"
+    },
+    {
+      "parameter": "language",
+      "setting": "es",
+      "metric": "duration s",
+      "baseline": 4.975,
+      "value": 4.336,
+      "changesOutput": true,
+      "note": "different language, different speech"
+    },
+    {
+      "parameter": "(control) repeat",
+      "setting": "same job",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 0.0,
+      "changesOutput": true,
+      "note": "rendering is deterministic"
+    },
+    {
+      "parameter": "emotionVector.happy",
+      "setting": "{'happy': 1.0}",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 1.0114,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "emotionVector.neutral",
+      "setting": "{'neutral': 0.0}",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 0.0,
+      "changesOutput": false,
+      "note": ""
+    },
+    {
+      "parameter": "emotionVector.joy",
+      "setting": "{'joy': 1.0}",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 1.3066,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "emotionVector.anger",
+      "setting": "{'anger': 1.0}",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 1.71,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "emotionVector.sorrow",
+      "setting": "{'sorrow': 1.0}",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 1.7339,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "emotionVector.authority",
+      "setting": "{'authority': 1.0}",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 1.1724,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "emotionVector.calm",
+      "setting": "{'calm': 1.0}",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 0.9191,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "emotionVector.excitement",
+      "setting": "{'excitement': 1.0}",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 1.6558,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "emotionVector.eyeblinkRate",
+      "setting": "0.0",
+      "metric": "blink count",
+      "baseline": 2.0,
+      "value": 0.0,
+      "changesOutput": true,
+      "note": "more rate = more blinks"
+    },
+    {
+      "parameter": "emotionVector.eyeblinkRate",
+      "setting": "5.0",
+      "metric": "blink count",
+      "baseline": 2.0,
+      "value": 6.0,
+      "changesOutput": true,
+      "note": "more rate = more blinks"
+    },
+    {
+      "parameter": "background.color",
+      "setting": "#0b3d91",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 33.153,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "background.imageUrl",
+      "setting": "gradient png",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 36.7293,
+      "changesOutput": true,
+      "note": ""
+    },
+    {
+      "parameter": "renderQuality",
+      "setting": "1080P_HQ on 512 px photo",
+      "metric": "width px",
+      "baseline": 512.0,
+      "value": 1080.0,
+      "changesOutput": null,
+      "note": "no effect: a photo is never enlarged (see T8.8)"
+    },
+    {
+      "parameter": "renderQuality",
+      "setting": "1080P_HQ on 1536 px photo",
+      "metric": "width px",
+      "baseline": 512.0,
+      "value": 1536.0,
+      "changesOutput": true,
+      "note": "effective only for photos larger than 512 px"
+    },
+    {
+      "parameter": "targetFps",
+      "setting": "12",
+      "metric": "frame count",
+      "baseline": 125.0,
+      "value": 60.0,
+      "changesOutput": true,
+      "note": "fewer fps = fewer frames"
+    },
+    {
+      "parameter": "appearance.brightness",
+      "setting": "+0.6",
+      "metric": "mean lightness",
+      "baseline": 104.1199,
+      "value": 141.6071,
+      "changesOutput": true,
+      "note": "brighter"
+    },
+    {
+      "parameter": "appearance.brightness",
+      "setting": "-0.6",
+      "metric": "mean lightness",
+      "baseline": 104.1199,
+      "value": 68.5821,
+      "changesOutput": true,
+      "note": "darker"
+    },
+    {
+      "parameter": "appearance.contrast",
+      "setting": "+0.7",
+      "metric": "lightness spread",
+      "baseline": 48.4667,
+      "value": 68.2722,
+      "changesOutput": true,
+      "note": "wider spread"
+    },
+    {
+      "parameter": "appearance.gamma",
+      "setting": "1.7",
+      "metric": "mean lightness",
+      "baseline": 104.1199,
+      "value": 144.7892,
+      "changesOutput": true,
+      "note": "mid-tones lifted"
+    },
+    {
+      "parameter": "appearance.saturation",
+      "setting": "-1.0",
+      "metric": "channel spread",
+      "baseline": 24.6443,
+      "value": 0.0437,
+      "changesOutput": true,
+      "note": "towards grey"
+    },
+    {
+      "parameter": "appearance.warmth",
+      "setting": "+0.7",
+      "metric": "red minus blue",
+      "baseline": 13.5263,
+      "value": 42.1774,
+      "changesOutput": true,
+      "note": "warmer"
+    },
+    {
+      "parameter": "appearance.tint",
+      "setting": "+0.7",
+      "metric": "mean green",
+      "baseline": 101.5556,
+      "value": 90.7301,
+      "changesOutput": true,
+      "note": "towards magenta"
+    },
+    {
+      "parameter": "appearance.sharpness",
+      "setting": "1.0",
+      "metric": "texture (Laplacian var)",
+      "baseline": 68.4337,
+      "value": 331.9068,
+      "changesOutput": true,
+      "note": "more fine detail"
+    },
+    {
+      "parameter": "appearance.skinSmoothing",
+      "setting": "1.0",
+      "metric": "cheek texture",
+      "baseline": 23.3276,
+      "value": 14.2102,
+      "changesOutput": true,
+      "note": "less texture on the cheeks"
+    },
+    {
+      "parameter": "appearance.vignette",
+      "setting": "1.0",
+      "metric": "corner / centre lightness",
+      "baseline": 1.027,
+      "value": 0.6245,
+      "changesOutput": true,
+      "note": "darker corners"
+    },
+    {
+      "parameter": "appearance.backgroundBlur",
+      "setting": "1.0 over a noise background",
+      "metric": "background texture",
+      "baseline": 38.211,
+      "value": 4.6044,
+      "changesOutput": true,
+      "note": "background softened, person untouched by design"
+    },
+    {
+      "parameter": "appearance.autoLighting",
+      "setting": "lamp on one side",
+      "metric": "left/right lightness gap",
+      "baseline": 51.1812,
+      "value": 35.7442,
+      "changesOutput": true,
+      "note": "the lopsided picture is evened out (measured on the photo; the render path calls the same function)"
+    },
+    {
+      "parameter": "appearance.autoLighting",
+      "setting": "on the demo photo",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 16.3463,
+      "changesOutput": true,
+      "note": "the correction reaches the rendered video"
+    },
+    {
+      "parameter": "appearance.headRoll",
+      "setting": "8.0",
+      "metric": "face roll",
+      "baseline": 0.781,
+      "value": -6.442,
+      "changesOutput": true,
+      "note": "head moved as asked (landmarks / face box)"
+    },
+    {
+      "parameter": "appearance.headShiftX",
+      "setting": "0.06",
+      "metric": "face cx",
+      "baseline": 354.1875,
+      "value": 370.25,
+      "changesOutput": true,
+      "note": "head moved as asked (landmarks / face box)"
+    },
+    {
+      "parameter": "appearance.headShiftY",
+      "setting": "0.06",
+      "metric": "face cy",
+      "baseline": 323.75,
+      "value": 339.625,
+      "changesOutput": true,
+      "note": "head moved as asked (landmarks / face box)"
+    },
+    {
+      "parameter": "appearance.headScale",
+      "setting": "0.08",
+      "metric": "face height",
+      "baseline": 269.75,
+      "value": 292.125,
+      "changesOutput": true,
+      "note": "head moved as asked (landmarks / face box)"
+    },
+    {
+      "parameter": "motionIntensity",
+      "setting": "0 vs 2.0",
+      "metric": "head wander (px + deg)",
+      "baseline": 2.8009,
+      "value": 11.8101,
+      "changesOutput": true,
+      "note": "lively head moves more than a still one"
+    },
+    {
+      "parameter": "appearance.expression.jawOpen",
+      "setting": "0.8",
+      "metric": "mouthOpen",
+      "baseline": 8.5,
+      "value": 34.625,
+      "changesOutput": true,
+      "note": "increases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.mouthClose",
+      "setting": "0.8",
+      "metric": "mouthOpen",
+      "baseline": 8.5,
+      "value": 4.75,
+      "changesOutput": true,
+      "note": "decreases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.mouthFunnel",
+      "setting": "0.8",
+      "metric": "mouthWidth",
+      "baseline": 73.0,
+      "value": 67.125,
+      "changesOutput": true,
+      "note": "decreases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.mouthPucker",
+      "setting": "0.8",
+      "metric": "mouthWidth",
+      "baseline": 73.0,
+      "value": 60.375,
+      "changesOutput": true,
+      "note": "decreases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.mouthRollLower",
+      "setting": "0.8",
+      "metric": "mouthOpen",
+      "baseline": 8.5,
+      "value": 7.625,
+      "changesOutput": true,
+      "note": "decreases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.mouthRollUpper",
+      "setting": "0.8",
+      "metric": "mouthOpen",
+      "baseline": 8.5,
+      "value": 7.375,
+      "changesOutput": true,
+      "note": "decreases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.mouthSmile",
+      "setting": "0.8",
+      "metric": "cornerLift",
+      "baseline": -3.125,
+      "value": 4.75,
+      "changesOutput": true,
+      "note": "increases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.mouthFrown",
+      "setting": "0.8",
+      "metric": "cornerLift",
+      "baseline": -3.125,
+      "value": -9.4375,
+      "changesOutput": true,
+      "note": "decreases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.mouthStretch",
+      "setting": "0.8",
+      "metric": "mouthWidth",
+      "baseline": 73.0,
+      "value": 82.375,
+      "changesOutput": true,
+      "note": "increases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.mouthDimple",
+      "setting": "0.8",
+      "metric": "mouthWidth",
+      "baseline": 73.0,
+      "value": 77.5,
+      "changesOutput": true,
+      "note": "increases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.mouthPress",
+      "setting": "0.8",
+      "metric": "mouthOpen",
+      "baseline": 8.5,
+      "value": 6.5,
+      "changesOutput": true,
+      "note": "decreases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.mouthUpperUp",
+      "setting": "0.8",
+      "metric": "mouthOpen",
+      "baseline": 8.5,
+      "value": 15.0,
+      "changesOutput": true,
+      "note": "increases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.mouthLowerDown",
+      "setting": "0.8",
+      "metric": "mouthOpen",
+      "baseline": 8.5,
+      "value": 13.125,
+      "changesOutput": true,
+      "note": "increases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.tongueOut",
+      "setting": "0.8",
+      "metric": "pixel diff",
+      "baseline": 0.0,
+      "value": 0.4716,
+      "changesOutput": true,
+      "note": "painted inside the open mouth: judged by picture difference, not geometry"
+    },
+    {
+      "parameter": "appearance.expression.eyeBlinkLeft",
+      "setting": "0.8",
+      "metric": "eyeL",
+      "baseline": 15.25,
+      "value": 8.375,
+      "changesOutput": true,
+      "note": "decreases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.eyeBlinkRight",
+      "setting": "0.8",
+      "metric": "eyeR",
+      "baseline": 14.625,
+      "value": 7.375,
+      "changesOutput": true,
+      "note": "decreases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.eyeSquintLeft",
+      "setting": "0.8",
+      "metric": "eyeL",
+      "baseline": 15.25,
+      "value": 14.0,
+      "changesOutput": true,
+      "note": "decreases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.eyeSquintRight",
+      "setting": "0.8",
+      "metric": "eyeR",
+      "baseline": 14.625,
+      "value": 13.125,
+      "changesOutput": true,
+      "note": "decreases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.eyeWideLeft",
+      "setting": "0.8",
+      "metric": "eyeL",
+      "baseline": 15.25,
+      "value": 16.25,
+      "changesOutput": true,
+      "note": "increases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.eyeWideRight",
+      "setting": "0.8",
+      "metric": "eyeR",
+      "baseline": 14.625,
+      "value": 15.375,
+      "changesOutput": true,
+      "note": "increases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.browInnerUp",
+      "setting": "0.8",
+      "metric": "browInnerL",
+      "baseline": 17.25,
+      "value": 25.5,
+      "changesOutput": true,
+      "note": "increases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.browOuterUpLeft",
+      "setting": "0.8",
+      "metric": "browOuterL",
+      "baseline": 13.375,
+      "value": 18.125,
+      "changesOutput": true,
+      "note": "increases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.browOuterUpRight",
+      "setting": "0.8",
+      "metric": "browOuterR",
+      "baseline": 13.5,
+      "value": 17.125,
+      "changesOutput": true,
+      "note": "increases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.browDownLeft",
+      "setting": "0.8",
+      "metric": "browMidL",
+      "baseline": 23.875,
+      "value": 19.625,
+      "changesOutput": true,
+      "note": "decreases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.browDownRight",
+      "setting": "0.8",
+      "metric": "browMidR",
+      "baseline": 24.625,
+      "value": 19.5,
+      "changesOutput": true,
+      "note": "decreases by >= 0.5 px (landmarks on the rendered frames)"
+    },
+    {
+      "parameter": "appearance.expression.browInnerUp",
+      "setting": "0.8 (right)",
+      "metric": "browInnerR",
+      "baseline": 17.0,
+      "value": 25.0,
+      "changesOutput": true,
+      "note": "the other inner brow also rises"
+    }
+  ],
+  "notMeasured": [
+    "age",
+    "presentation",
+    "hair",
+    "glasses (Stable Diffusion; judged by a person, see M-08)",
+    "seed, steps, attempts (generation controls, not appearance)"
+  ]
+}

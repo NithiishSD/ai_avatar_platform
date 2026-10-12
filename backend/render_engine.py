@@ -64,6 +64,7 @@ import numpy as np
 
 import audit_log
 import gpu_utils
+import look
 import manifest as manifest_module
 import sadtalker_engine
 import video_io
@@ -241,6 +242,8 @@ class RenderResult:
     unknown_visemes: Dict[str, int] = field(default_factory=dict)  # viseme -> times it fell back to rest
     peak_vram_mb: Optional[int] = None    # measured only for the GPU engines (wav2lip, sadtalker)
     background: Optional[str] = None      # a short description of a replaced background, or None
+    # The appearance settings that were applied (only the fields the client set), or None (N-15, R-44).
+    appearance: Optional[Dict[str, object]] = None
     # Set when a small photo was enlarged with super-resolution to reach the 1080P_HQ box (T8.8).
     super_resolution: Optional[Dict[str, object]] = None
     # What the invisible video watermark did and where the signed manifest is (both always present).
@@ -276,6 +279,7 @@ class RenderResult:
             "unknownVisemes": self.unknown_visemes,
             "peakVramMb": self.peak_vram_mb,
             "background": self.background,
+            "appearance": self.appearance,
             "superResolution": self.super_resolution,
             "watermark": self.watermark,
             "manifest": self.manifest,
@@ -424,6 +428,12 @@ def apply_background(image: np.ndarray, spec: BackgroundSpec) -> Tuple[np.ndarra
             )
         composited = segmenter.replace_background(image, background)
     return composited, warnings
+
+
+def _person_mask(image: np.ndarray) -> np.ndarray:
+    """The 0..1 person mask for ``look.apply_look``'s background blur, under the shared model lock."""
+    with FACE_ENGINE_LOCK:
+        return shared_segmenter().foreground_mask(image)
 
 
 def _describe_background(spec: Optional[BackgroundSpec]) -> Optional[str]:
@@ -777,6 +787,14 @@ def render_job(
     # Analysed at output size, so the rig's landmarks are in output pixels.
     with FACE_ENGINE_LOCK:
         analysis: FaceAnalysis = shared_face_engine().analyze(image)
+    # Lighting, grade and soft focus (R-44, N-15) are baked into the still photo once, after the face
+    # has been found (landmarks do not move with a colour change) and before the rig is built from it.
+    appearance = job.appearance if job.appearance is not None and not job.appearance.is_empty() else None
+    if appearance is not None:
+        image, look_warnings = look.apply_look(
+            image, appearance, face_points=analysis.pixel_landmarks(), foreground=_person_mask,
+        )
+        warnings.extend(look_warnings)
     animator = PortraitAnimator(image, analysis)
 
     import soundfile as sf
@@ -805,6 +823,8 @@ def render_job(
         # Gentler head motion under Wav2Lip: it repaints the mouth inside a box found once on the still
         # photo, so a large nod would carry the mouth out of that box.
         motion_intensity=(1.0 if job.motion_intensity is None else job.motion_intensity) * (0.6 if engine_name == ENGINE_WAV2LIP else 1.0),
+        expression_offsets=look.expression_offsets(appearance),
+        head_offset=look.head_offset(appearance),
     )
     # A viseme the animator does not know is not fatal; it is counted and reported, not hidden.
     if track.unknown_visemes:
@@ -926,6 +946,7 @@ def render_job(
             "width": width, "height": height, "fps": job.target_fps, "frameCount": total,
             "durationSeconds": round(duration, 3), "engine": engine_name, "quality": job.render_quality.value,
             "background": _describe_background(job.background), "label": bool(label),
+            "appearance": look.describe(appearance),
             "superResolution": super_res,
         },
     )
@@ -964,6 +985,7 @@ def render_job(
         unknown_visemes={} if sadtalker_run else track.unknown_visemes,
         peak_vram_mb=peak_vram,
         background=_describe_background(job.background),
+        appearance=look.describe(appearance),
         super_resolution=super_res,
         watermark=watermark_result,
         manifest=manifest_info,

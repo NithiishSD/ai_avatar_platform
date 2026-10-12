@@ -213,9 +213,11 @@ class RenderRouteTests(VisionApiCase):
     def setUp(self):
         super().setUp()
         self.ran = []
+        self.jobs = {}
 
         def runner(job, engine, report):
             self.ran.append((job.job_id, engine))
+            self.jobs[job.job_id] = job
             report(1, 1)
             return {"engine": engine, "videoUrl": f"/outputs/renders/{job.job_id}.mp4", "outputPath": "x.mp4"}
 
@@ -376,6 +378,31 @@ class RenderRouteTests(VisionApiCase):
         self.assertEqual(prepare.call_args[0][1:], ("speaker-recorded", None, "en"))
         self.assertFalse(prepare.call_args[0][0].exists())     # the upload's temp file is removed
         self.assertEqual(self.wait(body["jobId"])["status"], "COMPLETED")
+
+    def test_voice_to_avatar_carries_the_look_into_the_render_job(self):
+        import voice_to_avatar
+
+        supplied = voice_to_avatar.SuppliedSpeech(
+            audio_path=self.outputs / "speech.wav", duration_seconds=1.0, transcript="hello", transcript_source="asr",
+            language="en", phoneme_timestamps=[{"phoneme": "AA", "viseme": "viseme_aa", "startMs": 0, "endMs": 500}],
+            alignment_method="mms_fa", sha256="ab" * 32)
+        look = '{"brightness": 0.4, "headRoll": 5, "expression": {"browInnerUp": 0.5}}'
+        with mock.patch("voice_to_avatar.prepare", return_value=supplied):
+            response = self.v2a(language="en", appearance=look)
+        self.assertEqual(response.status_code, 202, response.text)
+        self.assertEqual(self.wait(response.json()["jobId"])["status"], "COMPLETED")
+        spec = self.jobs[response.json()["jobId"]].appearance
+        self.assertAlmostEqual(spec.brightness, 0.4)
+        self.assertAlmostEqual(spec.head_roll, 5.0)
+        self.assertAlmostEqual(spec.expression.browInnerUp, 0.5)
+
+    def test_voice_to_avatar_refuses_a_bad_look_before_reading_the_audio(self):
+        with mock.patch("voice_to_avatar.prepare") as prepare:
+            for bad in ('{"brightness": 9}', '{"expression": {"cheekPuff": 1}}', "not json"):
+                response = self.v2a(appearance=bad)
+                self.assertEqual(response.status_code, 422, bad)
+                self.assertIn("appearance", response.json()["detail"])
+        prepare.assert_not_called()
 
     def test_voice_to_avatar_refuses_an_unusable_face_before_reading_the_audio(self):
         with mock.patch("voice_to_avatar.prepare") as prepare:

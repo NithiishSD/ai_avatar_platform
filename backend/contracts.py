@@ -180,6 +180,97 @@ class BackgroundSpec(BaseModel):
         return self
 
 
+class ExpressionOffsets(BaseModel):
+    """
+    Standing face-shape offsets added to every frame of a render or live session (N-15). Each is
+    0..1; the speech and the chosen emotion still move the face on top, and ``None`` leaves that
+    shape alone.
+
+    Only shapes the renderer actually moves (face_warp.py) are listed: the mouth shapes are applied
+    symmetrically, so each is one parameter; the eyes and brows are left/right independent. Wire
+    names are the ARKit names (the subject's left is the right-hand side of the image).
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    jawOpen: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    mouthClose: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    mouthFunnel: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    mouthPucker: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    mouthRollLower: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    mouthRollUpper: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    mouthSmile: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    mouthFrown: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    mouthStretch: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    mouthDimple: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    mouthPress: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    mouthUpperUp: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    mouthLowerDown: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    tongueOut: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    eyeBlinkLeft: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    eyeBlinkRight: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    eyeSquintLeft: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    eyeSquintRight: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    eyeWideLeft: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    eyeWideRight: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    browInnerUp: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    browOuterUpLeft: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    browOuterUpRight: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    browDownLeft: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    browDownRight: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
+# The shape names, read from the model so there is one list and it cannot drift.
+EXPRESSION_SHAPES = tuple(ExpressionOffsets.model_fields)
+
+
+class AppearanceSpec(BaseModel):
+    """
+    Optional render and live setting: how the picture is lit and graded, where the head sits, and a
+    standing expression (N-15, R-44). An *optional field added to the frozen contract*: a job without
+    it renders exactly as before, and so does a spec whose fields are all left out.
+
+    Lighting and grading are applied once to the still photo before it is animated, so they cost
+    nothing per frame. Head pose offsets move the head and shoulders by a fixed amount on top of the
+    natural motion; units are the same as the renderer's pose channels (degrees, and fractions of a
+    face height).
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    # --- lighting and colour (R-44) -------------------------------------
+    # Fixes uneven or flat lighting and a colour cast before any manual grade: local contrast
+    # equalisation on lightness plus grey-world white balance.
+    auto_lighting: Optional[bool] = Field(default=None, alias="autoLighting")
+    brightness: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
+    contrast: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
+    gamma: Optional[float] = Field(default=None, ge=0.5, le=2.0)
+    saturation: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
+    # Negative is cooler (bluer), positive warmer (redder).
+    warmth: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
+    # Negative is greener, positive more magenta.
+    tint: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
+    sharpness: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    skin_smoothing: Optional[float] = Field(default=None, alias="skinSmoothing", ge=0.0, le=1.0)
+    vignette: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    background_blur: Optional[float] = Field(default=None, alias="backgroundBlur", ge=0.0, le=1.0)
+    # --- head pose offsets ----------------------------------------------
+    head_roll: Optional[float] = Field(default=None, alias="headRoll", ge=-15.0, le=15.0)
+    head_shift_x: Optional[float] = Field(default=None, alias="headShiftX", ge=-0.15, le=0.15)
+    head_shift_y: Optional[float] = Field(default=None, alias="headShiftY", ge=-0.15, le=0.15)
+    head_scale: Optional[float] = Field(default=None, alias="headScale", ge=-0.15, le=0.15)
+    # --- standing expression --------------------------------------------
+    expression: Optional[ExpressionOffsets] = None
+
+    def is_empty(self) -> bool:
+        """True when no field is set, so a caller can skip all appearance work."""
+        def has_value(node: Any) -> bool:
+            # A nested model with every field None dumps as {} and must not count as "set".
+            return any(has_value(v) for v in node.values()) if isinstance(node, dict) else node is not None
+
+        return not has_value(self.model_dump(exclude_none=True))
+
+
 class AvatarRenderJob(BaseModel):
     """
     **The frozen contract.** Everything the renderer needs to make one video.
@@ -220,6 +311,8 @@ class AvatarRenderJob(BaseModel):
     # How much the head and shoulders move while talking (I-01): 0 = a still photo, 1 = natural, up to
     # 2 = lively. Optional and absent by default (the renderer then uses 1), so older jobs are unchanged.
     motion_intensity: Optional[float] = Field(default=None, alias="motionIntensity", ge=0.0, le=2.0)
+    # Lighting, grade, head pose and standing expression (N-15, R-44); None leaves the photo as it is.
+    appearance: Optional[AppearanceSpec] = None
 
     # A field_validator runs on one field. The @classmethod is required by
     # Pydantic v2 (the validator belongs to the class, not an instance - it runs
@@ -686,6 +779,8 @@ class LiveStartMessage(BaseModel):
     voice: Optional[str] = Field(default=None, max_length=32)
     # Head-and-shoulder movement, as for a file render (0 still .. 2 lively).
     motion_intensity: float = Field(default=1.0, alias="motionIntensity", ge=0.0, le=2.0)
+    # Lighting, grade, head pose and standing expression, as for a file render.
+    appearance: Optional[AppearanceSpec] = None
 
 
 class LiveSayMessage(BaseModel):
@@ -703,6 +798,19 @@ class LiveControlMessage(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     type: Literal["interrupt", "stop", "audio_end"]
+
+
+class LiveAppearanceMessage(BaseModel):
+    """
+    Change the look of a running live session (N-15, real-time preview): lighting, grade, head pose
+    and standing expression. The server re-applies the spec to the session's photo and answers with an
+    ``appearance`` message and one still preview frame. ``appearance`` null clears every setting.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    type: Literal["appearance"]
+    appearance: Optional[AppearanceSpec] = None
 
 
 class LiveAudioStartMessage(BaseModel):

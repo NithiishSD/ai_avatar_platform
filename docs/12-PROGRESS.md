@@ -72,6 +72,8 @@ records what was verified live, with the real command and result.
 | T9.4 | **Done (11 Oct): Celery/Redis path run for the first time; N-03 and N-08 hold on it** | (this commit) |
 | T9.5 | **Done (11 Oct): live first audio 92 ms warm, first session 128 ms (was 8.1 s); N-19 met on GPU** (D-69) | (this commit) |
 | T9.6 | **Done (11 Oct): photo to avatar 4.3-5.5 s warm on GPU; N-14 met** | (this commit) |
+| T9.7 | **Done (11 Oct): `appearance` on render jobs and live sessions; 51 verified visual parameters (N-15 count met); lighting correction built (R-44); a person's look waits on M-14** (D-70, D-71) | (this commit) |
+| T9.8 | **Done (11 Oct): real-time preview over the live socket, sliders on the live and create screens, E2E on a real session** | (this commit) |
 
 **Remaining order (owner asked for continuous building, small tasks first; the session is cleared between batches):**
 M5: T5.1 audio watermark -> T5.2 video watermark + signed manifest -> T5.3 verify endpoint -> T5.4 audit trail ->
@@ -1662,4 +1664,36 @@ over before the aligner starts; an aligner failure is refused, not hidden); a pl
 
 Gates: `scripts/check.sh` -> ruff and pyrefly clean, **913 tests OK**; `scripts/check.sh e2e` **18 passed (1.7 min)**. Not run in this batch: `docker compose up --build`
 (the image has not been rebuilt since these changes) and the dependency audits.
+
+### 2026-10-11 (third part) — T9.7 / T9.8: appearance controls with a live preview (N-15, R-44)
+
+**What was missing.** The parameter catalogue of 8 Oct had 73-ish rows of which 10 visual ones were verified; nothing let a client hold a face shape, set lighting, or move the head,
+and lighting correction (R-44) was not built. The renderer already moved 26 independent face shapes, they just had no standing input.
+
+**Built.** `AppearanceSpec` (optional on `AvatarRenderJob` and `LiveStartMessage`, so the frozen contract only grows): autoLighting, brightness, contrast, gamma, saturation,
+warmth, tint, sharpness, skinSmoothing, vignette, backgroundBlur, headRoll / headShiftX / headShiftY / headScale and `expression` (25 shapes, `ExpressionOffsets`).
+`backend/look.py` applies the look to the still photo once, between face detection and building the rig; offsets go into `build_animation(expression_offsets=,
+head_offset=)`. A skipped control (blur without a segmenter, smoothing without landmarks) is a warning, never silent. The result, the signed manifest (`processing.appearance`)
+and the live `ready` message report what was applied. `voice-to-avatar` takes `appearance` as a JSON form field and refuses a bad one before reading the upload.
+
+**Live preview.** A `{"type": "appearance", "appearance": {...}|null}` message re-applies the look to the running session (`LiveSession.set_appearance` rebuilds the animator from the
+untouched photo and the stored landmarks) and returns an `appearance` reply plus a `KIND_PREVIEW` still; the session also sends a still after `ready`. The studio builds its
+sliders from `GET /api/v1/parameters` (`LookControls.jsx`, `look.js`), debounced 150 ms. A race found by the E2E and fixed: the still was drawn at once and then painted over by speech
+frames that were sent but still playing, so it now joins the draw queue after the newest queued frame.
+
+**Measured** (`scripts/measure_parameters.py`, CPU, `demo`, deterministic: the repeat control differs by 0): 76 checks, 72 as asked; the 4 that did not are the old ones
+(`style` expressive / narration, `quality fast`, `emotionVector.neutral`). All 40 new rows pass on the final code. Three needed work after the first run (D-70): skin smoothing,
+auto lighting, eye widen. Catalogue: 73 listed, 58 measured working, 51 visual, `met` derived (D-71).
+
+**Tests.** `test_look.py` 23 (direction per control, lopsided and cast pictures, smoothing confined to the face, blur only on the background, offsets and head pose in the track;
+plants caught: inverted brightness, smoothing outside the face), `test_live.py` +7 (preview after ready, look change and clear, bad look refused and the session continues, rebuild from
+the source photo, skipped control reported, refusal before open, preview is one resting frame with the look; a plant that stops rebuilding is caught),
+`test_render_engine.py` +4, `test_app_vision.py` +2, `test_parameters.py` reworked. `look.spec.js` 3 E2E.
+
+**Gates.** `scripts/check.sh`: ruff clean, pyrefly 0 errors (five were mine and fixed: `create_model` replaced by an explicit class, an Optional image, two OpenCV typings),
+**951 tests OK**; `npm run lint` and `npm run build` clean; E2E result below.
+
+**Not done, stated.** Whether the looks are natural is a person's call (M-14). The Stable Diffusion appearance words (age, hair, glasses) are still unmeasured (M-08). 25 of the 51
+are face-shape offsets on one rig. `appearance` does not apply under SadTalker's own face model beyond the photo grade (it takes the graded photo; head offsets and expression offsets
+are not used by it).
 

@@ -101,6 +101,11 @@ def _expand(shapes: Mapping[str, float]) -> Dict[str, float]:
     return expanded
 
 
+def expand_symmetric(shapes: Mapping[str, float]) -> Dict[str, float]:
+    """Public name for the Left/Right expansion: ``mouthSmile`` becomes ``mouthSmileLeft`` and ``...Right``."""
+    return _expand(shapes)
+
+
 # ``fmt: off`` tells the code formatter to leave the aligned tables below as
 # written; reflowing them would make the rows harder to compare.
 # fmt: off

@@ -254,6 +254,219 @@ def render_probes(router) -> None:
     record("renderQuality", "1080P_HQ on 1536 px photo", "width px", small[0], large[0], large[0] > small[0], "effective only for photos larger than 512 px")
     fps, _ = render("fps12", targetFps=12)
     record("targetFps", "12", "frame count", base.frame_count, fps.frame_count, fps.frame_count < base.frame_count * 0.6, "fewer fps = fewer frames")
+    appearance_probes(render, base_frames, background_image.parent)
+
+
+# --------------------------------------------------------------------------- appearance (T9.7)
+# Landmark indices of the 468-point MediaPipe mesh (subject's left = image right, as in ARKit).
+_LM = {"lipUp": 13, "lipDown": 14, "mouthR": 61, "mouthL": 291,
+       "eyeTopR": 159, "eyeBotR": 145, "eyeTopL": 386, "eyeBotL": 374,
+       "browMidR": 105, "browMidL": 334, "browOuterR": 70, "browOuterL": 300, "browInnerR": 107, "browInnerL": 336}
+_LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+
+
+def appearance_probes(render, base_frames, scratch: Path) -> None:
+    """
+    Measure every field of ``AvatarRenderJob.appearance`` (N-15, R-44).
+
+    Lighting and grade are judged by a property of the picture (mean lightness, spread, red-minus-blue,
+    texture in a region); head pose and standing expressions by the geometry of the face found by
+    MediaPipe in the *rendered* frames (mouth opening, eye opening, brow height, head roll and size),
+    which is what "moved as asked" means for a face. Eight frames evenly spaced through the clip are
+    used; every variant shares audio, seed and speech, so the baseline is the control.
+    """
+    import cv2
+    from face_engine import FACE_ENGINE_LOCK, shared_face_engine
+
+    def sample(frames):
+        return [frames[i] for i in np.linspace(0, len(frames) - 1, 8).astype(int)]
+
+    def mean_of(frames, fn) -> float:
+        return float(np.mean([fn(f) for f in sample(frames)]))
+
+    def luma(f):
+        return f.astype(np.float32) @ _LUMA
+
+    def lap_var(f, box=None):
+        g = cv2.cvtColor(f, cv2.COLOR_RGB2GRAY)
+        if box:
+            h, w = g.shape
+            g = g[int(box[0] * h):int(box[1] * h), int(box[2] * w):int(box[3] * w)]
+        return float(cv2.Laplacian(g, cv2.CV_32F).var())
+
+    def corners(f, frac=0.18):
+        h, w = f.shape[:2]
+        ch, cw = int(h * frac), int(w * frac)
+        return np.concatenate([f[:ch, :cw].reshape(-1, 3), f[:ch, -cw:].reshape(-1, 3), f[-ch:, :cw].reshape(-1, 3), f[-ch:, -cw:].reshape(-1, 3)])
+
+    def geometry(frames) -> Dict[str, float]:
+        rows = []
+        for f in sample(frames):
+            with FACE_ENGINE_LOCK:
+                a = shared_face_engine().analyze(f)
+            p = np.array(a.pixel_landmarks(), dtype=np.float64)
+            box = a.bounding_box
+            rows.append({
+                "mouthOpen": abs(p[_LM["lipDown"], 1] - p[_LM["lipUp"], 1]),
+                "mouthWidth": abs(p[_LM["mouthL"], 0] - p[_LM["mouthR"], 0]),
+                "cornerLift": p[_LM["lipUp"], 1] - 0.5 * (p[_LM["mouthL"], 1] + p[_LM["mouthR"], 1]),  # + when the corners are above the lip centre
+                "eyeL": abs(p[_LM["eyeBotL"], 1] - p[_LM["eyeTopL"], 1]), "eyeR": abs(p[_LM["eyeBotR"], 1] - p[_LM["eyeTopR"], 1]),
+                "browMidL": p[_LM["eyeTopL"], 1] - p[_LM["browMidL"], 1], "browMidR": p[_LM["eyeTopR"], 1] - p[_LM["browMidR"], 1],
+                "browOuterL": p[_LM["eyeTopL"], 1] - p[_LM["browOuterL"], 1], "browOuterR": p[_LM["eyeTopR"], 1] - p[_LM["browOuterR"], 1],
+                "browInnerL": p[_LM["eyeTopL"], 1] - p[_LM["browInnerL"], 1], "browInnerR": p[_LM["eyeTopR"], 1] - p[_LM["browInnerR"], 1],
+                "roll": a.head_pose.roll, "cx": box.x + box.width / 2.0, "cy": box.y + box.height / 2.0, "height": box.height,
+            })
+        return {k: float(np.mean([r[k] for r in rows])) for k in rows[0]}
+
+    base_geo = geometry(base_frames)
+    face_height = base_geo["height"]
+    min_px = 0.5  # a landmark must move by at least half a pixel, in the asked direction
+
+    # ---- lighting and grade -------------------------------------------------------------------
+    base_mean, base_std = mean_of(base_frames, lambda f: float(luma(f).mean())), mean_of(base_frames, lambda f: float(luma(f).std()))
+    base_rb = mean_of(base_frames, lambda f: float(f[..., 0].mean() - f[..., 2].mean()))
+    base_g = mean_of(base_frames, lambda f: float(f[..., 1].mean()))
+    base_spread = mean_of(base_frames, lambda f: float(f.astype(np.float32).max(axis=2).mean() - f.astype(np.float32).min(axis=2).mean()))
+    base_lap = mean_of(base_frames, lambda f: lap_var(f))
+    # Skin texture is judged on two cheek patches (landmarks 50 and 280), not a box that also holds the
+    # edges of eyes and lips, which the smoothing is meant to keep.
+    def cheek_texture(frame) -> float:
+        with FACE_ENGINE_LOCK:
+            pts = np.array(shared_face_engine().analyze(frame).pixel_landmarks())
+        g = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        vals = []
+        for i in (50, 280):
+            x, y = pts[i]
+            patch = g[max(0, y - 14): y + 14, max(0, x - 14): x + 14]
+            vals.append(float(cv2.Laplacian(patch, cv2.CV_32F).var()))
+        return float(np.mean(vals))
+
+    base_face_lap = mean_of(base_frames, cheek_texture)
+    base_corner = mean_of(base_frames, lambda f: float(luma(corners(f)[None]).mean()))
+    centre = lambda f: float(luma(f[f.shape[0] // 3: 2 * f.shape[0] // 3, f.shape[1] // 3: 2 * f.shape[1] // 3]).mean())  # noqa: E731
+    base_ratio = base_corner / mean_of(base_frames, centre)
+
+    def look(name: str, **fields):
+        _, frames = render(f"ap-{name}", appearance=fields)
+        return frames
+
+    f = look("bright", brightness=0.6)
+    v = mean_of(f, lambda x: float(luma(x).mean()))
+    record("appearance.brightness", "+0.6", "mean lightness", base_mean, v, v > base_mean + 5, "brighter")
+    f = look("dark", brightness=-0.6)
+    v = mean_of(f, lambda x: float(luma(x).mean()))
+    record("appearance.brightness", "-0.6", "mean lightness", base_mean, v, v < base_mean - 5, "darker")
+    f = look("contrast", contrast=0.7)
+    v = mean_of(f, lambda x: float(luma(x).std()))
+    record("appearance.contrast", "+0.7", "lightness spread", base_std, v, v > base_std * 1.2, "wider spread")
+    f = look("gamma", gamma=1.7)
+    v = mean_of(f, lambda x: float(luma(x).mean()))
+    record("appearance.gamma", "1.7", "mean lightness", base_mean, v, v > base_mean + 4, "mid-tones lifted")
+    f = look("desat", saturation=-1.0)
+    v = mean_of(f, lambda x: float(x.astype(np.float32).max(axis=2).mean() - x.astype(np.float32).min(axis=2).mean()))
+    record("appearance.saturation", "-1.0", "channel spread", base_spread, v, v < base_spread * 0.5, "towards grey")
+    f = look("warm", warmth=0.7)
+    v = mean_of(f, lambda x: float(x[..., 0].mean() - x[..., 2].mean()))
+    record("appearance.warmth", "+0.7", "red minus blue", base_rb, v, v > base_rb + 8, "warmer")
+    f = look("tint", tint=0.7)
+    v = mean_of(f, lambda x: float(x[..., 1].mean()))
+    record("appearance.tint", "+0.7", "mean green", base_g, v, v < base_g - 4, "towards magenta")
+    f = look("sharp", sharpness=1.0)
+    v = mean_of(f, lambda x: lap_var(x))
+    record("appearance.sharpness", "1.0", "texture (Laplacian var)", base_lap, v, v > base_lap * 1.2, "more fine detail")
+    f = look("smooth", skinSmoothing=1.0)
+    v = mean_of(f, cheek_texture)
+    record("appearance.skinSmoothing", "1.0", "cheek texture", base_face_lap, v, v < base_face_lap * 0.8, "less texture on the cheeks")
+    f = look("vignette", vignette=1.0)
+    corner = mean_of(f, lambda x: float(luma(corners(x)[None]).mean()))
+    ratio = corner / mean_of(f, centre)
+    record("appearance.vignette", "1.0", "corner / centre lightness", base_ratio, ratio, ratio < base_ratio * 0.9, "darker corners")
+
+    # backgroundBlur is only visible where the background has detail, so it is judged against the same
+    # textured background without the blur.
+    noise_bg = scratch / "param_bg_noise.png"
+    rng = np.random.default_rng(0)
+    cv2.imwrite(str(noise_bg), np.clip(128 + rng.normal(0, 40, (96, 96, 3)), 0, 255).astype(np.uint8))
+    bg = {"imageUrl": noise_bg.as_uri()}
+    _, textured = render("ap-noise-bg", background=bg)
+    _, blurred = render("ap-noise-bg-blur", background=bg, appearance={"backgroundBlur": 1.0})
+    t0 = mean_of(textured, lambda x: lap_var(x[: x.shape[0] // 5]))
+    t1 = mean_of(blurred, lambda x: lap_var(x[: x.shape[0] // 5]))
+    record("appearance.backgroundBlur", "1.0 over a noise background", "background texture", t0, t1, t1 < t0 * 0.5, "background softened, person untouched by design")
+
+    # autoLighting: a face lit from one side is the case it is for, so the demo photo is given a lamp on
+    # one side and the left/right gap in lightness is compared before and after the correction.
+    import look as look_module
+    from contracts import AppearanceSpec
+    from avatar_store import AvatarStore
+
+    photo = AvatarStore().load_image("demo")
+    h, w = photo.shape[:2]
+    ramp = np.linspace(0.4, 1.0, w, dtype=np.float32)[None, :, None]
+    lopsided = np.clip(photo.astype(np.float32) * ramp, 0, 255).astype(np.uint8)
+    gap = lambda a: float(abs(luma(a)[:, : w // 2].mean() - luma(a)[:, w // 2:].mean()))  # noqa: E731
+    fixed, _ = look_module.apply_look(lopsided, AppearanceSpec.model_validate({"autoLighting": True}))
+    record("appearance.autoLighting", "lamp on one side", "left/right lightness gap", gap(lopsided), gap(fixed), gap(fixed) < gap(lopsided) * 0.8,
+           "the lopsided picture is evened out (measured on the photo; the render path calls the same function)")
+    f = look("auto", autoLighting=True)
+    d = float(np.mean([np.abs(a.astype(np.int16) - b.astype(np.int16)).mean() for a, b in zip(sample(base_frames), sample(f), strict=True)]))
+    record("appearance.autoLighting", "on the demo photo", "pixel diff", 0, d, d > 0.5, "the correction reaches the rendered video")
+
+    # ---- head pose offsets ---------------------------------------------------------------------------
+    for name, field, value, check in (
+        ("headRoll", "headRoll", 8.0, lambda g: abs(g["roll"] - base_geo["roll"]) >= 4.0),
+        ("headShiftX", "headShiftX", 0.06, lambda g: abs(g["cx"] - base_geo["cx"]) >= 0.5 * 0.06 * face_height),
+        ("headShiftY", "headShiftY", 0.06, lambda g: abs(g["cy"] - base_geo["cy"]) >= 0.5 * 0.06 * face_height),
+        ("headScale", "headScale", 0.08, lambda g: g["height"] > base_geo["height"] * 1.03),
+    ):
+        g = geometry(look(name, **{field: value}))
+        key = {"headRoll": "roll", "headShiftX": "cx", "headShiftY": "cy", "headScale": "height"}[name]
+        record(f"appearance.{name}", str(value), f"face {key}", base_geo[key], g[key], bool(check(g)), "head moved as asked (landmarks / face box)")
+
+    # ---- natural head motion (the older motionIntensity field, never measured before) -----------------
+    def spread(frames_list) -> float:
+        picks = [frames_list[i] for i in np.linspace(0, len(frames_list) - 1, 14).astype(int)]
+        cx, cy, roll = [], [], []
+        for fr in picks:
+            with FACE_ENGINE_LOCK:
+                a = shared_face_engine().analyze(fr)
+            cx.append(a.bounding_box.x + a.bounding_box.width / 2.0)
+            cy.append(a.bounding_box.y + a.bounding_box.height / 2.0)
+            roll.append(a.head_pose.roll)
+        return float(np.std(cx) + np.std(cy) + np.std(roll))
+
+    _, still_frames = render("ap-motion0", motionIntensity=0.0)
+    _, lively_frames = render("ap-motion2", motionIntensity=2.0)
+    s0, s2 = spread(still_frames), spread(lively_frames)
+    record("motionIntensity", "0 vs 2.0", "head wander (px + deg)", s0, s2, s2 > max(2.0 * s0, s0 + 0.5), "lively head moves more than a still one")
+
+    # ---- standing expression offsets -----------------------------------------------------------------
+    # (shape, metric, direction): the landmark measure each shape must move, and which way.
+    expectations = {
+        "jawOpen": ("mouthOpen", +1), "mouthClose": ("mouthOpen", -1), "mouthFunnel": ("mouthWidth", -1), "mouthPucker": ("mouthWidth", -1),
+        "mouthRollLower": ("mouthOpen", -1), "mouthRollUpper": ("mouthOpen", -1), "mouthSmile": ("cornerLift", +1), "mouthFrown": ("cornerLift", -1),
+        "mouthStretch": ("mouthWidth", +1), "mouthDimple": ("mouthWidth", +1), "mouthPress": ("mouthOpen", -1), "mouthUpperUp": ("mouthOpen", +1),
+        "mouthLowerDown": ("mouthOpen", +1), "tongueOut": (None, 0),
+        "eyeBlinkLeft": ("eyeL", -1), "eyeBlinkRight": ("eyeR", -1), "eyeSquintLeft": ("eyeL", -1), "eyeSquintRight": ("eyeR", -1),
+        "eyeWideLeft": ("eyeL", +1), "eyeWideRight": ("eyeR", +1),
+        "browInnerUp": ("browInnerL", +1), "browOuterUpLeft": ("browOuterL", +1), "browOuterUpRight": ("browOuterR", +1),
+        "browDownLeft": ("browMidL", -1), "browDownRight": ("browMidR", -1),
+    }
+    for shape, (metric, direction) in expectations.items():
+        frames = look(f"x-{shape}", expression={shape: 0.8})
+        if metric is None:
+            # tongueOut paints inside an open mouth; there is no landmark for it, so the picture is compared.
+            d = float(np.mean([np.abs(a.astype(np.int16) - b.astype(np.int16)).mean() for a, b in zip(sample(base_frames), sample(frames), strict=True)]))
+            record(f"appearance.expression.{shape}", "0.8", "pixel diff", 0, d, d > 0.01, "painted inside the open mouth: judged by picture difference, not geometry")
+            continue
+        g = geometry(frames)
+        delta = (g[metric] - base_geo[metric]) * direction
+        record(f"appearance.expression.{shape}", "0.8", metric, base_geo[metric], g[metric], delta >= min_px,
+               f"{'increases' if direction > 0 else 'decreases'} by >= {min_px} px (landmarks on the rendered frames)")
+    # browInnerUp raises both inner brows
+    g = geometry(look("x-browInnerUp-R", expression={"browInnerUp": 0.8}))
+    record("appearance.expression.browInnerUp", "0.8 (right)", "browInnerR", base_geo["browInnerR"], g["browInnerR"],
+           g["browInnerR"] - base_geo["browInnerR"] >= min_px, "the other inner brow also rises")
 
 
 def main() -> int:

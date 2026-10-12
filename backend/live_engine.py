@@ -66,6 +66,7 @@ from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 import numpy as np
 
 import audit_log
+import look
 from avatar_store import AvatarConsentError, AvatarStore
 from face_animation import AnimationTrack, build_animation, energy_envelope, seed_from_job_id, speech_energy_envelope
 from face_engine import FACE_ENGINE_LOCK, shared_face_engine
@@ -80,6 +81,9 @@ LIVE_DIR = PROJECT_ROOT / "outputs" / "live"
 # The ``kind`` byte of the binary header (see the module docstring).
 KIND_AUDIO = 1
 KIND_FRAME = 2
+# A still picture of the avatar with its current look, sent when a session opens and after every
+# appearance change. It is drawn at once rather than placed on the audio timeline.
+KIND_PREVIEW = 3
 # struct format: "!" network (big-endian) byte order, "B" one unsigned byte, "I" unsigned 32-bit int.
 # 1 + 4 + 4 + 4 = 13 bytes. A compiled Struct is reused for every message instead of re-parsing it.
 HEADER = struct.Struct("!BIII")
@@ -217,6 +221,7 @@ class LiveSession:
         clone_engine: Optional[str] = None,
         voice: Optional[str] = None,
         motion_intensity: float = 1.0,
+        appearance: Optional[Any] = None,
     ) -> None:
         """Store the settings from the client's start message; nothing slow happens until ``open``.
 
@@ -227,6 +232,10 @@ class LiveSession:
         self.router = router
         self.voice = voice
         self.motion_intensity = motion_intensity
+        # An AppearanceSpec (lighting, grade, head pose, standing expression) or None (N-15, R-44).
+        self.appearance = appearance if appearance is not None and not appearance.is_empty() else None
+        # Warnings from applying it (a skipped control), reported in the session's ready message.
+        self.look_warnings: List[str] = []
         self.store = store
         self.avatar_id = avatar_id
         self.language = language
@@ -240,6 +249,8 @@ class LiveSession:
         # 12 hex characters: short enough for file names, random enough not to collide between sessions.
         self.session_id = uuid.uuid4().hex[:12]
         self.animator: Optional[PortraitAnimator] = None
+        self._source_image: Optional[np.ndarray] = None
+        self._analysis: Any = None
         self.width = self.height = 0
         # Where the next chunk starts on the session's timeline (ms).
         self.timeline_ms = 0.0
@@ -272,10 +283,65 @@ class LiveSession:
         # The face is found once per session; every frame after that reuses this analysis.
         with FACE_ENGINE_LOCK:
             analysis = shared_face_engine().analyze(image)
-        self.animator = PortraitAnimator(image, analysis)
+        # Kept so the look can be changed later without reloading or re-detecting anything.
+        self._source_image, self._analysis = image, analysis
+        self._build_animator()
         self.width, self.height = width, height
         self._warm_speech()
-        return {"width": width, "height": height, "fps": self.fps}
+        info: Dict[str, Any] = {"width": width, "height": height, "fps": self.fps}
+        if self.appearance is not None:
+            info["appearance"] = look.describe(self.appearance)
+            if self.look_warnings:
+                info["warnings"] = list(self.look_warnings)
+        return info
+
+    def _build_animator(self) -> None:
+        """
+        (Re)build the animator from the untouched photo with the session's current look.
+
+        Lighting and grade are applied to the still photo, so every frame carries them for free; the
+        landmarks do not move with a colour change, so the stored analysis is reused.
+        """
+        image = self._source_image
+        assert image is not None and self._analysis is not None, "open() sets the photo and its analysis first"
+        self.look_warnings = []
+        if self.appearance is not None:
+            def person_mask(frame: np.ndarray) -> np.ndarray:
+                from face_engine import shared_segmenter
+
+                with FACE_ENGINE_LOCK:
+                    return shared_segmenter().foreground_mask(frame)
+
+            image, self.look_warnings = look.apply_look(
+                image, self.appearance, face_points=self._analysis.pixel_landmarks(), foreground=person_mask,
+            )
+        # Assigned in one step: a frame being rendered on another thread finishes with the old animator.
+        self.animator = PortraitAnimator(image, self._analysis)
+
+    def set_appearance(self, appearance: Optional[Any]) -> Dict[str, Any]:
+        """
+        Change the look of the running session (real-time preview); ``None`` or an empty spec clears it.
+
+        Returns what was applied, and any control that had to be skipped (golden rule 1). The next frame
+        rendered, of speech or of the preview, uses the new look.
+        """
+        if self.animator is None:
+            raise LiveError("the session is not open yet, so there is no picture to change")
+        self.appearance = appearance if appearance is not None and not appearance.is_empty() else None
+        self._build_animator()
+        info: Dict[str, Any] = {"appearance": look.describe(self.appearance)}
+        if self.look_warnings:
+            info["warnings"] = list(self.look_warnings)
+        return info
+
+    def preview_jpeg(self) -> bytes:
+        """One resting frame with the current look: standing expression and head pose, no speech."""
+        track = build_animation(
+            [{"phoneme": "SIL", "viseme": "viseme_sil", "startMs": 0, "endMs": 1000.0 / self.fps}],
+            duration_seconds=1.0 / self.fps, fps=self.fps, seed=0, motion_intensity=0.0,
+            expression_offsets=look.expression_offsets(self.appearance), head_offset=look.head_offset(self.appearance),
+        )
+        return self.render_jpeg(track, 0)
 
     def _warm_speech(self) -> None:
         """
@@ -397,6 +463,8 @@ class LiveSession:
             seed=seed_from_job_id(f"{self.session_id}-{chunk.index}"),
             energy_envelope=chunk.energy,
             motion_intensity=self.motion_intensity,
+            expression_offsets=look.expression_offsets(self.appearance),
+            head_offset=look.head_offset(self.appearance),
         )
 
     def render_jpeg(self, track: AnimationTrack, index: int) -> bytes:
@@ -441,7 +509,9 @@ class LiveSession:
             emotion = to_render_emotion_vector({self.emotion: self.emotion_intensity})
         return build_animation(held, duration_seconds=duration, fps=self.fps, emotion_vector=emotion,
                                seed=seed_from_job_id(f"{self.session_id}-a{index}"), energy_envelope=envelope,
-                               motion_intensity=self.motion_intensity)
+                               motion_intensity=self.motion_intensity,
+                               expression_offsets=look.expression_offsets(self.appearance),
+                               head_offset=look.head_offset(self.appearance))
 
     def cleanup(self) -> None:
         """Delete any of this session's WAV files that were left behind (e.g. a cancelled synthesis)."""

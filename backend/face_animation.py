@@ -51,6 +51,7 @@ from viseme_blendshapes import (
     OPENING_SHAPES,
     VISEME_BLENDSHAPES,
     emotion_weights,
+    expand_symmetric,
     resolve_viseme,
 )
 
@@ -317,6 +318,8 @@ def build_animation(
     energy_envelope: Optional[np.ndarray] = None,
     smoothing_ms: float = DEFAULT_SMOOTHING_MS,
     motion_intensity: float = 1.0,
+    expression_offsets: Optional[Mapping[str, float]] = None,
+    head_offset: Optional[Sequence[float]] = None,
 ) -> AnimationTrack:
     """
     Build the per-frame blendshape track for a render job.
@@ -335,11 +338,15 @@ def build_animation(
         normalise_timestamps(phoneme_timestamps), duration_seconds * 1000.0
     )
     emotion = emotion_weights(emotion_vector)
+    # Standing offsets from the appearance spec (N-15): ARKit shorthand names, 0..1, held for every
+    # frame. Mouth shapes are written once and expanded to their Left/Right pair here.
+    offsets = expand_symmetric({k: float(v) for k, v in (expression_offsets or {}).items() if v})
 
     # Column order is sorted names, so the same job always yields the same layout.
     names = sorted(
         {shape for shapes in VISEME_BLENDSHAPES.values() for shape in shapes}
         | set(emotion)
+        | set(offsets)
         | set(BLINK_SHAPES)
         | {"browInnerUp"}
     )
@@ -417,6 +424,9 @@ def build_animation(
     # Emotion is a constant offset added on top of the speech motion.
     for shape, weight in emotion.items():
         weights[:, index[shape]] += weight
+    # So is a standing expression: it moves the resting face, and the speech still moves it further.
+    for shape, weight in offsets.items():
+        weights[:, index[shape]] += weight
 
     blink_rate = 1.0
     if emotion_vector:
@@ -446,6 +456,15 @@ def build_animation(
         motion = motion_track(frames, fps, seed, loudness=loudness, intensity=motion_intensity)
         head = motion.pose
         weights[:, index["browInnerUp"]] += motion.brow
+
+    # A fixed head pose on top of the natural motion (roll in degrees; shifts and scale in face
+    # heights, the same units as the pose channels). The breath channel is left alone.
+    if head_offset is not None and any(head_offset):
+        if head is None:
+            head = np.zeros((frames, 5), dtype=np.float32)
+        head = head.copy()
+        for channel, value in enumerate(list(head_offset)[:4]):
+            head[:, channel] += float(value)
 
     np.clip(weights, 0.0, 1.0, out=weights)
     return AnimationTrack(

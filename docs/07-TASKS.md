@@ -140,6 +140,8 @@ the same script and method as the original number, so the before/after is compar
 | T9.4 | The Celery/Redis path, run for real | Redis in Docker, a worker and the API in `QUEUE_BACKEND=celery`; `load_test.py` and `concurrency_test.py` against it | N-03, N-08 |
 | T9.5 | Live first-audio latency | The sound is handed over before the forced alignment runs, and the first session warms the speech path; tests pin the order; measured by `live_client.py` | N-19 |
 | T9.6 | Photo to avatar on the GPU | Stable Diffusion generation timed on the card, warm and cold | N-14 |
+| T9.7 | Lighting, grade, head pose and standing expression | `appearance` (optional, on the render job and the live start message): auto lighting correction, brightness, contrast, gamma, saturation, warmth, tint, sharpness, skin smoothing, vignette, background blur, head roll / shift / scale and 25 standing face shapes; applied once to the still photo; reported in the result and the signed manifest; every field measured on rendered output by `measure_parameters.py` | N-15, R-44 |
+| T9.8 | Real-time preview | A running live session accepts an `appearance` message, re-applies the look and answers with a still frame; the studio gets sliders built from the parameter catalogue on the live and create screens; E2E moves a slider and reads the canvas | N-15 |
 
 Not planned, with the reason in `11-DECISIONS.md`: custom voice training/fine-tuning (R-45, CPU-infeasible), WebRTC (R-48), user studies
 and native-speaker validation (R-53).
