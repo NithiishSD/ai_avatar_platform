@@ -62,7 +62,7 @@ _ROWS: List[Tuple[Any, str, str, str, str]] = [
     (contracts.BackgroundSpec, "color", "appearance", M, "a #RRGGBB background replaced the old one"),
     (contracts.BackgroundSpec, "imageUrl", "appearance", M, "an image under outputs/ or inputs/ replaced the old background"),
     (contracts.AvatarRenderJob, "renderQuality", "render", M, "PREVIEW caps at 512 px; 1080P_HQ fits 1920x1080, and a photo that would give less than 720p is first enlarged with Real-ESRGAN (T8.8: a 512 px photo renders at 1080x1080, its added detail synthesised)"),
-    (contracts.AvatarRenderJob, "motionIntensity", "appearance", NM, "head tilt / nod / sway and breathing while talking (I-01); 0 still, 1 natural, 2 lively; measured once in a real render, not yet by the parameter script"),
+    (contracts.AvatarRenderJob, "motionIntensity", "appearance", M, "head tilt / nod / sway and breathing while talking (I-01); 0 still, 1 natural, 2 lively: head wander (std of face position and roll across 14 frames) 2.8 -> 11.8 from 0 to 2.0"),
     (contracts.AvatarRenderJob, "targetFps", "render", M, "12 fps gave 60 frames against 125 at 25 fps"),
     (contracts.AvatarGenerateRequest, "age", "appearance", NM, "Stable Diffusion prompt word; SD 1.5 follows it only approximately"),
     (contracts.AvatarGenerateRequest, "presentation", "appearance", NM, "Stable Diffusion prompt word; not measured"),
@@ -73,16 +73,78 @@ _ROWS: List[Tuple[Any, str, str, str, str]] = [
     (contracts.AvatarGenerateRequest, "steps", "generation", NM, "diffusion steps: speed against detail"),
 ]
 
+# Lighting, grade, head pose and standing expressions (T9.7): one row per field of AppearanceSpec and
+# ExpressionOffsets, with what ``scripts/measure_parameters.py`` found on 11 Oct 2026 (CPU, the demo face).
+# The notes are the measured numbers: setting, the quantity read from the rendered frames, before -> after.
+_APPEARANCE_NOTES: Dict[str, str] = {
+    "brightness": "+0.6: mean lightness 104 -> 142; -0.6: mean lightness 104 -> 68.6",
+    "contrast": "+0.7: lightness spread 48.5 -> 68.3",
+    "gamma": "1.7: mean lightness 104 -> 145",
+    "saturation": "-1.0: channel spread 24.6 -> 0.0444",
+    "warmth": "+0.7: red minus blue 13.5 -> 42.2",
+    "tint": "+0.7: mean green 102 -> 90.7",
+    "sharpness": "1.0: texture (Laplacian var) 68.5 -> 333",
+    "skinSmoothing": "1.0: cheek texture 22.3 -> 13.9",
+    "vignette": "1.0: corner / centre lightness 1.03 -> 0.624",
+    "backgroundBlur": "1.0 over a noise background: background texture 38.2 -> 4.42",
+    "autoLighting": "lamp on one side: left/right lightness gap 51.2 -> 35.7; on the demo photo: pixel diff 0 -> 16.4",
+    "headRoll": "8.0: face roll 0.793 -> -6.42",
+    "headShiftX": "0.06: face cx 354 -> 370",
+    "headShiftY": "0.06: face cy 324 -> 340",
+    "headScale": "0.08: face height 270 -> 292",
+    "jawOpen": "0.8: mouthOpen 8.5 -> 34.1",
+    "mouthClose": "0.8: mouthOpen 8.5 -> 4.75",
+    "mouthFunnel": "0.8: mouthWidth 73.4 -> 67.1",
+    "mouthPucker": "0.8: mouthWidth 73.4 -> 60.6",
+    "mouthRollLower": "0.8: mouthOpen 8.5 -> 7.38",
+    "mouthRollUpper": "0.8: mouthOpen 8.5 -> 7.38",
+    "mouthSmile": "0.8: cornerLift -3.12 -> 4.94",
+    "mouthFrown": "0.8: cornerLift -3.12 -> -9.62",
+    "mouthStretch": "0.8: mouthWidth 73.4 -> 82.2",
+    "mouthDimple": "0.8: mouthWidth 73.4 -> 77.4",
+    "mouthPress": "0.8: mouthOpen 8.5 -> 6.62",
+    "mouthUpperUp": "0.8: mouthOpen 8.5 -> 15.1",
+    "mouthLowerDown": "0.8: mouthOpen 8.5 -> 13.4",
+    "tongueOut": "0.8: pixel diff 0 -> 0.455",
+    "eyeBlinkLeft": "0.8: eyeL 15 -> 8.62",
+    "eyeBlinkRight": "0.8: eyeR 14.8 -> 7.5",
+    "eyeSquintLeft": "0.8: eyeL 15 -> 14.1",
+    "eyeSquintRight": "0.8: eyeR 14.8 -> 12.9",
+    "eyeWideLeft": "0.8: eyeL 15 -> 16.4",
+    "eyeWideRight": "0.8: eyeR 14.8 -> 15.6",
+    "browInnerUp": "0.8: browInnerL 17.1 -> 25.6; 0.8 (right): browInnerR 16.9 -> 25.2",
+    "browOuterUpLeft": "0.8: browOuterL 13.4 -> 17.8",
+    "browOuterUpRight": "0.8: browOuterR 13.4 -> 17",
+    "browDownLeft": "0.8: browMidL 24 -> 19.4",
+    "browDownRight": "0.8: browMidR 24.4 -> 19.4"
+}
+
+_ROWS += [
+    (contracts.AppearanceSpec, alias, "appearance", M, _APPEARANCE_NOTES[alias])
+    for alias in ("autoLighting", "brightness", "contrast", "gamma", "saturation", "warmth", "tint", "sharpness",
+                  "skinSmoothing", "vignette", "backgroundBlur", "headRoll", "headShiftX", "headShiftY", "headScale")
+] + [
+    (contracts.ExpressionOffsets, shape, "expression", M, _APPEARANCE_NOTES[shape])
+    for shape in contracts.EXPRESSION_SHAPES
+]
+
 # Fields on the request models that are plumbing, not customisation. Listing them here (rather than
 # silently skipping) keeps the completeness test honest.
 NOT_CUSTOMISATION: Dict[Any, set] = {
     contracts.AudioSynthesisRequest: {"text", "returnAlignment", "auditQuality", "outputFilename"},
     contracts.AvatarGenerateRequest: {"avatarId", "overwrite"},
-    contracts.AvatarRenderJob: {"jobId", "avatarId", "audioUrl", "sampleRate", "durationSeconds", "phonemeTimestamps", "emotionVector", "background"},
+    contracts.AvatarRenderJob: {"jobId", "avatarId", "audioUrl", "sampleRate", "durationSeconds", "phonemeTimestamps", "emotionVector", "background", "appearance"},
+    # ``expression`` is a nested object; its fields are the rows of ExpressionOffsets.
+    contracts.AppearanceSpec: {"expression"},
 }
 # Nested models: their fields are reported with a dotted name ("emotionVector.happy"), because a
 # client sets them inside that parent object, not at the top level of the request.
-_PARENT = {contracts.EmotionVector: "emotionVector", contracts.BackgroundSpec: "background"}
+_PARENT = {
+    contracts.EmotionVector: "emotionVector",
+    contracts.BackgroundSpec: "background",
+    contracts.AppearanceSpec: "appearance",
+    contracts.ExpressionOffsets: "appearance.expression",
+}
 # N-15's "50+ appearance parameters", the number the counts are compared against.
 TARGET = 50
 
@@ -131,11 +193,15 @@ def catalogue() -> Dict[str, Any]:
             "visualListed": count(lambda r: r["group"] in visual),
             "visualMeasuredWorking": count(lambda r: r["group"] in visual and r["status"] == M),
         },
-        # "met" is hard-coded False: the visual rows are fewer than TARGET, and a target is never
-        # redefined as met (project rule: a target is reported as not met, never redefined).
-        "target": {"appearanceParameters": TARGET, "met": False,
-                   "note": "N-15 asks for 50+ appearance parameters; only the 'visual' counts above describe the avatar's look, and fewer than that are verified"},
-        "measuredBy": "scripts/measure_parameters.py (8 Oct 2026, CPU); see docs/08-TESTING.md N-15",
+        # "met" is derived from the evidence, never set by hand: only parameters whose effect was
+        # measured count, and a row downgraded to not-measured takes the target back under 50.
+        "target": {"appearanceParameters": TARGET,
+                   "met": count(lambda r: r["group"] in visual and r["status"] == M) >= TARGET,
+                   "note": "N-15 asks for 50+ appearance parameters with real-time preview; the count is the visual "
+                           "rows (appearance and expression groups) whose effect was measured on rendered output. "
+                           "Preview: a live session applies and updates them (T9.8)"},
+        "measuredBy": "scripts/measure_parameters.py (8 Oct 2026 for voice, background, emotion; 11 Oct 2026 for "
+                      "appearance); see docs/08-TESTING.md N-15",
     }
 
 
@@ -148,7 +214,8 @@ def unlisted_fields() -> List[str]:
     covered = {(m, f) for m, f, *_ in _ROWS}
     missing = []
     models: List[Any] = [contracts.AudioSynthesisRequest, contracts.AvatarGenerateRequest, contracts.AvatarRenderJob,
-                         contracts.EmotionVector, contracts.BackgroundSpec]
+                         contracts.EmotionVector, contracts.BackgroundSpec, contracts.AppearanceSpec,
+                         contracts.ExpressionOffsets]
     for model in models:
         skip: Optional[set] = NOT_CUSTOMISATION.get(model)
         for name, info in model.model_fields.items():

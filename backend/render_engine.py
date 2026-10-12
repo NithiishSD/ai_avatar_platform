@@ -51,6 +51,10 @@ import logging
 import os
 import re
 import time
+import queue
+import threading
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Optional, Tuple
@@ -60,6 +64,7 @@ import numpy as np
 
 import audit_log
 import gpu_utils
+import look
 import manifest as manifest_module
 import sadtalker_engine
 import video_io
@@ -237,6 +242,8 @@ class RenderResult:
     unknown_visemes: Dict[str, int] = field(default_factory=dict)  # viseme -> times it fell back to rest
     peak_vram_mb: Optional[int] = None    # measured only for the GPU engines (wav2lip, sadtalker)
     background: Optional[str] = None      # a short description of a replaced background, or None
+    # The appearance settings that were applied (only the fields the client set), or None (N-15, R-44).
+    appearance: Optional[Dict[str, object]] = None
     # Set when a small photo was enlarged with super-resolution to reach the 1080P_HQ box (T8.8).
     super_resolution: Optional[Dict[str, object]] = None
     # What the invisible video watermark did and where the signed manifest is (both always present).
@@ -272,6 +279,7 @@ class RenderResult:
             "unknownVisemes": self.unknown_visemes,
             "peakVramMb": self.peak_vram_mb,
             "background": self.background,
+            "appearance": self.appearance,
             "superResolution": self.super_resolution,
             "watermark": self.watermark,
             "manifest": self.manifest,
@@ -422,6 +430,12 @@ def apply_background(image: np.ndarray, spec: BackgroundSpec) -> Tuple[np.ndarra
     return composited, warnings
 
 
+def _person_mask(image: np.ndarray) -> np.ndarray:
+    """The 0..1 person mask for ``look.apply_look``'s background blur, under the shared model lock."""
+    with FACE_ENGINE_LOCK:
+        return shared_segmenter().foreground_mask(image)
+
+
 def _describe_background(spec: Optional[BackgroundSpec]) -> Optional[str]:
     """What the result reports about the background, so a replaced one is never silent."""
     if spec is None:
@@ -533,20 +547,124 @@ def _stamp_label(frame: np.ndarray) -> np.ndarray:
     return frame
 
 
+class _Failure:
+    """Carries an exception from the producer thread to the consumer of ``_prefetched``."""
+
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+
+
+def _prefetched(source: Iterator[np.ndarray], depth: int = 16) -> Iterator[np.ndarray]:
+    """
+    Run ``source`` on its own thread and hand its items over through a bounded queue.
+
+    The render is a chain: warp a frame (CPU) -> mark it (GPU) -> encode it (ffmpeg pipe). Pulled by the
+    encoder loop alone, each stage waits for the next: while a window of 32 frames is being marked
+    nothing is warped, and while ffmpeg takes a frame nothing is marked. With the chain's front end on
+    its own thread, encoding overlaps with warping and marking. Order is untouched (one producer, one
+    queue), memory is bounded by ``depth`` frames, an exception in the source is re-raised in the
+    consumer, and closing the consumer early stops the producer instead of leaving it blocked.
+    """
+    handoff: queue.Queue = queue.Queue(maxsize=depth)
+    stop = threading.Event()
+    done = object()
+
+    def put(item: object) -> bool:
+        # A timeout loop, not a plain put(): a consumer that went away must not leave this thread
+        # blocked forever on a full queue.
+        while not stop.is_set():
+            try:
+                handoff.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def pump() -> None:
+        try:
+            for item in source:
+                if not put(item):
+                    return
+            put(done)
+        except BaseException as err:  # noqa: BLE001 - handed to the consumer, which re-raises it
+            put(_Failure(err))
+        finally:
+            # Closed here, on the thread that ran it, so a generator's own cleanup (thread pools,
+            # temporary files) runs where it started.
+            close = getattr(source, "close", None)
+            if close is not None:
+                close()
+
+    thread = threading.Thread(target=pump, name="frame-prefetch", daemon=True)
+    thread.start()
+    try:
+        while True:
+            item = handoff.get()
+            if item is done:
+                return
+            if isinstance(item, _Failure):
+                raise item.error
+            yield item
+    finally:
+        stop.set()
+        thread.join(timeout=10)
+
+
+def render_threads() -> int:
+    """
+    How many frames are warped at once (``RENDER_THREADS`` in .env; default 4, minimum 1).
+
+    A frame is a handful of OpenCV and NumPy calls, which release Python's global lock, so threads
+    really do run side by side. 1 restores the old one-frame-at-a-time loop.
+    """
+    try:
+        return max(1, int(os.getenv("RENDER_THREADS", "4")))
+    except ValueError:
+        return 4
+
+
 def _warp_frames(
     animator: PortraitAnimator, track: AnimationTrack, include_mouth: bool
 ) -> Iterator[np.ndarray]:
     """
-    Yield one warped RGB frame per animation frame, lazily.
+    Yield one warped RGB frame per animation frame, lazily and in order.
 
     ``include_mouth=False`` drops the mouth blendshapes (for Wav2Lip, which repaints the mouth) and
     keeps blinks, brows and head motion.
+
+    Frames do not depend on one another (``PortraitAnimator.render`` only reads the rig and builds a
+    new array), so a small pool warps several ahead of the encoder. Results are taken from the front
+    of a queue, which keeps the order, and the queue is bounded so a slow encoder cannot make the
+    pool race ahead and fill memory. T9.3: whole-portrait motion (I-01) had pushed a 30 s render
+    from 4.2 s to 5.6 s, over the 5 s target; this is the time given back.
     """
-    for index in range(track.frame_count):
+
+    def one(index: int) -> np.ndarray:
         weights = track.frame(index)
         if not include_mouth:
             weights = {k: v for k, v in weights.items() if not k.startswith(_MOUTH_PREFIXES)}
-        yield animator.render(weights, track.pose(index))
+        return animator.render(weights, track.pose(index))
+
+    workers = render_threads()
+    total = track.frame_count
+    if workers == 1 or total < 2:
+        for index in range(total):
+            yield one(index)
+        return
+    pending: deque = deque()
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="warp") as pool:
+        try:
+            for index in range(total):
+                pending.append(pool.submit(one, index))
+                # Two frames per worker in flight: enough to keep every thread busy, little memory.
+                if len(pending) >= workers * 2:
+                    yield pending.popleft().result()
+            while pending:
+                yield pending.popleft().result()
+        finally:
+            # An encoder error or an early close must not leave frames being warped for nobody.
+            for future in pending:
+                future.cancel()
 
 
 _FRAME_RESOLVER: Optional[SuperResolver] = None
@@ -669,6 +787,14 @@ def render_job(
     # Analysed at output size, so the rig's landmarks are in output pixels.
     with FACE_ENGINE_LOCK:
         analysis: FaceAnalysis = shared_face_engine().analyze(image)
+    # Lighting, grade and soft focus (R-44, N-15) are baked into the still photo once, after the face
+    # has been found (landmarks do not move with a colour change) and before the rig is built from it.
+    appearance = job.appearance if job.appearance is not None and not job.appearance.is_empty() else None
+    if appearance is not None:
+        image, look_warnings = look.apply_look(
+            image, appearance, face_points=analysis.pixel_landmarks(), foreground=_person_mask,
+        )
+        warnings.extend(look_warnings)
     animator = PortraitAnimator(image, analysis)
 
     import soundfile as sf
@@ -697,6 +823,8 @@ def render_job(
         # Gentler head motion under Wav2Lip: it repaints the mouth inside a box found once on the still
         # photo, so a large nod would carry the mouth out of that box.
         motion_intensity=(1.0 if job.motion_intensity is None else job.motion_intensity) * (0.6 if engine_name == ENGINE_WAV2LIP else 1.0),
+        expression_offsets=look.expression_offsets(appearance),
+        head_offset=look.head_offset(appearance),
     )
     # A viseme the animator does not know is not fatal; it is counted and reported, not hidden.
     if track.unknown_visemes:
@@ -742,7 +870,12 @@ def render_job(
     # One switch (WATERMARK_ENABLED) governs both the audio and the video mark.
     marking = watermark_engine.enabled()
     if marking:
+        # Two windows of look-ahead: the warp keeps going on its own thread while the card marks a
+        # window, instead of the two taking turns.
+        frames = _prefetched(frames, depth=2 * video_watermark.WINDOW)
         frames = video_watermark.shared_video_watermarker().embed_stream(frames, manifest_id)
+    # Warping and marking run ahead of the encoder on their own thread (T9.3).
+    frames = _prefetched(frames)
 
     # Nothing has been rendered yet: ``frames`` is a chain of generators that runs only when the
     # encoder loop below pulls from it.
@@ -813,6 +946,7 @@ def render_job(
             "width": width, "height": height, "fps": job.target_fps, "frameCount": total,
             "durationSeconds": round(duration, 3), "engine": engine_name, "quality": job.render_quality.value,
             "background": _describe_background(job.background), "label": bool(label),
+            "appearance": look.describe(appearance),
             "superResolution": super_res,
         },
     )
@@ -851,6 +985,7 @@ def render_job(
         unknown_visemes={} if sadtalker_run else track.unknown_visemes,
         peak_vram_mb=peak_vram,
         background=_describe_background(job.background),
+        appearance=look.describe(appearance),
         super_resolution=super_res,
         watermark=watermark_result,
         manifest=manifest_info,

@@ -607,10 +607,12 @@ class PortraitAnimator:
             squint[list(eye["lower"])] = -0.25 * opening
             squint[list(eye["upper"])] = 0.10 * opening
 
-            # Widen: the upper lid and, less, the crease above it lift.
+            # Widen: the upper lid and, less, the crease above it lift. 0.30 / 0.12 of the opening
+            # (0.20 / 0.10 before T9.7): at 0.20 the lid moved about a pixel on a 512 px face, which
+            # the landmark measurement could not tell from detection noise on one eye.
             wide = np.zeros((n, 2))
-            wide[list(eye["upper"])] = -0.20 * opening
-            wide[list(eye["crease"])] = -0.10 * opening
+            wide[list(eye["upper"])] = -0.30 * opening
+            wide[list(eye["crease"])] = -0.12 * opening
 
             self._f_squint[side] = squint
             self._f_wide_eye[side] = wide

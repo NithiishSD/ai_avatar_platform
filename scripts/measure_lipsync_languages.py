@@ -159,8 +159,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             "meanPercentSecondsWithinOne": round(sum(pct) / len(pct), 1) if pct else None,
             "pooledPercentSecondsWithinOne": round(100.0 * sum(b["within"] for b in blocks) / max(1, sum(b["of"] for b in blocks)), 1),
             "meanLseC": round(sum(r["lseC"] for r in ok) / len(ok), 2) if ok else None}
-    # The device is a fixed string here, not detected from torch.
-    report = {"date": datetime.now(timezone.utc).isoformat(timespec="seconds"), "device": "cpu", "face": args.face, "rows": rows, "summary": summary}
+    # The device the models ran on is read from torch, so a GPU run cannot be filed as a CPU one (or the
+    # reverse): golden rule 2, every number records its method. This used to be the fixed string "cpu".
+    import torch
+
+    device = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
+    report = {"date": datetime.now(timezone.utc).isoformat(timespec="seconds"), "device": device, "face": args.face, "rows": rows, "summary": summary}
     out = PROJECT_ROOT / "outputs" / "benchmarks" / f"lipsync-languages-{time.strftime('%Y%m%d-%H%M%S')}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2, ensure_ascii=False))

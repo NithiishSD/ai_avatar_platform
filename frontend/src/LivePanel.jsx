@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"; // hooks; useRef is used heavily here, see below
 import { recordedGender, rememberVoice, voiceForFace } from "./voices"; // same face-to-voice matching as the create screen
+import LookControls from "./LookControls"; // lighting, grade, head pose and expression sliders
+import { buildSpec } from "./look"; // flat slider state -> AppearanceSpec
 
 /*
  * Live avatar panel: open a WebSocket session, type something, and watch the avatar
@@ -29,6 +31,7 @@ import { recordedGender, rememberVoice, voiceForFace } from "./voices"; // same 
 const HEADER_BYTES = 13;
 const KIND_AUDIO = 1; // payload is PCM16 mono audio at the `ready` sampleRate
 const KIND_FRAME = 2; // payload is one JPEG frame
+const KIND_PREVIEW = 3; // payload is a still JPEG of the avatar with its current look; drawn at once
 // Scheduling lead: audio is booked this far ahead of "now" so the first chunk is
 // not already late by the time it is decoded.
 const LEAD_S = 0.15;
@@ -58,6 +61,9 @@ export default function LivePanel({ apiBase }) {
   const [voices, setVoices] = useState([]);
   const [chosenSpeaker, setChosenSpeaker] = useState({});
   const [motion, setMotion] = useState(1.0); // head-and-shoulder movement, as on the create screen
+  const [look, setLook] = useState({}); // lighting / grade / head pose / expression sliders (flat name -> value)
+  const [lookRows, setLookRows] = useState([]); // catalogue rows, to turn `look` into a spec
+  const [lookApplied, setLookApplied] = useState(0); // how many `appearance` replies the server has sent (data-look-applied)
 
   // Refs (useRef): values the audio and drawing code reads many times a second. Writing a ref does
   // not re-render, and callbacks always read the current value instead of the one from an old render.
@@ -99,6 +105,15 @@ export default function LivePanel({ apiBase }) {
     fetch(`${apiBase}/api/v1/audio/voices`).then((r) => (r.ok ? r.json() : null)).then((d) => !ignore && d && setVoices(d.voices ?? [])).catch(() => {});
     return () => { ignore = true; };
   }, [apiBase]);
+  useEffect(() => {
+    let ignore = false;
+    // The look sliders come from the parameter catalogue, so their ranges are the API's own.
+    fetch(`${apiBase}/api/v1/parameters`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => !ignore && d && setLookRows(d.parameters.filter((p) => p.name.startsWith("appearance."))))
+      .catch(() => {});
+    return () => { ignore = true; };
+  }, [apiBase]);
   const face = avatars.find((a) => a.avatarId === avatarId);
   const speaker = chosenSpeaker[avatarId] || voiceForFace(face, voices, "af_heart"); // chosen here, else remembered, else matched to the face
 
@@ -116,6 +131,18 @@ export default function LivePanel({ apiBase }) {
     const payload = buffer.slice(HEADER_BYTES); // everything after the header, as a new ArrayBuffer
     const audio = audioRef.current;
     const ready = readyRef.current;
+    if (kind === KIND_PREVIEW) {
+      // A still of the avatar with its look, not counted as a speech frame. It joins the draw queue
+      // just after the newest frame already waiting: speech that was sent but is still playing is
+      // not painted over, and once it has played the still is what stays on screen.
+      createImageBitmap(new Blob([payload], { type: "image/jpeg" })).then((bitmap) => {
+        const queue = framesRef.current;
+        const now = audioRef.current ? audioRef.current.currentTime : 0;
+        const due = Math.max(now, queue.length ? queue[queue.length - 1].due : 0) + 0.001;
+        queue.push({ due, bitmap });
+      });
+      return;
+    }
     if (!audio || !ready) return; // no clock or no `ready` yet: nothing to schedule against
     const c = countersRef.current; // short name; mutated in place, published at the end
 
@@ -236,7 +263,8 @@ export default function LivePanel({ apiBase }) {
     socket.binaryType = "arraybuffer"; // binary messages arrive as ArrayBuffer, not Blob, so DataView can read them at once
     socketRef.current = socket;
     // The first message must be `start`. The voice is only sent when the voice list loaded.
-    socket.onopen = () => socket.send(JSON.stringify({ type: "start", avatarId, fps: 25, maxSide: 384, motionIntensity: motion, ...(voices.length ? { voice: speaker } : {}) }));
+    const startLook = buildSpec(look, lookRows); // sliders already moved before the session starts
+    socket.onopen = () => socket.send(JSON.stringify({ type: "start", avatarId, fps: 25, maxSide: 384, motionIntensity: motion, ...(voices.length ? { voice: speaker } : {}), ...(startLook ? { appearance: startLook } : {}) }));
     socket.onmessage = (event) => {
       if (typeof event.data !== "string") return handleMedia(event.data); // binary = media; text = a JSON control message
       const message = JSON.parse(event.data);
@@ -248,6 +276,9 @@ export default function LivePanel({ apiBase }) {
           canvasRef.current.height = message.height;
         }
         setState("ready");
+      } else if (message.type === "appearance") { // the server applied a look change; its still frame follows
+        setLookApplied((n) => n + 1);
+        if (message.warnings?.length) setError(message.warnings.join(" "));
       } else if (message.type === "done") { // all sentences sent, with totals
         setStats((s) => ({ ...s, done: message }));
         setState("ready");
@@ -353,9 +384,27 @@ export default function LivePanel({ apiBase }) {
 
   const live = state === "ready" || state === "speaking"; // a session is open
 
+  // Real-time preview: a moved slider is sent as an `appearance` message, after a short pause so a drag
+  // is one change and not a hundred. The server answers with a still frame drawn on the canvas.
+  const sentLookRef = useRef("null"); // the last spec sent, so an unchanged panel sends nothing
+  useEffect(() => {
+    if (!live || !lookRows.length) return undefined;
+    const spec = buildSpec(look, lookRows);
+    const body = JSON.stringify(spec);
+    if (body === sentLookRef.current) return undefined;
+    const timer = setTimeout(() => {
+      const socket = socketRef.current;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "appearance", appearance: spec }));
+        sentLookRef.current = body;
+      }
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [look, lookRows, live]);
+
   return (
     // data-* attributes expose state and counts for the E2E test.
-    <div id="live-panel" data-state={state} data-chunks={stats.chunks} data-frames={stats.frames} data-playing={playing}>
+    <div id="live-panel" data-state={state} data-chunks={stats.chunks} data-frames={stats.frames} data-playing={playing} data-look-applied={lookApplied}>
       <h2 style={{ marginTop: "1.5rem" }}>Live Avatar</h2>
       <div style={card}>
         <label style={small}>
@@ -432,6 +481,14 @@ export default function LivePanel({ apiBase }) {
           disabled={micOn ? false : state !== "ready" || !micBasis} onClick={micOn ? stopMic : startMic}>
           {micOn ? "Stop microphone" : "Speak with my microphone"}
         </button>
+        {/* Lighting, colour, head position and expression, applied to the running session as they move. */}
+        <details id="live-look" style={{ marginTop: "12px" }}>
+          <summary style={{ cursor: "pointer", fontSize: "0.85rem" }}>Look and expression (live preview)</summary>
+          <div style={{ ...small, marginTop: "6px" }}>
+            Changes apply to the running session and show on the picture straight away; they are also kept when you press Start.
+          </div>
+          <LookControls rows={lookRows} look={look} onChange={setLook} applied={lookApplied} idPrefix="live" />
+        </details>
         {/* What arrived. The microphone run reports its drive ("audio-energy"); text runs report sentences. */}
         <div id="live-stats" style={{ ...small, marginTop: "8px" }}>
           audio chunks {stats.chunks} · frames {stats.frames}

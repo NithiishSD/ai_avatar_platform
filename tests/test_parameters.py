@@ -23,12 +23,33 @@ class CatalogueTests(unittest.TestCase):
         known = {parameters.M, parameters.NO, parameters.LIM, parameters.UNAV, parameters.NM}
         self.assertTrue({r["status"] for r in rows} <= known)
 
-    def test_target_is_reported_as_not_met_with_the_counts_behind_it(self):
+    def test_target_is_derived_from_the_measured_count_not_set_by_hand(self):
         out = parameters.catalogue()
-        self.assertFalse(out["target"]["met"])
-        self.assertLess(out["counts"]["visualMeasuredWorking"], parameters.TARGET)
+        measured = out["counts"]["visualMeasuredWorking"]
+        self.assertEqual(out["target"]["met"], measured >= parameters.TARGET)
         self.assertEqual(out["counts"]["listed"], len(out["parameters"]))
         self.assertGreaterEqual(out["counts"]["noEffect"], 1)  # `neutral` is reported, not hidden
+
+    def test_the_target_falls_back_to_not_met_when_the_evidence_is_removed(self):
+        # Every appearance / expression row downgraded to "not measured": nothing is verified, so 50+ is not met.
+        original = parameters._ROWS
+        try:
+            parameters._ROWS = [
+                (m, f, g, parameters.NM if g in ("appearance", "expression") else s, n) for m, f, g, s, n in original
+            ]
+            out = parameters.catalogue()
+            self.assertFalse(out["target"]["met"])
+            self.assertEqual(out["counts"]["visualMeasuredWorking"], 0)
+        finally:
+            parameters._ROWS = original
+
+    def test_appearance_rows_carry_their_ranges_from_the_contract(self):
+        by_name = {r["name"]: r for r in parameters.catalogue()["parameters"]}
+        self.assertEqual((by_name["appearance.brightness"]["minimum"], by_name["appearance.brightness"]["maximum"]), (-1.0, 1.0))
+        self.assertEqual((by_name["appearance.gamma"]["minimum"], by_name["appearance.gamma"]["maximum"]), (0.5, 2.0))
+        self.assertEqual(by_name["appearance.autoLighting"]["type"], "boolean")
+        self.assertEqual((by_name["appearance.expression.jawOpen"]["minimum"], by_name["appearance.expression.jawOpen"]["maximum"]), (0.0, 1.0))
+        self.assertEqual(len([n for n in by_name if n.startswith("appearance.expression.")]), 25)
 
     def test_a_new_unlisted_field_is_caught(self):
         original = parameters._ROWS
@@ -50,7 +71,7 @@ class EndpointTests(unittest.TestCase):
         with mock.patch.object(app_module.security_gate, "inspect", return_value=(True, 0, {})):
             body = TestClient(app_module.app).get("/api/v1/parameters").json()
         self.assertEqual(body["counts"]["listed"], len(body["parameters"]))
-        self.assertFalse(body["target"]["met"])
+        self.assertEqual(body["target"]["met"], body["counts"]["visualMeasuredWorking"] >= body["target"]["appearanceParameters"])
 
 
 if __name__ == "__main__":

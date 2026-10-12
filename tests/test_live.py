@@ -52,8 +52,11 @@ class FakeSession:
             raise FakeSession.open_error
         return {"width": 384, "height": 384, "fps": self.fps}
 
-    def synth_chunk(self, index, text) -> ChunkAudio:
+    def synth_chunk(self, index, text, on_audio=None) -> ChunkAudio:
         self.log.append(("synth", index, 0, time.perf_counter()))
+        # Like the real session, hand the sound over before the timing is ready.
+        if on_audio is not None:
+            on_audio(b"\x01\x00" * 12000, 24000, 0.5)
         return ChunkAudio(
             index=index, text=text, pcm16=b"\x01\x00" * 12000, sample_rate=24000, duration_seconds=0.5,
             timestamps=[{"phoneme": "AA", "viseme": "viseme_aa", "startMs": 0, "endMs": 400}],
@@ -75,6 +78,21 @@ class FakeSession:
 
     def cleanup(self):
         self.cleaned = True
+
+
+class PreviewSession(FakeSession):
+    """A FakeSession with the live-look surface: ``set_appearance`` and a still ``preview_jpeg``."""
+
+    def __init__(self, router, store, avatar_id, **options) -> None:
+        super().__init__(router, store, avatar_id, **options)
+        self.applied: list = []
+
+    def set_appearance(self, appearance):
+        self.applied.append(appearance)
+        return {"appearance": None if appearance is None else appearance.model_dump(exclude_none=True, by_alias=True)}
+
+    def preview_jpeg(self) -> bytes:
+        return b"\xff\xd8PREVIEW" + bytes([len(self.applied)])
 
 
 def collect(session, text, **kw):
@@ -163,17 +181,42 @@ class StreamTextTests(unittest.TestCase):
             self.assertIsNotNone(done[key], key)
 
 
+class FakeAligner:
+    """Stands in for ``alignment_engine.ForcedAligner``; records when it ran and returns fixed timing."""
+
+    timestamps: ClassVar[list] = []
+    fail = False
+    log: ClassVar[list] = []
+
+    def __init__(self, device=None) -> None:
+        self.last_method = "mms_fa"
+
+    def align(self, audio_path_or_tensor, transcript, sample_rate=24000, language="en"):
+        FakeAligner.log.append("align")
+        if FakeAligner.fail:
+            raise RuntimeError("aligner broke")
+        return [SimpleNamespace(model_dump=lambda by_alias=True, s=s: dict(s)) for s in FakeAligner.timestamps]
+
+
 class RealSessionSynthesisTests(unittest.TestCase):
-    """LiveSession.synth_chunk against a fake router that writes a real wav."""
+    """LiveSession.synth_chunk against a fake router that writes a real wav and a fake aligner."""
+
+    def setUp(self):
+        FakeAligner.timestamps, FakeAligner.fail, FakeAligner.log = [], False, []
+        patcher = mock.patch("alignment_engine.ForcedAligner", FakeAligner)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def make(self, timestamps, tmp):
+        FakeAligner.timestamps = timestamps
+
         def synthesize(text, **kwargs):
             path = Path(tmp) / "out.wav"
             sf.write(path, (0.5 * np.sin(np.linspace(0, 200, 12000))).astype(np.float32), 24000)
-            return SimpleNamespace(output_path=str(path), phoneme_timestamps=timestamps, alignment_method="mms_fa",
+            return SimpleNamespace(output_path=str(path), phoneme_timestamps=None, alignment_method=None,
                                    model="kokoro", emotion={"vector": {"joy": 1.0}})
 
-        router = SimpleNamespace(synthesize=mock.Mock(side_effect=synthesize))
+        router = SimpleNamespace(synthesize=mock.Mock(side_effect=synthesize), device="cpu")
         return live_engine.LiveSession(router, None, "demo", emotion="joy"), router
 
     def test_audio_is_converted_to_pcm16_and_the_file_is_removed(self):
@@ -184,14 +227,122 @@ class RealSessionSynthesisTests(unittest.TestCase):
             self.assertAlmostEqual(chunk.duration_seconds, 0.5, places=3)
             self.assertFalse((Path(tmp) / "out.wav").exists())
             self.assertEqual(router.synthesize.call_args.kwargs["emotion"], "joy")
-            self.assertTrue(router.synthesize.call_args.kwargs["return_alignment"])
+            # The router no longer aligns: the session does, after handing the sound over.
+            self.assertFalse(router.synthesize.call_args.kwargs["return_alignment"])
+            self.assertEqual(chunk.alignment_method, "mms_fa")
+            self.assertEqual(chunk.timestamps[0]["viseme"], "viseme_aa")
             self.assertGreater(chunk.emotion_vector["happy"], 0)
+
+    def test_the_sound_is_handed_over_before_the_aligner_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session, _ = self.make([{"phoneme": "AA", "viseme": "viseme_aa", "startMs": 0, "endMs": 300}], tmp)
+            order = []
+            session.synth_chunk(0, "Hello.", on_audio=lambda pcm, rate, seconds: order.append(("audio", len(pcm), rate)))
+            order_with_align = order + FakeAligner.log
+            self.assertEqual(order_with_align[0][0], "audio")
+            self.assertEqual(order_with_align[0][1:], (12000 * 2, 24000))
+            self.assertEqual(order_with_align[1], "align")
+
+            # and the handed-over audio is already out when the aligner is only about to start
+            seen = []
+            FakeAligner.log.clear()
+            session.synth_chunk(1, "Again.", on_audio=lambda *a: seen.append(list(FakeAligner.log)))
+            self.assertEqual(seen, [[]])
 
     def test_speech_without_phoneme_timing_is_refused_with_the_reason(self):
         with tempfile.TemporaryDirectory() as tmp:
             session, _ = self.make([], tmp)
             with self.assertRaisesRegex(LiveError, "no phoneme timing"):
                 session.synth_chunk(0, "Hello.")
+
+    def test_an_aligner_failure_is_refused_not_hidden(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session, _ = self.make([{"phoneme": "AA", "viseme": "viseme_aa", "startMs": 0, "endMs": 300}], tmp)
+            FakeAligner.fail = True
+            with self.assertLogs("live_engine", level="WARNING"), self.assertRaisesRegex(LiveError, "no phoneme timing"):
+                session.synth_chunk(0, "Hello.")
+            self.assertFalse((Path(tmp) / "out.wav").exists())
+
+
+class RealSessionLookTests(unittest.TestCase):
+    """LiveSession.set_appearance / preview_jpeg with the animator mocked (no face model is loaded)."""
+
+    def make(self):
+        session = live_engine.LiveSession(SimpleNamespace(device="cpu"), None, "demo", fps=25)
+        session._source_image = np.full((8, 8, 3), 100, dtype=np.uint8)
+        session._analysis = SimpleNamespace(pixel_landmarks=lambda: [(1, 1), (6, 1), (3, 6)])
+        return session
+
+    def test_the_look_is_applied_to_the_source_photo_and_the_animator_is_rebuilt(self):
+        from contracts import AppearanceSpec
+
+        session = self.make()
+        built = []
+
+        class RecordingAnimator:
+            def __init__(self, image, analysis):
+                built.append(int(image.mean()))
+
+        with mock.patch.object(live_engine, "PortraitAnimator", RecordingAnimator):
+            session.animator = object()
+            session._build_animator()
+            info = session.set_appearance(AppearanceSpec.model_validate({"brightness": 0.8}))
+            cleared = session.set_appearance(None)
+        self.assertEqual(built[0], 100)          # no look: the photo as it is
+        self.assertGreater(built[1], 120)        # brighter photo, same analysis
+        self.assertEqual(built[2], 100)          # cleared: back to the photo
+        self.assertEqual(info["appearance"], {"brightness": 0.8})
+        self.assertIsNone(cleared["appearance"])
+        self.assertIsNone(session.appearance)
+
+    def test_a_skipped_control_is_reported_not_silent(self):
+        from contracts import AppearanceSpec
+
+        session = self.make()
+        session.animator = object()
+        with mock.patch.object(live_engine, "PortraitAnimator", lambda image, analysis: object()), \
+                mock.patch.object(live_engine.look, "apply_look", return_value=(session._source_image, ["backgroundBlur was skipped"])):
+            info = session.set_appearance(AppearanceSpec.model_validate({"backgroundBlur": 0.5}))
+        self.assertEqual(info["warnings"], ["backgroundBlur was skipped"])
+
+    def test_changing_the_look_before_the_session_is_open_is_refused(self):
+        from contracts import AppearanceSpec
+
+        session = live_engine.LiveSession(SimpleNamespace(device="cpu"), None, "demo")
+        with self.assertRaisesRegex(LiveError, "not open"):
+            session.set_appearance(AppearanceSpec.model_validate({"brightness": 0.2}))
+
+    def test_the_preview_is_one_resting_frame_with_the_standing_look(self):
+        from contracts import AppearanceSpec
+
+        session = self.make()
+        session.appearance = AppearanceSpec.model_validate({"headRoll": 6, "expression": {"mouthSmile": 0.5}})
+        seen = {}
+
+        def fake_render(track, index):
+            seen["frames"] = track.frame_count
+            seen["smile"] = float(track.column("mouthSmileLeft")[0])
+            seen["roll"] = float(track.pose(0)[0])
+            return b"JPEG"
+
+        with mock.patch.object(session, "render_jpeg", side_effect=fake_render):
+            self.assertEqual(session.preview_jpeg(), b"JPEG")
+        self.assertEqual(seen["frames"], 1)
+        self.assertGreaterEqual(seen["smile"], 0.5 - 1e-6)
+        self.assertAlmostEqual(seen["roll"], 6.0, places=3)
+
+    def test_chunks_built_in_a_session_carry_the_standing_expression_and_pose(self):
+        from contracts import AppearanceSpec
+
+        session = self.make()
+        session.appearance = AppearanceSpec.model_validate({"headShiftX": 0.04, "expression": {"eyeSquintLeft": 0.6}})
+        chunk = ChunkAudio(index=0, text="Hi.", pcm16=b"\x00\x00" * 100, sample_rate=24000, duration_seconds=0.5,
+                           timestamps=[{"phoneme": "AA", "viseme": "viseme_aa", "startMs": 0, "endMs": 400}],
+                           alignment_method="mms_fa", model="kokoro", emotion_vector={}, energy=np.ones(10), synth_ms=1.0)
+        track = session.build_track(chunk)
+        self.assertTrue(np.allclose(track.column("eyeSquintLeft"), 0.6))
+        self.assertAlmostEqual(float(track.pose(0)[1]) - float(track.pose(1)[1]) + 0.0, float(track.head[0, 1] - track.head[1, 1]))
+        self.assertGreater(float(track.head[:, 1].mean()), 0.03)
 
 
 # --------------------------------------------------------------------------- websocket
@@ -317,6 +468,46 @@ class LiveWebSocketTests(unittest.TestCase):
         self.assertEqual(messages[0]["sampleRate"], 24000)
         self.assertEqual(messages[-1]["chunks"], 2)
         self.assertEqual(FakeSession.instances[0].options["fps"], 20)
+
+    def test_a_session_with_a_preview_sends_a_still_after_ready_and_apply_look_changes_live(self):
+        from live_engine import KIND_PREVIEW
+
+        with mock.patch.object(app_module.live_engine, "LiveSession", PreviewSession), \
+                self.client.websocket_connect("/api/v1/live") as ws:
+            self.start(ws)
+            first = ws.receive()  # the picture is there before anything is said
+            kind, _, _, _, payload = unpack_media(first["bytes"])
+            self.assertEqual((kind, payload[-1]), (KIND_PREVIEW, 0))
+            ws.send_json({"type": "appearance", "appearance": {"brightness": 0.4, "expression": {"browInnerUp": 0.5}}})
+            reply = ws.receive_json()
+            self.assertEqual(reply["type"], "appearance")
+            self.assertEqual(reply["appearance"]["brightness"], 0.4)
+            self.assertEqual(reply["appearance"]["expression"]["browInnerUp"], 0.5)
+            kind, _, _, _, payload = unpack_media(ws.receive()["bytes"])
+            self.assertEqual((kind, payload[-1]), (KIND_PREVIEW, 1))
+            # null clears the look, and the session still speaks afterwards
+            ws.send_json({"type": "appearance", "appearance": None})
+            self.assertIsNone(ws.receive_json()["appearance"])
+            ws.receive()
+            ws.send_json({"type": "say", "text": "Still works."})
+            self.assertEqual(self.until_done(ws)[-1]["type"], "done")
+        applied = FakeSession.instances[0].applied
+        self.assertEqual(len(applied), 2)
+        self.assertAlmostEqual(applied[0].brightness, 0.4)
+        self.assertIsNone(applied[1])
+
+    def test_a_bad_look_is_refused_with_the_reason_and_the_session_carries_on(self):
+        with mock.patch.object(app_module.live_engine, "LiveSession", PreviewSession), \
+                self.client.websocket_connect("/api/v1/live") as ws:
+            self.start(ws)
+            ws.receive()
+            for bad in ({"brightness": 3}, {"expression": {"cheekPuff": 0.5}}, {"sparkle": True}):
+                ws.send_json({"type": "appearance", "appearance": bad})
+                reply = ws.receive_json()
+                self.assertEqual((reply["type"], reply["code"]), ("error", "bad_message"))
+            ws.send_json({"type": "say", "text": "Fine."})
+            self.assertEqual(self.until_done(ws)[-1]["type"], "done")
+        self.assertEqual(FakeSession.instances[0].applied, [])
 
     def test_a_session_can_speak_more_than_once(self):
         with self.client.websocket_connect("/api/v1/live") as ws:

@@ -247,6 +247,8 @@ def build_manifest(
             "renderEngine": render.get("engine"),
             "quality": render.get("quality"),
             "background": render.get("background"),
+            # What lighting and grade was applied to the photo (None when none was).
+            "appearance": render.get("appearance"),
             "visibleLabel": render.get("label"),
         },
         "models": models,

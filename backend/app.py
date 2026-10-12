@@ -74,12 +74,14 @@ else:
 # module only imports them, so the wire format is defined in one place.
 from celery_app import celery, get_router, run_render, synthesize_audio
 from contracts import (
+    AppearanceSpec,
     AudioSynthesisRequest,
     AvatarFaceEntry,
     AvatarFacesResponse,
     AvatarGenerateRequest,
     AvatarGenerateResponse,
     AvatarRegisterResponse,
+    LiveAppearanceMessage,
     LiveAudioStartMessage,
     LiveControlMessage,
     LiveSayMessage,
@@ -1409,6 +1411,8 @@ async def voice_to_avatar_route(
     render_quality: RenderQuality = Form(RenderQuality.PREVIEW, alias="renderQuality"),
     # ge / le are validation bounds (>= 0, <= 2); FastAPI answers 422 outside them.
     motion_intensity: Optional[float] = Form(None, alias="motionIntensity", ge=0.0, le=2.0),
+    # A JSON object: the AppearanceSpec (lighting, grade, head pose, standing expression), as a form field.
+    appearance: Optional[str] = Form(None),
 ) -> dict:
     """
     Upload a recording (with the basis the voice is used under) and an avatar id; get a render job.
@@ -1434,6 +1438,15 @@ async def voice_to_avatar_route(
     except (avatar_store.AvatarError, render_engine.RenderError) as err:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
 
+    # Parsed before the upload is read, so a malformed look is a 422 now and not after speech recognition.
+    appearance_spec = None
+    if appearance:
+        try:
+            appearance_spec = AppearanceSpec.model_validate_json(appearance)
+        except ValidationError as err:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=f"appearance is not a valid look: {_scrub(str(err))[:300]}") from err
+
     upload = await _spool_upload(file, MAX_SUPPLIED_AUDIO_BYTES)
     try:
         # Decoding, speech recognition and alignment are slow model work: off the loop.
@@ -1456,6 +1469,7 @@ async def voice_to_avatar_route(
         # ``**{...}`` merges the key in only when it was sent, so the
         # contract's own default applies otherwise.
         **({"motionIntensity": motion_intensity} if motion_intensity is not None else {}),
+        **({"appearance": appearance_spec} if appearance_spec is not None and not appearance_spec.is_empty() else {}),
     })
     queued = _submit_render(job, engine)
     # No response_model on this route, so the job is dumped to a dict by hand
@@ -1721,7 +1735,7 @@ async def live_avatar(ws: WebSocket) -> None:
                 router, faces, start.avatar_id, language=start.language, mode=start.mode,
                 emotion=start.emotion, emotion_intensity=start.emotion_intensity, fps=start.fps,
                 max_side=start.max_side, speaker_wav=speaker, clone_engine=start.clone_engine, voice=start.voice,
-                motion_intensity=start.motion_intensity,
+                motion_intensity=start.motion_intensity, appearance=start.appearance,
             )
             # open() checks face consent, decodes the photo and runs landmark
             # detection: blocking work, so it goes to a worker thread.
@@ -1750,6 +1764,13 @@ async def live_avatar(ws: WebSocket) -> None:
                             "requestId": current_request_id(), **info})
         logger.info("Live session %s opened: avatar=%s mode=%s %dx%d@%d", session.session_id,
                     start.avatar_id, start.mode, info["width"], info["height"], info["fps"])
+        # A still of the avatar with its look, so the picture is there before anything is said.
+        preview_fn = getattr(session, "preview_jpeg", None)
+        if callable(preview_fn):
+            try:
+                await ws.send_bytes(live_engine.pack_media(live_engine.KIND_PREVIEW, 0, 0, 0, await run_in_threadpool(preview_fn)))
+            except Exception as err:  # noqa: BLE001 - a missing preview must not end a session
+                logger.warning("Live preview frame failed: %s", err)
 
         # A receiver task keeps reading while speech is being sent, so an
         # `interrupt` is seen between frames instead of after the whole text.
@@ -1809,6 +1830,23 @@ async def live_avatar(ws: WebSocket) -> None:
                 break
             if kind == "_malformed":
                 await ws.send_json({"type": "error", "code": "malformed", "detail": "messages must be JSON objects"})
+                continue
+            # -- look changes (N-15): lighting, grade, head pose, standing expression -------------
+            if kind == "appearance":
+                try:
+                    change = LiveAppearanceMessage.model_validate(raw)
+                except ValidationError as err:
+                    await ws.send_json({"type": "error", "code": "bad_message", "detail": _scrub(str(err))[:300]})
+                    continue
+                try:
+                    # Rebuilding the animator and drawing a still are blocking, so they go to a worker thread.
+                    applied = await run_in_threadpool(session.set_appearance, change.appearance)
+                    preview = await run_in_threadpool(session.preview_jpeg)
+                except live_engine.LiveError as err:
+                    await ws.send_json({"type": "error", "code": "appearance_failed", "detail": str(err)})
+                    continue
+                await ws.send_json({"type": "appearance", **applied})
+                await ws.send_bytes(live_engine.pack_media(live_engine.KIND_PREVIEW, 0, 0, 0, preview))
                 continue
             # -- streaming audio input (R-41): the client's own speech drives the mouth ----------
             if kind == "audio_start":

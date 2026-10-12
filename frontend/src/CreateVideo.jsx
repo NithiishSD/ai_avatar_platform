@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"; // React hooks used below; each is explained where it first appears
+import LookControls from "./LookControls"; // lighting, grade, head pose and expression sliders
+import { buildSpec } from "./look"; // flat slider state -> AppearanceSpec
 import FacePicker from "./FacePicker"; // step 1, the face grid and "Manage faces"
 import { recordedGender, rememberVoice, voiceForFace } from "./voices"; // matching a speaker voice to the face
 
@@ -94,6 +96,8 @@ export default function CreateVideo({ apiBase }) {
   const [quality, setQuality] = useState("PREVIEW"); // renderQuality in the render job
   const [engine, setEngine] = useState("blendshape"); // lip-sync engine; wav2lip only when installed
   const [motion, setMotion] = useState(1.0); // head-and-shoulder movement: 0 still .. 1.5 lively
+  const [look, setLook] = useState({}); // look sliders (flat parameter name -> value); neutral ones are not sent
+  const [lookRows, setLookRows] = useState([]); // the catalogue's appearance rows, which give each slider its range
   const [background, setBackground] = useState(false); // replace the background?
   const [backgroundColor, setBackgroundColor] = useState("#0b3d91"); // and with which colour
 
@@ -179,6 +183,19 @@ export default function CreateVideo({ apiBase }) {
     }
   }, []);
 
+  useEffect(() => {
+    let ignore = false;
+    // The sliders get their ranges from the parameter catalogue, so they are the API's own.
+    fetch(`${apiBase}/api/v1/parameters`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => !ignore && d && setLookRows(d.parameters.filter((p) => p.name.startsWith("appearance."))))
+      .catch(() => {});
+    return () => { ignore = true; };
+  }, [apiBase]);
+
+  // The look as the API takes it, or null when every slider is at its neutral value.
+  const lookSpec = buildSpec(look, lookRows);
+
   // Step two: send the finished speech to the renderer as an AvatarRenderJob (backend/contracts.py,
   // the only audio-to-vision interface) and poll until the video is done or failed.
   const renderVideo = async (speechResult) => {
@@ -188,6 +205,7 @@ export default function CreateVideo({ apiBase }) {
       durationSeconds: Math.max(speechResult.durationSeconds, 0.5), phonemeTimestamps: speechResult.phonemeTimestamps, // at least 0.5 s; the contract requires a positive duration. The phoneme times drive the mouth
       emotionVector: faceEmotion(speechResult.emotion), renderQuality: quality, targetFps: 25, motionIntensity: motion, // motionIntensity: 0 still .. 1.5 lively (contract allows up to 2)
       ...(background ? { background: { color: backgroundColor } } : {}), // conditional spread: adds the key only when wanted
+      ...(lookSpec ? { appearance: lookSpec } : {}), // lighting / grade / head position / expression, only when something was moved
     };
     const res = await fetch(`${apiBase}/api/v1/avatar/render-job?engine=${encodeURIComponent(engine)}`, { // the engine is a query parameter, not part of the contract
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), // a JSON body needs this header
@@ -239,6 +257,7 @@ export default function CreateVideo({ apiBase }) {
     form.append("engine", engine);
     form.append("renderQuality", quality);
     form.append("motionIntensity", String(motion)); // form fields are strings
+    if (lookSpec) form.append("appearance", JSON.stringify(lookSpec)); // the look, as a JSON string field
     if (own.transcript.trim()) form.append("transcript", own.transcript.trim()); // empty: the server recognises the words
     const res = await fetch(`${apiBase}/api/v1/avatar/voice-to-avatar`, { method: "POST", body: form });
     const accepted = await res.json();
@@ -443,6 +462,11 @@ export default function CreateVideo({ apiBase }) {
             <input id="background-toggle" type="checkbox" checked={background} onChange={(e) => setBackground(e.target.checked)} /> New background colour
             {background && <input id="background-color" type="color" aria-label="background colour" value={backgroundColor} onChange={(e) => setBackgroundColor(e.target.value)} />}
           </label>
+          {/* Lighting, colour, head position and a standing expression: applied to the photo before it is animated. */}
+          <details className="more" id="create-look">
+            <summary>Look and expression</summary>
+            <LookControls rows={lookRows} look={look} onChange={setLook} applied={0} idPrefix="create" />
+          </details>
         </div>
       </div>
 
@@ -483,6 +507,7 @@ export default function CreateVideo({ apiBase }) {
                 <div className="meta">
                   {result.width}×{result.height} · {result.fps} fps · made in {result.renderSeconds}s
                   {result.background ? ` · background: ${result.background}` : ""}
+                  {result.appearance ? ` · look: ${Object.keys(result.appearance).join(", ")}` : ""}
                 </div>
               )}
               {/* Provenance line: whether the invisible watermark was applied and read back, the signed manifest, a download link. */}
