@@ -56,7 +56,6 @@ always produce the same output, which keeps tests and benchmarks repeatable.
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, Mapping, Optional
@@ -564,29 +563,36 @@ class EmotionProsodyEngine:
         # Measured before any change, so loudness can be restored afterwards.
         source_rms = float(np.sqrt(np.mean(signal**2)))
 
-        # Order: stretch, global pitch, contour, then tilt. Pitch shifts work
-        # on the already-stretched signal, so the contour's block timing
-        # follows the final duration.
-        if abs(params.rate - 1.0) >= 0.01:
-            # rate > 1 shortens the audio (faster speech), < 1 lengthens it.
-            signal = librosa.effects.time_stretch(signal, rate=float(params.rate))
+        # Single-pass pitch + time stretch:
+        # Avoid cascading multiple phase vocoders which destroy phase coherence
+        # and create metallic, robotic ringing.
+        # Resampling by pitch_ratio shifts pitch by pitch_ratio and rate by pitch_ratio.
+        # Desired overall rate is params.rate, so the remaining time-stretch ratio is:
+        # stretch_ratio = rate / pitch_ratio.
+        pitch_ratio = float(2.0 ** (params.pitch_semitones / 12.0))
+        stretch_ratio = float(params.rate / pitch_ratio)
 
-        if abs(params.pitch_semitones) >= 0.05:
-            # n_steps is in semitones; the duration stays the same.
-            signal = librosa.effects.pitch_shift(
-                signal, sr=sample_rate, n_steps=float(params.pitch_semitones)
+        # 1. Single time-stretch (only if duration change is needed)
+        if abs(stretch_ratio - 1.0) >= 0.01:
+            signal = librosa.effects.time_stretch(signal, rate=float(stretch_ratio))
+
+        # 2. Pure polyphase sinc resample for pitch shifting (0 phase vocoder noise)
+        if abs(pitch_ratio - 1.0) >= 0.005:
+            signal = librosa.resample(
+                signal,
+                orig_sr=int(round(sample_rate * pitch_ratio)),
+                target_sr=sample_rate,
             )
 
+        # 3. Dynamic F0 contour & subtle prosody wobble (smooth time-domain interpolation)
         if abs(params.contour) >= 0.05 or params.jitter >= 0.02:
             signal = self._apply_contour(signal, sample_rate, params)
 
+        # 4. Transparent spectral tilt (smooth Butterworth shelving, no Nyquist noise)
         if abs(params.tilt) >= 0.02:
-            signal = self._apply_tilt(signal, float(params.tilt))
+            signal = self._apply_tilt(signal, float(params.tilt), sample_rate)
 
-        # Phase-vocoder stretching, pitch shifting and tilt filtering all change
-        # the level as a side effect. Restoring the source RMS first makes
-        # ``energy`` the only thing that decides loudness, so "anger is louder
-        # than neutral" holds no matter which other transforms ran.
+        # Restoring source RMS first makes ``energy`` the only thing that decides loudness.
         result_rms = float(np.sqrt(np.mean(signal**2))) if signal.size else 0.0
         if source_rms > 1e-6 and result_rms > 1e-6:
             signal = signal * (source_rms / result_rms)
@@ -609,107 +615,51 @@ class EmotionProsodyEngine:
         params: ProsodyParams,
     ) -> np.ndarray:
         """
-        Impose an F0 trajectory by pitch-shifting successive blocks by a
-        different amount, then cross-fading the blocks back together.
+        Impose an F0 trajectory by smooth time-domain dynamic resampling.
 
         A rising contour makes the utterance end higher than it began; jitter
-        adds a small deterministic wobble on top so the line is not a ruler.
+        adds a small deterministic wobble on top. Because this operates as
+        continuous time mapping rather than chunked STFT slicing, it preserves
+        phase alignment and eliminates metallic phase-vocoder artifacts.
         """
-        import librosa
-
-        # 250 ms blocks let the pitch move several times within a sentence.
-        # The 2048-sample floor equals librosa's default STFT window
-        # (n_fft=2048), so even at a low sample rate each block holds at
-        # least one full analysis window. The fade is 30 ms, at least 128
-        # samples.
-        block = max(int(0.25 * sample_rate), 2048)
-        fade = max(int(0.03 * sample_rate), 128)
-        # Audio shorter than about one block has no trajectory to shape.
-        if signal.size <= block + fade:
+        n_samples = len(signal)
+        if n_samples < 2:
             return signal
 
-        # Blocks are pitch-shifted independently, so their phases no longer
-        # line up. Overlap-adding them at 50% cancels energy and drops the
-        # level by several dB, so instead the blocks abut and only a short
-        # equal-power crossfade overlaps - cancellation stays inside the seam.
-        # hop is the step between block starts; consecutive blocks overlap by
-        # exactly ``fade`` samples, the crossfade region.
-        hop = block - fade
-        starts = list(range(0, signal.size - block + 1, hop))
-        if not starts:
+        t = np.linspace(-0.5, 0.5, n_samples, dtype=np.float64)
+        st = params.contour * t
+        if params.jitter >= 0.02:
+            st = st + params.jitter * np.sin(2.0 * np.pi * 1.7 * (t + 0.5))
+
+        pitch_ratios = 2.0 ** (st / 12.0)
+        cum_time = np.cumsum(pitch_ratios)
+        span = cum_time[-1] - cum_time[0]
+        if span <= 1e-9:
             return signal
-        # Add one final block flush with the end so the tail is not dropped.
-        if starts[-1] + block < signal.size:
-            starts.append(signal.size - block)
 
-        # Equal-power crossfade: sin and cos ramps satisfy
-        # sin^2 + cos^2 = 1, so the summed power stays constant across the
-        # seam. A straight linear fade would dip in loudness halfway through.
-        ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
-        fade_in = np.sin(ramp * np.pi / 2.0).astype(np.float32)
-        fade_out = np.cos(ramp * np.pi / 2.0).astype(np.float32)
-
-        out = np.zeros(signal.size, dtype=np.float32)
-        # max(..., 1) avoids dividing by zero when there is only one block.
-        last = max(len(starts) - 1, 1)
-
-        for index, start in enumerate(starts):
-            chunk = signal[start : start + block]
-            # 0.0 at the first block, 1.0 at the last: progress through speech.
-            position = index / last
-            # Contour is centred so the mean pitch stays put.
-            steps = params.contour * (position - 0.5)
-            # Deterministic wobble: the same input always gives the same output.
-            steps += params.jitter * float(math.sin(2.0 * math.pi * 1.7 * position))
-            if abs(steps) >= 0.02:
-                chunk = librosa.effects.pitch_shift(
-                    chunk, sr=sample_rate, n_steps=float(steps)
-                )
-            # Trimmed to ``block`` in case pitch_shift returns a sample or so
-            # more, which would not fit the slot in ``out``.
-            chunk = np.asarray(chunk[:block], dtype=np.float32)
-
-            # The first block has nothing before it to fade from.
-            if index == 0:
-                out[start : start + block] = chunk
-                continue
-            out[start : start + fade] = (
-                out[start : start + fade] * fade_out + chunk[:fade] * fade_in
-            )
-            out[start + fade : start + block] = chunk[fade:]
-
-        return out.astype(np.float32)
+        cum_time = (cum_time - cum_time[0]) / span * (n_samples - 1)
+        indices = np.arange(n_samples, dtype=np.float64)
+        out = np.interp(cum_time, indices, signal).astype(np.float32)
+        return out
 
     @staticmethod
-    def _apply_tilt(signal: np.ndarray, tilt: float) -> np.ndarray:
+    def _apply_tilt(signal: np.ndarray, tilt: float, sample_rate: int = 24000) -> np.ndarray:
         """
-        First-order spectral tilt: blend in a high-passed copy to brighten
-        (``tilt > 0``) or a low-passed copy to darken (``tilt < 0``).
-
-        *Spectral tilt* is the balance between low and high frequencies.
-        Tense, aroused voices have more high-frequency energy (brighter);
-        relaxed or sad ones have less (darker).
+        Gentle first-order spectral tilt: a transparent shelving filter at 3 kHz
+        to brighten (``tilt > 0``) or darken (``tilt < 0``) without Nyquist noise.
         """
-        # y[n] - y[n-1] is a one-pole differentiator, i.e. a +6 dB/octave tilt.
-        high = np.empty_like(signal)
-        high[0] = signal[0]
-        high[1:] = signal[1:] - signal[:-1]
+        from scipy.signal import butter, lfilter
 
-        if tilt > 0:
-            return (signal + tilt * high).astype(np.float32)
-
-        from scipy.signal import lfilter
-
-        # A one-pole low-pass: y[n] = (1 - alpha) * x[n] + alpha * y[n-1].
-        # lfilter takes it as numerator [1 - alpha] and denominator
-        # [1, -alpha]. A larger alpha smooths more, so it cuts more treble.
-        alpha = 0.6
-        # lfilter returns a (signal, state) tuple only when given initial state
-        # (zi); without it the result is an array, which np.asarray pins down.
-        low = np.asarray(lfilter([1.0 - alpha], [1.0, -alpha], signal), dtype=np.float32)
-        # A crossfade between dry and filtered signal; |tilt| sets the share.
-        mix = min(1.0, abs(tilt))
-        return ((1.0 - mix) * signal + mix * low).astype(np.float32)
+        gain_db = float(tilt) * 3.0  # gentle +/- 3 dB shelf
+        gain_lin = 10.0 ** (gain_db / 20.0)
+        fc = min(3000.0, 0.45 * sample_rate)
+        nyq = sample_rate / 2.0
+        b_lp, a_lp = butter(1, fc / nyq, btype="low")
+        b_hp, a_hp = butter(1, fc / nyq, btype="high")
+        lp = lfilter(b_lp, a_lp, signal)
+        hp = lfilter(b_hp, a_hp, signal)
+        out = lp + hp * gain_lin
+        return out.astype(np.float32)
 
 
 def preset_catalogue() -> list[dict]:

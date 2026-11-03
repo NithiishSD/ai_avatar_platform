@@ -280,3 +280,66 @@ def validate_and_convert_for_cloning(
     )
 
     return out_path
+
+
+def clean_audio_sample(
+    input_path: Path,
+    output_path: Optional[Path] = None,
+    highpass_hz: int = 55,
+    denoise_db: int = 8,
+) -> Path:
+    """
+    Clean and denoise a voice reference recording for higher-fidelity voice cloning.
+
+    Applies:
+      1. Gentle highpass filter (55 Hz) to eliminate DC offset, sub-rumble, and mic thumps
+         without attenuating male vocal fundamental pitch (which can reach 60-65 Hz).
+      2. Gentle FFT spectral denoising (afftdn) to strip background hiss, fan hum, and room noise
+         without creating metallic or watery phase artifacts.
+      3. Speech dynamic normalization to level speech intensity smoothly.
+      4. Preserves full vocal bandwidth (up to Nyquist) for natural timbre and upper formants.
+    Preserves provenance sidecar if one exists for the input.
+    """
+    import shutil
+    import subprocess
+    import provenance
+
+    in_path = Path(input_path).resolve()
+    if not in_path.is_file():
+        raise FileNotFoundError(f"Audio file not found: {in_path}")
+
+    if output_path is None:
+        out_path = in_path.parent / f"{in_path.stem}_cleaned.wav"
+    else:
+        out_path = Path(output_path).resolve()
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    filter_chain = (
+        f"highpass=f={highpass_hz},"
+        f"afftdn=nr={denoise_db}:nf=-45:tn=1,"
+        f"speechnorm=p=0.92:e=6:r=0.0001:l=1"
+    )
+
+    cmd = [
+        "ffmpeg", "-y", "-i", str(in_path),
+        "-af", filter_chain,
+        "-ar", str(XTTS_OUTPUT_SAMPLE_RATE),
+        "-ac", "1",
+        str(out_path),
+    ]
+
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.warning("ffmpeg audio cleaning failed (%s); falling back to input audio", exc)
+        return in_path
+
+
+    # Copy provenance sidecar if it exists
+    src_sidecar = provenance.sidecar_path(in_path)
+    if src_sidecar.is_file():
+        shutil.copy2(src_sidecar, provenance.sidecar_path(out_path))
+
+    return out_path
+

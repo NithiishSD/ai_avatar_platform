@@ -52,7 +52,7 @@ PUBLIC_PATHS = {
 # A tuple because str.startswith() accepts one and tests them all in a single
 # call. The trailing slash matters: "/outputs/" cannot be matched by a path
 # like "/outputs-private", which "/outputs" would have allowed through.
-PUBLIC_PREFIXES = ("/outputs/",)
+PUBLIC_PREFIXES = ("/outputs/", "/output/")
 
 
 def _env_bool(name: str, default: bool = False) -> bool:

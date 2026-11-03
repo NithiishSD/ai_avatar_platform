@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import gc
 import logging
+import os
 from typing import Callable, Dict, List, Optional, TypeVar
 
 T = TypeVar("T")
@@ -154,6 +155,8 @@ def ensure_host_memory(required_mb: int, purpose: str, keep: Optional[str] = Non
     A model that is going to the GPU does not use system RAM for its weights
     in the same way, so this passes when CUDA is in use.
     """
+    if os.getenv("RAM_GUARD", "true").lower() in ("false", "0", "no"):
+        return
     if cuda_available():
         return
     free = free_ram_mb()

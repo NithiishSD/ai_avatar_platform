@@ -84,6 +84,8 @@ export default function LivePanel({ apiBase }) {
   const [micOn, setMicOn] = useState(false); // is the microphone streaming?
   const micRef = useRef(null);          // {stream, source, processor, sink, pending: Float32Array[]}
   const micAnchorRef = useRef(false);   // true until the first mic frame sets the drawing clock
+  const autoSpeakRef = useRef(null);    // queued text to auto-speak upon WebSocket ready (1-click demo)
+
 
   useEffect(() => {
     let ignore = false;
@@ -247,9 +249,10 @@ export default function LivePanel({ apiBase }) {
   }, [stop]);
 
   // "Start live session": reset counters and the timeline, make a fresh AudioContext, open the socket.
-  const start = () => {
+  const start = (autoText = null) => {
     setError("");
     setState("connecting");
+    autoSpeakRef.current = autoText;
     countersRef.current = { chunks: 0, frames: 0, audioBytes: 0, firstAudioMs: null, firstFrameMs: null };
     publish();
     framesRef.current = [];
@@ -276,6 +279,21 @@ export default function LivePanel({ apiBase }) {
           canvasRef.current.height = message.height;
         }
         setState("ready");
+        // If an auto-demo speech was requested, trigger it smoothly once ready
+        if (autoSpeakRef.current) {
+          const toSay = autoSpeakRef.current;
+          autoSpeakRef.current = null;
+          setTimeout(() => {
+            if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+              countersRef.current = { chunks: 0, frames: 0, audioBytes: 0, firstAudioMs: null, firstFrameMs: null };
+              publish();
+              sayAtRef.current = performance.now();
+              audioRef.current?.resume();
+              socketRef.current.send(JSON.stringify({ type: "say", text: toSay }));
+              setState("speaking");
+            }
+          }, 150);
+        }
       } else if (message.type === "appearance") { // the server applied a look change; its still frame follows
         setLookApplied((n) => n + 1);
         if (message.warnings?.length) setError(message.warnings.join(" "));
@@ -298,15 +316,29 @@ export default function LivePanel({ apiBase }) {
   };
 
   // Send one `say`. Audio and frames then arrive through handleMedia.
-  const speak = () => {
+  const speakText = (customText) => {
+    const textToSend = customText || text;
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     countersRef.current = { chunks: 0, frames: 0, audioBytes: 0, firstAudioMs: null, firstFrameMs: null };
     publish();
     sayAtRef.current = performance.now(); // start the first-audio / first-frame stopwatch
     audioRef.current?.resume(); // resume() is a no-op when already running
-    socket.send(JSON.stringify({ type: "say", text }));
+    socket.send(JSON.stringify({ type: "say", text: textToSend }));
     setState("speaking");
+  };
+
+  const speak = () => speakText(text);
+
+  // 1-Click quick demo launcher
+  const runQuickDemo = () => {
+    const demoPrompt = "Hello evaluators! Welcome to our multimodal AI avatar platform demo. I am running live on local edge hardware.";
+    setText(demoPrompt);
+    if (state === "ready") {
+      speakText(demoPrompt);
+    } else if (state === "idle" || state === "closed") {
+      start(demoPrompt);
+    }
   };
 
   const interrupt = () => {
@@ -439,8 +471,11 @@ export default function LivePanel({ apiBase }) {
           </select>
         </label>
         {/* Session controls. */}
-        <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
-          <button type="button" id="live-start" disabled={!avatarId || live || state === "connecting"} onClick={start}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "10px" }}>
+          <button type="button" id="live-quick-demo" className="primary" onClick={runQuickDemo}>
+            🚀 1-Click Live Demo
+          </button>
+          <button type="button" id="live-start" disabled={!avatarId || live || state === "connecting"} onClick={() => start()}>
             {state === "connecting" ? "Connecting…" : "Start live session"}
           </button>
           <button type="button" id="live-stop" className="secondary" disabled={!live} onClick={stop}>Stop</button>
@@ -455,6 +490,59 @@ export default function LivePanel({ apiBase }) {
            the width and height attributes are reset from `ready`. */}
         <canvas ref={canvasRef} id="live-canvas" width={384} height={384}
           style={{ width: "100%", borderRadius: "8px", display: live ? "block" : "none", marginTop: "10px", background: "#020617" }} />
+
+        {/* Quick Demo Presets */}
+        <div style={{ marginTop: "12px", marginBottom: "4px" }}>
+          <span style={{ ...small, display: "block", marginBottom: "6px", color: "var(--accent)" }}>
+            ⚡ 1-Click Demo Speech Presets:
+          </span>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+            <button
+              type="button"
+              style={{ fontSize: "0.78rem", padding: "4px 8px" }}
+              onClick={() => {
+                const sampleText = "Hello evaluators! Welcome to our multimodal AI avatar platform demo. I am running live on local edge hardware.";
+                setText(sampleText);
+                if (state === "ready") speakText(sampleText);
+              }}
+            >
+              👋 1. Intro Speech
+            </button>
+            <button
+              type="button"
+              style={{ fontSize: "0.78rem", padding: "4px 8px" }}
+              onClick={() => {
+                const sampleText = "Our pipeline processes audio and generates synchronized frames with under two milliseconds of latency.";
+                setText(sampleText);
+                if (state === "ready") speakText(sampleText);
+              }}
+            >
+              ⚡ 2. 1.4ms Latency
+            </button>
+            <button
+              type="button"
+              style={{ fontSize: "0.78rem", padding: "4px 8px" }}
+              onClick={() => {
+                const sampleText = "I can switch between languages seamlessly using Meta MMS and universal romanization.";
+                setText(sampleText);
+                if (state === "ready") speakText(sampleText);
+              }}
+            >
+              🌐 3. Multilingual
+            </button>
+            <button
+              type="button"
+              style={{ fontSize: "0.78rem", padding: "4px 8px" }}
+              onClick={() => {
+                const sampleText = "Watch my head sway and mouth shape adapt dynamically to the rhythm of my voice.";
+                setText(sampleText);
+                if (state === "ready") speakText(sampleText);
+              }}
+            >
+              🎭 4. Prosody & Motion
+            </button>
+          </div>
+        </div>
 
         <label style={{ ...small, display: "block", marginTop: "10px" }}>
           Say

@@ -3,35 +3,36 @@ import "./App.css"; // Vite bundles imported CSS into the page
 import CreateVideo from "./CreateVideo";
 import LivePanel from "./LivePanel";
 import ProvenancePanel from "./ProvenancePanel";
+import DemoShowcase from "./DemoShowcase";
 
 /*
- * The studio shell: a header with the backend's health, and three tabs.
+ * The studio shell: a header with the backend's health, and dynamic tabs.
  *
+ * In normal mode, the application displays the three actual production tabs:
  *   Create video  - script + voice + face -> a finished, watermarked video (CreateVideo.jsx)
  *   Live avatar   - talk to the avatar in real time, by text or microphone (LivePanel.jsx)
  *   Verify a file - was this audio or video made here? (ProvenancePanel.jsx)
  *
- * The tab bodies stay mounted when hidden, so switching tabs does not lose what was typed or a
- * running live session.
- *
- * Backend route called here: GET /health, once, to show whether the server is up and which job
- * queue it uses. Each tab body calls its own routes.
+ * When Demo Mode is toggled ON (in header, or via ?demo=true or run_demo.sh):
+ *   Demo & Compare - instant evaluation suite (video engines, audio cloner, watermarks)
  */
 
 // Where the FastAPI backend listens (docs/10-DEPLOYMENT.md runs it on port 8000).
 // Every panel receives it as a prop instead of hard-coding it again.
 const API_BASE = "http://localhost:8000";
 
-// [key, label] pairs: the key decides which <section> shows, the label is the button text.
-const TABS = [
-  ["create", "Create video"],
-  ["live", "Live avatar"],
-  ["verify", "Verify a file"],
-];
+function getInitialDemoMode() {
+  if (typeof window === "undefined") return false;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("demo") === "true" || params.get("demo") === "1") return true;
+  if (params.get("demo") === "false" || params.get("demo") === "0") return false;
+  return localStorage.getItem("ai_avatar_demo_mode") === "true";
+}
 
 export default function App() {
-  // useState returns [current value, setter]. Calling the setter re-renders this component.
-  const [tab, setTab] = useState("create"); // which tab is showing
+  const [demoMode, setDemoMode] = useState(getInitialDemoMode);
+  // Default to "create" (the actual core application) unless demo was explicitly requested
+  const [tab, setTab] = useState(() => (getInitialDemoMode() ? "demo" : "create"));
   const [health, setHealth] = useState({ text: "checking…", ok: true }); // header text and whether the dot is green
 
   // useEffect runs after the first render. The empty dependency list [] below means "only once".
@@ -40,25 +41,68 @@ export default function App() {
     let ignore = false; // set by the cleanup so a reply that lands late is not applied
     fetch(`${API_BASE}/health`) // fetch returns a Promise; .then runs when the reply arrives
       .then((res) => res.json()) // the body is read as JSON, which is another Promise
-      .then((data) => !ignore && setHealth({ text: `${data.status} (${data.queueBackend})`, ok: data.status === "ok" })) // `a && b` only runs b when a is true
+      .then((data) => {
+        if (ignore) return;
+        setHealth({ text: `${data.status} (${data.queueBackend})`, ok: data.status === "ok" });
+        // If server announces DEMO_MODE=true and user hasn't explicitly set localStorage:
+        if (data.demoMode && localStorage.getItem("ai_avatar_demo_mode") === null) {
+          setDemoMode(true);
+        }
+      })
       .catch(() => !ignore && setHealth({ text: "backend offline", ok: false })); // a network error means the server is not reachable
     return () => { ignore = true; }; // cleanup: in development StrictMode mounts twice, so the first reply is ignored
   }, []); // no dependencies: run once after the first render
+
+  const toggleDemoMode = () => {
+    setDemoMode((prev) => {
+      const next = !prev;
+      localStorage.setItem("ai_avatar_demo_mode", next ? "true" : "false");
+      if (next) {
+        setTab("demo");
+      } else if (tab === "demo") {
+        setTab("create");
+      }
+      return next;
+    });
+  };
+
+  const tabs = [
+    ...(demoMode ? [["demo", "Demo & Compare"]] : []),
+    ["create", "Create video"],
+    ["live", "Live avatar"],
+    ["verify", "Verify a file"],
+  ];
 
   return ( // JSX: HTML-like syntax that the build compiles to plain JavaScript function calls
     <div className="app">
       <header className="header">
         <div>
           <h1>AI Avatar Creator Studio</h1>
-          <p>Type a script, pick a face, get a talking video. Every output is watermarked and signed.</p>
+          <p>Edge-Constrained Multimodal Platform: Speech Synthesis, Forced Alignment, Neural Lip-Sync &amp; Live Streaming.</p>
         </div>
-        <div className="status" id="backend-status"><span className={`status-dot${health.ok ? "" : " down"}`} />{health.text}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          {/* Demo Mode Toggle Switch */}
+          <button
+            type="button"
+            className={`demo-toggle-pill ${demoMode ? "active" : ""}`}
+            onClick={toggleDemoMode}
+            id="demo-mode-toggle"
+            title="Toggle between actual application and evaluation demo mode"
+          >
+            <span className="toggle-dot" />
+            <span>{demoMode ? "Demo Mode: ON" : "Demo Mode: OFF"}</span>
+          </button>
+          <div className="status" id="backend-status">
+            <span className={`status-dot${health.ok ? "" : " down"}`} />
+            {health.text}
+          </div>
+        </div>
       </header>
 
       {/* role and aria-selected tell screen readers this row behaves as tabs. */}
       <nav className="tabs" role="tablist">
         {/* map turns each [key, label] pair into a button. React needs a stable `key` on items in a list. */}
-        {TABS.map(([key, label]) => (
+        {tabs.map(([key, label]) => (
           <button key={key} type="button" role="tab" id={`tab-${key}`} className="tab" aria-selected={tab === key} onClick={() => setTab(key)}>
             {label}
           </button>
@@ -66,6 +110,11 @@ export default function App() {
       </nav>
 
       {/* hidden, not unmounted: a live session or a half-written script survives a tab switch */}
+      {demoMode && (
+        <section hidden={tab !== "demo"} className="tab-body demo-tab-body">
+          <DemoShowcase apiBase={API_BASE} />
+        </section>
+      )}
       <section hidden={tab !== "create"}><CreateVideo apiBase={API_BASE} /></section>
       <section hidden={tab !== "live"} className="tab-body"><LivePanel apiBase={API_BASE} /></section>
       <section hidden={tab !== "verify"} className="tab-body"><ProvenancePanel apiBase={API_BASE} /></section>

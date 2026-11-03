@@ -66,7 +66,7 @@ import torch
 import soundfile as sf
 import numpy as np
 
-from audio_utils import validate_and_convert_for_cloning
+from audio_utils import clean_audio_sample, validate_and_convert_for_cloning
 import alignment_engine
 import watermark_engine
 from alignment_engine import ForcedAligner
@@ -606,16 +606,18 @@ class VoiceEngineRouter:
         # Validate + auto-convert to WAV 24 kHz mono (raises AudioValidationError on bad files)
         converted_dir = speaker_path.parent / ".converted"
         ready_path = validate_and_convert_for_cloning(speaker_path, converted_dir=converted_dir)
+        # Apply audio cleaning layer (denoising + rumble filter + speech normalization)
+        cleaned_path = clean_audio_sample(ready_path, converted_dir / f"{ready_path.stem}_cleaned.wav")
 
         self.load_xtts_cloning()
         assert self.xtts_model is not None
-        print(f"\n[XTTS-v2] Cloning from '{ready_path.name}', text: '{text[:80]}...'")
+        print(f"\n[XTTS-v2] Cloning from '{cleaned_path.name}', text: '{text[:80]}...'")
         lang_code = self.xtts_language(language)
         # The reference is passed on every call: XTTS-v2 computes its
         # conditioning from it here (see load_xtts_cloning).
         self.xtts_model.tts_to_file(
             text=text,
-            speaker_wav=str(ready_path),
+            speaker_wav=str(cleaned_path),
             language=lang_code,
             file_path=str(output_path),
         )
@@ -753,7 +755,9 @@ class VoiceEngineRouter:
             )
         speaker_path = Path(speaker_wav)
         # Same reference preparation as XTTS-v2: validated, 24 kHz mono.
-        ready = validate_and_convert_for_cloning(speaker_path, converted_dir=speaker_path.parent / ".converted")
+        converted_dir = speaker_path.parent / ".converted"
+        ready = validate_and_convert_for_cloning(speaker_path, converted_dir=converted_dir)
+        cleaned_path = clean_audio_sample(ready, converted_dir / f"{ready.stem}_cleaned.wav")
         base_key = self.openvoice_base(language)
         # The base clip is an intermediate, not an output: a temporary file
         # that is removed whatever happens.
@@ -763,9 +767,10 @@ class VoiceEngineRouter:
                 self._synthesize_kokoro(text, base_wav)
             else:
                 self._mms.synthesize(text=text, language=language, output_path=base_wav)
-            print(f"\n[OpenVoice V2] Re-timbring {base_key} speech as '{ready.name}'")
-            sample_rate, duration = self._openvoice.convert(base_wav, ready, output_path)
+            print(f"\n[OpenVoice V2] Re-timbring {base_key} speech as '{cleaned_path.name}'")
+            sample_rate, duration = self._openvoice.convert(base_wav, cleaned_path, output_path)
         return sample_rate, duration, base_key
+
 
     # ------------------------------------------------------------------
     # Main Public Interface

@@ -302,6 +302,7 @@ outputs_dir.mkdir(parents=True, exist_ok=True)
 # as GET /outputs/x.mp4. The security gate lists /outputs/ as public, which is
 # why uploads under verification are spooled elsewhere (see _spool_upload).
 app.mount("/outputs", StaticFiles(directory=str(outputs_dir)), name="outputs")
+app.mount("/output", StaticFiles(directory=str(outputs_dir)), name="output")
 
 # Which render queue to use: "in_memory" (default, one process, no Redis) or
 # "celery" (jobs go to Redis and a separate worker).
@@ -416,6 +417,7 @@ def health() -> dict:
             "defaultEngine": render_engine.default_engine(),
             "engines": _render_engines(),
         },
+        "demoMode": os.getenv("DEMO_MODE", "false").lower() in ("true", "1", "yes"),
     }
 
 
@@ -1553,6 +1555,25 @@ def get_metrics() -> dict:
         body.update(metrics.summarise(list_jobs()))
     body["audit"] = audit_log.shared_audit().head()
     return body
+
+
+@app.get("/api/v1/demo/manifest")
+def get_demo_manifest() -> dict:
+    """Pre-generated evaluation and demo media manifest for side-by-side presentation.
+
+    Returns the catalogue of synchronized multimodal demo artifacts (video engines,
+    multi-engine TTS, XTTS-v2 cloning, AudioSeal watermark A/B pairs, and benchmark scores)
+    allowing instant comparison during demonstrations without heavy test-time generation.
+    """
+    manifest_file = outputs_dir / "demo" / "manifest.json"
+    if not manifest_file.exists():
+        raise HTTPException(status_code=404, detail="demo manifest not found")
+    try:
+        with open(manifest_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as err:
+        raise HTTPException(status_code=500, detail=f"failed to read demo manifest: {err}") from err
+
 
 
 @app.post(
